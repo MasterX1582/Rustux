@@ -16,8 +16,8 @@ pub fn int_sqrt(x: std::ffi::c_ulong) -> std::ffi::c_ulong {
         return x;
     }
 
-    let mut m: u64 = 1 << ((63 - x.leading_zeros()) & !1);
-    let mut y: u64 = 0;
+    let mut m: std::ffi::c_ulong = 1 << ((std::ffi::c_ulong::BITS - 1 - x.leading_zeros()) & !1);
+    let mut y: std::ffi::c_ulong = 0;
     while m != 0 {
         let b = y + m;
         y >>= 1;
