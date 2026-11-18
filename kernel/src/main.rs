@@ -144,6 +144,13 @@ fn main() -> Status {
         "linux-rust: klib::list_sort::list_sort({:?}) first={} last={} (verified port of lib/list_sort.c)",
         keys, first, last
     );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::crc::crc32_le(0,\"123456789\") = {:#x}, crc16(0,...) = {:#x}, crc4(0,0x12345678,32) = {:#x} (verified ports of lib/crc/)",
+        klib::crc::crc32_le(0, b"123456789"),
+        klib::crc::crc16(0, b"123456789"),
+        klib::crc::crc4(0, 0x12345678, 32)
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
