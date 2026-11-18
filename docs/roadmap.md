@@ -65,6 +65,18 @@ recorded corpus included out-of-contract inputs (`c`>15 indexes past the
 16-entry table — layout-dependent UB); the corpus was curated to the
 contract domain and the divergence documented.
 
+`lib/crypto/siphash.c` + `lib/xxhash.c` + `include/linux/jhash.h` (adopted
+into `klib::hash`, gate passed): SipHash2-4 and the LP64 "hsiphash"
+(SipHash1-3 keyed on `unsigned long[2]`), all `siphash_*u32/u64` scalar
+variants, xxh32/xxh64 one-shot plus the `xxh64_reset/update/digest`
+streaming API driven through chunked updates (mem64 residue paths), and
+the jhash header family — 5020/5020 recorded cases. Both
+`__siphash_{aligned,unaligned}` backends are exercised by controlling
+wrapper-buffer alignment (they are byte-identical algorithms, so the
+port/klib share one implementation); `CONFIG_DCACHE_WORD_ACCESS` and
+`CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS` are left undefined, matching the
+portable upstream path.
+
 Harness notes learned along the way: kernel typedefs must be normalized to
 stdint names (`u64`→`uint64_t`) for the bridge's scalar map; functions inside
 `#if` regions are invisible to the export scanner (pre-resolve branches for

@@ -151,6 +151,13 @@ fn main() -> Status {
         klib::crc::crc16(0, b"123456789"),
         klib::crc::crc4(0, 0x12345678, 32)
     );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::hash::siphash_1u64(0xdeadbeef,k) = {:#x}, xxh64(\"123456789\",0) = {:#x}, jhash_1word(1,0) = {:#x} (verified ports of siphash.c/xxhash.c/jhash.h)",
+        klib::hash::siphash_1u64(0xdeadbeef, (0x0706050403020100, 0x0f0e0d0c0b0a0908)),
+        klib::hash::xxh64(b"123456789", 0),
+        klib::hash::jhash_1word(1, 0)
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);

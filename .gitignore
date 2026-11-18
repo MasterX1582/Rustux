@@ -5,3 +5,4 @@
 
 __pycache__/
 *.pyc
+ports/lib-hash/libhash.so

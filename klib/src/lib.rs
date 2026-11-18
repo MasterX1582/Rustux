@@ -10,6 +10,7 @@
 
 pub mod bcd;
 pub mod crc;
+pub mod hash;
 pub mod list_sort;
 pub mod math;
 pub mod sort;
