@@ -16,5 +16,6 @@ pub mod hash;
 pub mod list_sort;
 pub mod math;
 pub mod rbtree;
+pub mod sha;
 pub mod sort;
 pub mod string;

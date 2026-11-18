@@ -125,8 +125,18 @@ scan-for-NUL functions panic on unterminated slices (bounded, where C
 over-reads). Harness needed glibc-symbol hiding (hidden-visibility
 prototypes) plus `#undef __BIG_ENDIAN` after glibc's endian.h.
 
-Next units (userspace-compilable today): `crypto/sha256.c`,
-`crypto/sha1.c`, `crypto/sha512.c`, `lib/kfifo.c`.
+`lib/crypto/sha*.c` done (6174/6174 differential cases, gate passed):
+SHA-1/224/256/384/512 block transforms, init/update/final, one-shots,
+`sha256_finup_2x` (generic sequential), the full HMAC family
+(preparekey/init/update/final, raw-key + prepared-key paths, >blocksize
+key hashing), and the `*_zero_message_hash` published consts. Adopted as
+`klib::sha` — C-faithful ctx structs (`Sha1Ctx`, `__Sha256Ctx`/`Sha256Ctx`,
+`__Sha512Ctx`/`Sha512Ctx`, `HmacSha*Key`/`HmacSha*Ctx`), `Option<&ctx>`
+for finup_2x's NULL ctx, `core::ptr::eq` mirroring C's `iv == &sha224_iv`
+address compare. Note: the freestanding units are `lib/crypto/sha*.c`;
+`crypto/sha*.c` is the shash registration glue for a later wave.
+
+Next units (userspace-compilable today): `lib/kfifo.c`.
 
 ### Wave 1 — kernel data structures (test harnesses exist)
 

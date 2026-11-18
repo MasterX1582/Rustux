@@ -258,6 +258,43 @@ fn main() -> Status {
         assert_eq!(strcasecmp(b"ReSeT\0", b"reset\0"), 0);
     }
 
+    {
+        use klib::sha::*;
+        let mut d = [0u8; 32];
+        sha256(b"abc", 3, &mut d);
+        let mut ctx = Sha1Ctx::default();
+        sha1_init(&mut ctx);
+        sha1_update(&mut ctx, b"a", 1);
+        sha1_update(&mut ctx, b"bc", 2);
+        let mut d1 = [0u8; 20];
+        sha1_final(&mut ctx, &mut d1);
+        let mut hkey = HmacSha256Key::default();
+        hmac_sha256_preparekey(&mut hkey, b"Jefe", 4);
+        let mut hm = [0u8; 32];
+        hmac_sha256(&hkey, b"what do ya want for nothing?", 28, &mut hm);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::sha: sha256(abc)={:02x}{:02x}..{:02x}{:02x} sha1(a+bc)={:02x}{:02x}.. hmac={:02x}{:02x}.. (verified port of lib/crypto/sha*.c)",
+            d[0], d[1], d[30], d[31], d1[0], d1[1], hm[0], hm[1]
+        );
+        assert_eq!(
+            d,
+            [
+                0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+                0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+                0xf2, 0x00, 0x15, 0xad
+            ]
+        );
+        assert_eq!(
+            d1,
+            [
+                0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e, 0x25, 0x71, 0x78, 0x50,
+                0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d
+            ]
+        );
+        assert_eq!(hm[..4], [0x5b, 0xdc, 0xc1, 0x46]);
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }
