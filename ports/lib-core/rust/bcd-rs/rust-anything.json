@@ -1,0 +1,54 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-core",
+  "unit": "bcd.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "bcd-rs",
+  "exports": [
+    {
+      "name": "_bcd2bin",
+      "file": "bcd.c",
+      "line": 5,
+      "params": [
+        {
+          "name": "val",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned char"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned",
+      "prototype": "unsigned _bcd2bin(unsigned char val)"
+    },
+    {
+      "name": "_bin2bcd",
+      "file": "bcd.c",
+      "line": 11,
+      "params": [
+        {
+          "name": "val",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned char",
+      "prototype": "unsigned char _bin2bcd(unsigned val)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

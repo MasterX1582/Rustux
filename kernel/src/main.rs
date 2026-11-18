@@ -109,6 +109,41 @@ fn main() -> Status {
         klib::math::is_prime_number(7919),
         klib::math::next_prime_number(65535)
     );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::bcd::bcd2bin(0x45) = {}, bin2bcd(45) = {:#x} (verified port of lib/bcd.c)",
+        klib::bcd::bcd2bin(0x45),
+        klib::bcd::bin2bcd(45)
+    );
+    let mut arr = [9u32, 4, 7, 1, 8, 2, 6, 3, 5, 0];
+    klib::sort::sort(&mut arr, |x, y| i32::from(x > y) - i32::from(x < y));
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::sort::sort([9,4,7,1,8,2,6,3,5,0]) = {:?} (verified port of lib/sort.c)",
+        arr
+    );
+    const L: usize = 8;
+    let keys = [9u32, 4, 7, 1, 8, 2, 6, 3];
+    let mut links = [klib::list_sort::Links::new(0, 0); L + 1];
+    for (i, l) in links.iter_mut().take(L).enumerate() {
+        l.next = i + 1;
+        l.prev = if i == 0 { L } else { i - 1 };
+    }
+    links[L - 1].next = L;
+    links[L] = klib::list_sort::Links::new(0, L - 1);
+    {
+        let mut cmp = |a: usize, b: usize| {
+            i32::from(keys[a] > keys[b]) - i32::from(keys[a] < keys[b])
+        };
+        klib::list_sort::list_sort(&mut links, L, &mut cmp);
+    }
+    let first = keys[links[L].next];
+    let last = keys[links[L].prev];
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::list_sort::list_sort({:?}) first={} last={} (verified port of lib/list_sort.c)",
+        keys, first, last
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);

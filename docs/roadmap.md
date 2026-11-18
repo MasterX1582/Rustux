@@ -28,7 +28,8 @@ recorded behavior before adoption.
 rust-anything's record/diff works almost directly — the strongest possible
 verification. ~680 files, ~380k lines.
 
-Done so far (adopted into `klib::math`, all gates passed):
+`lib/math` is now **fully ported** (all 11 units). Done so far (adopted into
+`klib::math`, all gates passed):
 `int_sqrt` (17/17), `gcd` (154/154), `lcm`+`lcm_not_zero` (308/308),
 `int_pow` (154/154), `intlog2`+`intlog10` (34/34),
 `mul_u64_add_u64_div_u64` (232/232), `iter_div_u64_rem` (custom pointer-arg
@@ -40,6 +41,18 @@ check like it),
 `ports/lib-math/wrappers.c` converts struct out-params into scalar returns so
 the standard record/diff pipeline verifies the real functions transitively).
 `verify-all.sh` re-runs every crate's diff+gate plus the pointer-arg check.
+`is_prime_number`/`next_prime_number`/`slow_is_prime_number` (57/57 via
+single-threaded mutex/RCU/slab/bitmap shims; klib uses a fixed-capacity
+static sieve whose exhaustion plays the `kmalloc`-failure role).
+
+`lib/` core utils (adopted into `klib::{bcd,sort,list_sort}`, gates passed):
+`bcd2bin`/`bin2bcd` (34/34), `sort`/`sort_r`/`sort_nonatomic` and `list_sort`
+(763/763 via scalar wrappers — `ports/lib-core/wrappers.c` drives
+deterministic seeded arrays/lists through the real C functions and returns
+order-sensitive checksums/elements). `list_sort` is ported over an
+index-linked `Links{next,prev}` model (NIL = NULL, sentinel head index);
+`sort` is the `__sort_r` bottom-up heapsort over element indices — the C's
+byte-offset/`lsbit` parent trick reduces to `(k-1)/2` for every element size.
 
 Harness notes learned along the way: kernel typedefs must be normalized to
 stdint names (`u64`→`uint64_t`) for the bridge's scalar map; functions inside
@@ -50,7 +63,7 @@ are documented divergences, not verified behavior.
 
 Next units (userspace-compilable today): `tools/lib/rbtree.c`,
 `tools/lib/bitmap.c`, `tools/lib/string.c`, `tools/lib/find_bit.c`,
-`lib/sort.c`, `lib/list_sort.c`, `lib/crc*.c`, `crypto/sha256_generic.c`,
+`lib/crc*.c`, `crypto/sha256_generic.c`,
 `crypto/xxhash_generic.c`, `lib/siphash.c`, `lib/kfifo.c`.
 
 ### Wave 1 — kernel data structures (test harnesses exist)
