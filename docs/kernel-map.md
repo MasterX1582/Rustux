@@ -49,19 +49,19 @@ not recorded cases.
 | `fs/` | 1,483 | 701 | 1,674,333 | VFS core + ~60 filesystems (ext4, btrfs, xfs, nfs, tmpfs, proc, sysfs) |
 | `block/` | 76 | 22 | 74,029 | block layer, mq, io schedulers |
 | `net/` | 1,459 | 270 | 1,305,555 | socket layer, TCP/IP, netfilter, wireless, ~50 protocol families |
-| `sound/` | 1,918 | 834 | ~1.4M | ALSA |
+| `sound/` | 1,918 | 834 | 1,711,738 | ALSA |
 
-## Layer E — drivers (60% of the tree)
+## Layer E — drivers (75% of the tree)
 
-| Dir | .c | .h | .rs | Contents |
-| --- | ---: | ---: | ---: | --- |
-| `drivers/` | 22,661 | 11,762 | 129 | everything: gpu (amd/intel/nvidia ~5M LOC alone), net, usb, storage, input, virtio |
-| `tools/` | 3,998 | 1,334 | 1 | perf & userspace utilities — not kernel code, but hosts the test harnesses used in Layer A |
+| Dir | .c | .h | .rs | lines | Contents |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `drivers/` | 22,661 | 11,762 | 129 | 26,729,651 | everything: gpu (amd/intel/nvidia alone is several M), net, usb, storage, input, virtio |
+| `tools/` | 3,998 | 1,334 | 1 | 1,525,503 | perf & userspace utilities — not kernel code, but hosts the test harnesses used in Layer A |
 
 ## Totals
 
 - **37,768** `.c` files, **27,300** `.h`, **568** `.rs`
-- Non-driver core ≈ **15k** C files / ~5M lines; drivers ≈ 23k files / ~15M+ lines
+- Non-driver core ≈ **15k** C files / ~5.3M lines; drivers+sound ≈ 24.6k files / **~28.4M lines**
 - Rust for Linux already present: `rust/` kernel crate, `pin-init`, `macros`, phy/net bindings
 
 ## Dependency order (what calls what)
