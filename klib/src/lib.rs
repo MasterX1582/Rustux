@@ -13,6 +13,7 @@ pub mod bitmap;
 pub mod bitops;
 pub mod crc;
 pub mod hash;
+pub mod kfifo;
 pub mod list_sort;
 pub mod math;
 pub mod rbtree;

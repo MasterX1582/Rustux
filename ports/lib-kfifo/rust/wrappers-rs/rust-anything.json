@@ -1,0 +1,215 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-kfifo",
+  "unit": "wrappers.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "wrappers-rs",
+  "exports": [
+    {
+      "name": "wrap_kfifo_seq",
+      "file": "wrappers.c",
+      "line": 239,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "sp_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "esize_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "recsize_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "mode_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_kfifo_seq(uint64_t seed, int64_t sp_i, int64_t esize_i, int64_t recsize_i, int64_t nops_i, int64_t mode_i)"
+    },
+    {
+      "name": "wrap_kfifo_dma_seq",
+      "file": "wrappers.c",
+      "line": 384,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "sp_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "esize_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "recsize_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "mode_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_kfifo_dma_seq(uint64_t seed, int64_t sp_i, int64_t esize_i, int64_t recsize_i, int64_t nops_i, int64_t mode_i)"
+    },
+    {
+      "name": "wrap_kfifo_alloc",
+      "file": "wrappers.c",
+      "line": 419,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "size_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "esize_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "mode_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_kfifo_alloc(uint64_t seed, int64_t size_i, int64_t esize_i, int64_t nops_i, int64_t mode_i)"
+    },
+    {
+      "name": "wrap_kfifo_typed",
+      "file": "wrappers.c",
+      "line": 556,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "sp_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "mode_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_kfifo_typed(uint64_t seed, int64_t sp_i, int64_t nops_i, int64_t mode_i)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

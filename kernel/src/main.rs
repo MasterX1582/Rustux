@@ -295,6 +295,26 @@ fn main() -> Status {
         assert_eq!(hm[..4], [0x5b, 0xdc, 0xc1, 0x46]);
     }
 
+    {
+        use klib::kfifo::*;
+        let mut buf = [0u8; 8];
+        let mut f = Kfifo::init(&mut buf, 1).unwrap();
+        let n = kfifo_in(&mut f, b"abcdef", 6);
+        let mut out = [0u8; 8];
+        kfifo_out(&mut f, &mut out, 4);
+        kfifo_in(&mut f, b"ghij", 4); // wraps the ring
+        let mut all = [0u8; 8];
+        let got = kfifo_out(&mut f, &mut all, 8);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::kfifo: in={} wrap-drain={} -> {:?} (verified port of lib/kfifo.c)",
+            n,
+            got,
+            &all[..8]
+        );
+        assert_eq!(&all[..6], b"efghij");
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

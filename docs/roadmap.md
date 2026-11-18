@@ -136,7 +136,19 @@ for finup_2x's NULL ctx, `core::ptr::eq` mirroring C's `iv == &sha224_iv`
 address compare. Note: the freestanding units are `lib/crypto/sha*.c`;
 `crypto/sha*.c` is the shash registration glue for a later wave.
 
-Next units (userspace-compilable today): `lib/kfifo.c`.
+`lib/kfifo.c` done (960/960 differential cases, gate passed): the full
+`__kfifo_*` surface — init/alloc, in/out/peek/linear, user-copy paths,
+DMA scatterlist prepare/finish, and the record variants (`*_r`,
+recsize 0/1/2) — plus the `kfifo.h` arithmetic helpers. Adopted as
+`klib::kfifo`: `Kfifo<'a>` borrows the caller's backing buffer (NULL
+`data` unrepresentable; EINVAL→`Err`), `u32` wraparound counters
+preserved, `Sg` entries carry offsets into `fifo.data`. The typed
+`STRUCT_KFIFO` macro layer is C-generic sugar — Rust callers get type
+safety from the borrow model directly.
+
+Wave 0 (freestanding algorithms) complete. Next: Wave 1 kernel data
+structures — xarray/idr/radix-tree/maple-tree, rhashtable, llist,
+`tools/testing/*` harnesses.
 
 ### Wave 1 — kernel data structures (test harnesses exist)
 
