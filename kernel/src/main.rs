@@ -132,9 +132,8 @@ fn main() -> Status {
     links[L - 1].next = L;
     links[L] = klib::list_sort::Links::new(0, L - 1);
     {
-        let mut cmp = |a: usize, b: usize| {
-            i32::from(keys[a] > keys[b]) - i32::from(keys[a] < keys[b])
-        };
+        let mut cmp =
+            |a: usize, b: usize| i32::from(keys[a] > keys[b]) - i32::from(keys[a] < keys[b]);
         klib::list_sort::list_sort(&mut links, L, &mut cmp);
     }
     let first = keys[links[L].next];
@@ -329,9 +328,7 @@ fn main() -> Status {
         let _ = writeln!(
             com1,
             "linux-rust: klib::llist: pop={} chain={} rev-head={} (verified port of lib/llist.c)",
-            a,
-            chain,
-            rev
+            a, chain, rev
         );
         assert_eq!((a, chain, rev), (2, 1, 0));
         assert_eq!(next[0], 1);
@@ -355,6 +352,42 @@ fn main() -> Status {
         let mut lb = [0u8; 131];
         let n = hex_dump_to_buffer(&[0xde, 0xad], 2, 16, 1, &mut lb, false);
         assert_eq!(&lb[..n as usize], b"de ad");
+    }
+
+    {
+        use klib::rhashtable::*;
+        /* 8 tobj slots (48 cells each) + arena for the 64-bucket table
+         * plus walker cells at the tail. */
+        let mut mem = [0u64; 8 * 48 + 2048 + 64];
+        let mut t = Rhashtable::new(&mut mem, 8 * 48);
+        let p = Params {
+            key_len: 8,
+            key_offset: 24,
+            head_offset: 8,
+            ..Default::default()
+        };
+        assert_eq!(t.rhashtable_init(&p, false), 0);
+        for i in 0..4usize {
+            let o = Rhashtable::obj(i);
+            t.mem_w(o + 24, (i as u64 + 1) * 7);
+            assert_eq!(t.rhashtable_insert_fast(o + 8), 0);
+        }
+        let hit = t.rhashtable_lookup(Rhashtable::obj(2) + 24);
+        let miss = t.rhashtable_lookup(Rhashtable::obj(5) + 24); /* key cell = 0 */
+        let rm = t.rhashtable_remove_fast(Rhashtable::obj(2) + 8);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::rhashtable: hit={} miss={} rm={} nelems={} (verified port of lib/rhashtable.c)",
+            hit,
+            miss,
+            rm,
+            t.nelems()
+        );
+        assert_eq!(hit, Rhashtable::obj(2));
+        assert_eq!(miss, 0);
+        assert_eq!(rm, 0);
+        assert_eq!(t.nelems(), 3);
+        t.destroy();
     }
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.

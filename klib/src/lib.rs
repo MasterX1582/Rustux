@@ -8,6 +8,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+extern crate std;
+
 pub mod bcd;
 pub mod bitmap;
 pub mod bitops;
@@ -19,7 +22,8 @@ pub mod list_sort;
 pub mod llist;
 pub mod math;
 pub mod rbtree;
-pub mod sha;
+pub mod rhashtable;
 pub mod seqbuf;
+pub mod sha;
 pub mod sort;
 pub mod string;

@@ -162,6 +162,11 @@ Done: `lib/llist.c`+`llist.h` (531 cases) → `klib::llist` index-model
 `klib::seqbuf` + `klib::fmt` interim mini-vsnprintf (real printf lands
 with `lib/vsprintf.c`). Skipped: seq_buf_print_seq/path/bprintf
 (seq_file/d_path/CONFIG_BINARY_PRINTF deps).
+`lib/rhashtable.c`+`rhashtable.h`+`bucket_locks.c` (1111 cases) →
+`klib::rhashtable`: caller-owned `&mut [u64]` dense arena, canonical
+addresses via `idx()`, locks/RCU/workqueues sequential, rhltable
+chains, nested-table alloc fallback, walk API, `fail_nth` injection.
+In progress: `lib/xarray.c` port (wrap_xa_multi diffs outstanding).
 
 ### Wave 2 — core services (custom shims needed)
 
