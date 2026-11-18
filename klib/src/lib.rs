@@ -9,6 +9,8 @@
 #![forbid(unsafe_code)]
 
 pub mod bcd;
+pub mod bitmap;
+pub mod bitops;
 pub mod crc;
 pub mod hash;
 pub mod list_sort;

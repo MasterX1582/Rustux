@@ -159,6 +159,17 @@ fn main() -> Status {
         klib::hash::jhash_1word(1, 0)
     );
 
+    let mut bm = [0u64; 2];
+    klib::bitmap::bitmap_set(&mut bm, 62, 10);
+    let free = klib::bitmap::bitmap_find_free_region(&mut bm, 128, 2);
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::bitmap: set(62..72) -> first={} free_region(4)={} weight_after_alloc={} (verified ports of find_bit.c/bitmap.c)",
+        klib::bitmap::find_first_bit(&bm, 128),
+        free,
+        klib::bitmap::bitmap_weight(&bm, 128)
+    );
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

@@ -84,8 +84,25 @@ the target config); `linux/types.h` carries a harness-wide LP64 `#error`
 guard; crash records count as "UB — anything passes" so trap-on-input cases
 are documented divergences, not verified behavior.
 
+`lib/find_bit.c` + `lib/bitmap.c` + the `include/linux/{bitmap,find}.h`
+inline layer + the generic `unsigned long` bitops surface (adopted into
+`klib::{bitmap,bitops}`, gate passed): all 15 `_find_*`/`find_*` finders
+including nth/and/andnot/or/zero/wrap/le-alias variants, `find_next_clump8`,
+`find_random_bit` (harness RNG is a deterministic splitmix64 since upstream
+is a CSPRNG; klib takes the draw as a caller `FnMut`), the `for_each_*`
+iteration layer, every `__bitmap_*`/`bitmap_*` logic op (and/or/xor/andnot/
+replace/complement/equal/or_equal/intersects/subset/weight family/weighted
+ops/set/clear/shift/cut/zero-area/find_free_region/remap/bitremap/onto/
+fold/scatter/gather/read/write/{get,set}_value8/arr32+arr64 conversion) —
+30915/30915 recorded cases over 147 scalar wrappers, including `_c`
+constant-size variants covering the `small_const_nbits` fast paths, the
+GENMASK/memcmp/single-word inlines, and `CONFIG_NUMA`'s `bitmap_onto`/
+`bitmap_fold`. `bitmap_{alloc,zalloc,free,devm_*}` are kmalloc glue that
+lands with the allocator port (wave 1); `bitmap_parse*` belongs to
+`lib/bitmap-str.c`, a separate future unit.
+
 Next units (userspace-compilable today): `tools/lib/rbtree.c`,
-`tools/lib/bitmap.c`, `tools/lib/string.c`, `tools/lib/find_bit.c`,
+`tools/lib/string.c`,
 `crypto/sha256_generic.c`,
 `crypto/xxhash_generic.c`, `lib/siphash.c`, `lib/kfifo.c`.
 
