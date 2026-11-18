@@ -9,6 +9,8 @@
 #define swap(a, b) do { __typeof__(a) __t = (a); (a) = (b); (b) = __t; } while (0)
 #define WARN_ON(x) (!!(x))
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define roundup(x, y) ((((x) + ((y) - 1)) / (y)) * (y))
+#define round_up(x, y) ((((x) - 1) | ((y) - 1)) + 1)
 
 /* Static keys: in userspace the "true" branch is always taken, matching a
  * kernel where the static key was never patched off. */

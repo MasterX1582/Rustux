@@ -6,3 +6,5 @@
 #define MODULE_LICENSE(x)
 #define module_init(x)
 #define module_exit(x)
+#define __exit
+#define __init

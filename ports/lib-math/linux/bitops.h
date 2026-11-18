@@ -3,6 +3,8 @@
 
 #define BITS_PER_LONG (__SIZEOF_LONG__ * 8)
 
+#define BIT(nr) (1UL << (nr))
+
 /* __ffs: index of the least significant set bit, undefined for 0. */
 static inline unsigned long __ffs(unsigned long word)
 {

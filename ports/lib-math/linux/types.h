@@ -24,3 +24,13 @@ typedef int64_t s64;
 #if defined(__SIZEOF_INT128__)
 typedef __uint128_t u128;
 #endif
+
+/* Upstream types.h also carries this; prime_numbers_private.h needs it.
+ * Two members as upstream ({next, func}) so sizeof/offsets match. */
+struct rcu_head {
+	void *next;
+	void (*func)(struct rcu_head *head);
+};
+
+/* Kconfig options are all off in the harness; usable in `#if` too. */
+#define IS_ENABLED(x) 0

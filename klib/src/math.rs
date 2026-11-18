@@ -501,6 +501,184 @@ pub fn polynomial_calc(terms: &[PolynomialTerm], total_divider: i64, data: i64) 
     ret.checked_div(td).unwrap_or(i64::MAX)
 }
 
+// ---- prime_numbers.c -----------------------------------------------------
+//
+// Port of `lib/math/prime_numbers.c`. The C keeps a grow-on-demand Sieve of
+// Eratosthenes behind RCU+mutex and falls back to trial division when the
+// allocation fails. `no_std` has no allocator, so the sieve is a fixed
+// `SIEVE_BITS`-bit static bitmap: capacity exhaustion plays exactly the role
+// `kmalloc` failure plays upstream — the same slow path takes over, so every
+// observable return value is identical to the C on every input.
+
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Sieve capacity in bits: 512 KiB of `.bss`.
+///
+/// INVARIANT: single-threaded, non-reentrant callers only (the kernel is a
+/// single-CPU UEFI app today). The atomics make the statics `Sync`, but they
+/// do NOT serialize expansion vs. reads — before SMP or ISR use this needs a
+/// real lock.
+const SIEVE_BITS: u64 = 1 << 22;
+const SIEVE_WORDS: usize = (SIEVE_BITS / 64) as usize;
+
+const SMALL_PRIMES_LAST: u64 = 61;
+const SMALL_PRIMES_SZ: u64 = 64;
+const SMALL_PRIMES_WORD: u64 = (1 << 2)
+    | (1 << 3)
+    | (1 << 5)
+    | (1 << 7)
+    | (1 << 11)
+    | (1 << 13)
+    | (1 << 17)
+    | (1 << 19)
+    | (1 << 23)
+    | (1 << 29)
+    | (1 << 31)
+    | (1 << 37)
+    | (1 << 41)
+    | (1 << 43)
+    | (1 << 47)
+    | (1 << 53)
+    | (1 << 59)
+    | (1 << 61);
+
+static SIEVE: [AtomicU64; SIEVE_WORDS] = [const { AtomicU64::new(0) }; SIEVE_WORDS];
+static SIEVE_LAST: AtomicU64 = AtomicU64::new(SMALL_PRIMES_LAST);
+static SIEVE_SZ: AtomicU64 = AtomicU64::new(SMALL_PRIMES_SZ);
+static SIEVE_INIT: AtomicBool = AtomicBool::new(false);
+
+fn sieve_init() {
+    if !SIEVE_INIT.swap(true, Ordering::SeqCst) {
+        SIEVE[0].store(SMALL_PRIMES_WORD, Ordering::SeqCst);
+    }
+}
+
+fn sieve_test_bit(n: u64) -> bool {
+    SIEVE[(n / 64) as usize].load(Ordering::SeqCst) & (1u64 << (n % 64)) != 0
+}
+
+fn sieve_clear_bit(n: u64) {
+    let w = &SIEVE[(n / 64) as usize];
+    w.fetch_and(!(1u64 << (n % 64)), Ordering::SeqCst);
+}
+
+fn sieve_find_next_bit(size: u64, offset: u64) -> u64 {
+    let mut i = offset;
+    while i < size {
+        if sieve_test_bit(i) {
+            return i;
+        }
+        i += 1;
+    }
+    size
+}
+
+fn sieve_clear_multiples(x: u64, start: u64, end: u64) -> u64 {
+    let mut m = x.wrapping_mul(2);
+    if m < start {
+        m = start.wrapping_add(x - 1) / x * x;
+    }
+    while m < end {
+        sieve_clear_bit(m);
+        m = m.wrapping_add(x);
+    }
+    x
+}
+
+/// `expand_to_next_prime`, in-place on the static bitmap: the new region is
+/// filled and sieved exactly like the C's freshly allocated bitmap.
+/// Returns `false` past `SIEVE_BITS` — the `kmalloc`-failure analog.
+fn sieve_expand_to(x: u64) -> bool {
+    sieve_init();
+    let mut sz = x.wrapping_mul(2);
+    if sz < x {
+        return false;
+    }
+    sz = (sz.wrapping_sub(1) | 63).wrapping_add(1);
+    // sz == 0 means round_up wrapped (x in [2^63-31, 2^63-1]): upstream the
+    // `sz < x` check misses this and the C heap-corrupts (8-byte write past
+    // a 24-byte allocation). We take the intended contract instead — the
+    // allocation "failed", so the slow path runs, matching what upstream
+    // itself does for the neighboring x = 2^63.
+    if sz == 0 || sz > SIEVE_BITS {
+        return false;
+    }
+
+    if x < SIEVE_LAST.load(Ordering::SeqCst) {
+        return true;
+    }
+
+    let old_sz = SIEVE_SZ.load(Ordering::SeqCst);
+    let old_words = (old_sz.div_ceil(64)) as usize;
+    let nwords = (sz / 64) as usize;
+    for w in &SIEVE[old_words..nwords] {
+        w.store(!0, Ordering::SeqCst);
+    }
+
+    let mut new_last = 0u64;
+    let mut y = 2u64;
+    while y < sz {
+        new_last = sieve_clear_multiples(y, old_sz, sz);
+        y = sieve_find_next_bit(sz, y + 1);
+    }
+    // BUG_ON(new->last <= x)
+    assert!(new_last > x);
+
+    SIEVE_LAST.store(new_last, Ordering::SeqCst);
+    SIEVE_SZ.store(sz, Ordering::SeqCst);
+    true
+}
+
+/// Port of `lib/math/prime_numbers.c`: `slow_is_prime_number`.
+pub fn slow_is_prime_number(x: c_ulong) -> bool {
+    let mut y = int_sqrt(x);
+
+    while y > 1 {
+        if x.is_multiple_of(y) {
+            break;
+        }
+        y -= 1;
+    }
+    y == 1
+}
+
+/// Port of `lib/math/prime_numbers.c`: `is_prime_number`.
+pub fn is_prime_number(x: c_ulong) -> bool {
+    let x: u64 = x;
+
+    loop {
+        sieve_init();
+        if x < SIEVE_SZ.load(Ordering::SeqCst) {
+            return sieve_test_bit(x);
+        }
+        if !sieve_expand_to(x) {
+            return slow_is_prime_number(x);
+        }
+    }
+}
+
+/// Port of `lib/math/prime_numbers.c`: `next_prime_number`.
+pub fn next_prime_number(x: c_ulong) -> c_ulong {
+    let mut x: u64 = x;
+
+    loop {
+        sieve_init();
+        if x < SIEVE_LAST.load(Ordering::SeqCst) {
+            return sieve_find_next_bit(SIEVE_LAST.load(Ordering::SeqCst), x.wrapping_add(1));
+        }
+        if !sieve_expand_to(x) {
+            // slow_next_prime_number
+            while x < u64::MAX {
+                x = x.wrapping_add(1);
+                if slow_is_prime_number(x) {
+                    return x;
+                }
+            }
+            return x;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,5 +839,21 @@ mod tests {
         assert_eq!(polynomial_calc(&terms, 1, 4), 27);
         // total_divider 0 resolves to 1 (the ?: contract).
         assert_eq!(polynomial_calc(&terms, 0, 4), 27);
+    }
+
+    #[test]
+    fn primes_basics() {
+        // Values observed from the recorded harness.
+        assert!(is_prime_number(2));
+        assert!(is_prime_number(7919));
+        assert!(!is_prime_number(561)); // Carmichael
+        assert!(!is_prime_number(0));
+        assert!(!is_prime_number(1));
+        assert_eq!(next_prime_number(1), 2);
+        assert_eq!(next_prime_number(60), 61);
+        assert_eq!(next_prime_number(63), 67); // past small_primes boundary
+        assert_eq!(next_prime_number(65535), 65537);
+        // sieve fallback (x beyond capacity): still correct, trial division.
+        assert_eq!(next_prime_number(u64::MAX), u64::MAX); // sentinel
     }
 }

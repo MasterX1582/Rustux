@@ -103,6 +103,12 @@ fn main() -> Status {
         "linux-rust: klib::math::polynomial_calc(x^2+2x+3, x=4) = {} (verified port of lib/math/polynomial.c)",
         klib::math::polynomial_calc(&terms, 1, 4)
     );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::is_prime_number(7919) = {}, next_prime_number(65535) = {} (verified port of lib/math/prime_numbers.c)",
+        klib::math::is_prime_number(7919),
+        klib::math::next_prime_number(65535)
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
