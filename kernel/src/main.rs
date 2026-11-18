@@ -61,6 +61,48 @@ fn main() -> Status {
         "linux-rust: klib::math::mul_u64_add_u64_div_u64(2^63,2^63,0,2^63) = {} (verified port of lib/math/div64.c)",
         klib::math::mul_u64_add_u64_div_u64(1 << 63, 1 << 63, 0, 1 << 63)
     );
+    let (rn, rd) = klib::math::rational_best_approximation(31415, 10000, 255, 31);
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::rational_best_approximation(3.1415) = {rn}/{rd} (verified port of lib/math/rational.c)"
+    );
+    let rv = klib::math::reciprocal_value(7);
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::reciprocal_value(7) = {:#x},{},{} (verified port of lib/math/reciprocal_div.c)",
+        rv.m, rv.sh1, rv.sh2
+    );
+    let iq = klib::math::cordic_calc_iq(45);
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::cordic_calc_iq(45) = {},{} (verified port of lib/math/cordic.c)",
+        iq.i, iq.q
+    );
+    let terms = [
+        klib::math::PolynomialTerm {
+            deg: 2,
+            coef: 1,
+            divider: 1,
+            divider_leftover: 1,
+        },
+        klib::math::PolynomialTerm {
+            deg: 1,
+            coef: 2,
+            divider: 1,
+            divider_leftover: 1,
+        },
+        klib::math::PolynomialTerm {
+            deg: 0,
+            coef: 3,
+            divider: 1,
+            divider_leftover: 1,
+        },
+    ];
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::polynomial_calc(x^2+2x+3, x=4) = {} (verified port of lib/math/polynomial.c)",
+        klib::math::polynomial_calc(&terms, 1, 4)
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);

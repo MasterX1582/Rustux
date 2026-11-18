@@ -5,7 +5,15 @@
 #include <linux/types.h>
 #include <linux/compiler.h>
 
-#define do_div(n, base) ({ u64 __t = (u64)(n); u32 __r = (u32)(__t % (u64)(base)); (n) = __t / (u64)(base); __r; })
+/* Verbatim LP64 do_div from <asm-generic/div64.h> (base is u32-truncated,
+ * matching <asm/div64.h>; kept here for TUs that only see math64.h). */
+#define do_div(n, base) ({					\
+	u32 __base = (base);					\
+	u32 __rem;						\
+	__rem = ((u64)(n)) % __base;				\
+	(n) = ((u64)(n)) / __base;				\
+	__rem;							\
+})
 
 static inline u64 div_u64(u64 a, u64 b) { return a / b; }
 static inline s64 div_s64(s64 a, s64 b) { return a / b; }

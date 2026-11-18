@@ -2,6 +2,6 @@
  * are no-ops returning false, matching the non-warning execution path. */
 #pragma once
 
-#define WARN_ON(x) 0
-#define BUG() do {} while (0)
-#define BUG_ON(x) do {} while (0)
+#define WARN_ON(x) (!!(x))
+#define BUG() __builtin_trap()
+#define BUG_ON(x) do { if (x) __builtin_trap(); } while (0)

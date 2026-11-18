@@ -1,0 +1,404 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-math",
+  "unit": "wrappers.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "wrappers-rs",
+  "exports": [
+    {
+      "name": "rational_n",
+      "file": "wrappers.c",
+      "line": 19,
+      "params": [
+        {
+          "name": "gn",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "gd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "mn",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "md",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned long",
+      "prototype": "unsigned long rational_n(unsigned long gn, unsigned long gd, unsigned long mn, unsigned long md)"
+    },
+    {
+      "name": "rational_d",
+      "file": "wrappers.c",
+      "line": 28,
+      "params": [
+        {
+          "name": "gn",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "gd",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "mn",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "md",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned long",
+      "prototype": "unsigned long rational_d(unsigned long gn, unsigned long gd, unsigned long mn, unsigned long md)"
+    },
+    {
+      "name": "reciprocal_m",
+      "file": "wrappers.c",
+      "line": 37,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_m(uint32_t d)"
+    },
+    {
+      "name": "reciprocal_sh1",
+      "file": "wrappers.c",
+      "line": 42,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_sh1(uint32_t d)"
+    },
+    {
+      "name": "reciprocal_sh2",
+      "file": "wrappers.c",
+      "line": 47,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_sh2(uint32_t d)"
+    },
+    {
+      "name": "reciprocal_adv_m",
+      "file": "wrappers.c",
+      "line": 52,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        },
+        {
+          "name": "prec",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_adv_m(uint32_t d, uint32_t prec)"
+    },
+    {
+      "name": "reciprocal_adv_sh",
+      "file": "wrappers.c",
+      "line": 57,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        },
+        {
+          "name": "prec",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_adv_sh(uint32_t d, uint32_t prec)"
+    },
+    {
+      "name": "reciprocal_adv_exp",
+      "file": "wrappers.c",
+      "line": 62,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        },
+        {
+          "name": "prec",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_adv_exp(uint32_t d, uint32_t prec)"
+    },
+    {
+      "name": "reciprocal_adv_wide",
+      "file": "wrappers.c",
+      "line": 67,
+      "params": [
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        },
+        {
+          "name": "prec",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint32_t",
+      "prototype": "uint32_t reciprocal_adv_wide(uint32_t d, uint32_t prec)"
+    },
+    {
+      "name": "cordic_i",
+      "file": "wrappers.c",
+      "line": 72,
+      "params": [
+        {
+          "name": "theta",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int32_t",
+      "prototype": "int32_t cordic_i(int32_t theta)"
+    },
+    {
+      "name": "cordic_q",
+      "file": "wrappers.c",
+      "line": 77,
+      "params": [
+        {
+          "name": "theta",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "int32_t",
+      "prototype": "int32_t cordic_q(int32_t theta)"
+    },
+    {
+      "name": "polynomial_deg2",
+      "file": "wrappers.c",
+      "line": 87,
+      "params": [
+        {
+          "name": "td",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "c0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "dv0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "lo0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "c1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "dv1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "lo1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "c2",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "dv2",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "lo2",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        },
+        {
+          "name": "data",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "long"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "long",
+      "prototype": "long polynomial_deg2(long td, long c0, long dv0, long lo0, long c1, long dv1, long lo1, long c2, long dv2, long lo2, long data)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

@@ -7,7 +7,7 @@
 #include <linux/types.h>
 
 #define swap(a, b) do { __typeof__(a) __t = (a); (a) = (b); (b) = __t; } while (0)
-#define WARN_ON(x) 0
+#define WARN_ON(x) (!!(x))
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 /* Static keys: in userspace the "true" branch is always taken, matching a

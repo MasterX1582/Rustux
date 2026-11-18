@@ -34,7 +34,12 @@ Done so far (adopted into `klib::math`, all gates passed):
 `mul_u64_add_u64_div_u64` (232/232), `iter_div_u64_rem` (custom pointer-arg
 check `ports/lib-math/check-iter-div.py`, 72/72 — rust-anything's ctypes
 bridge can't take pointer args; document each such case or write a custom
-check like it).
+check like it),
+`rational_best_approximation` + `reciprocal_value` + `reciprocal_value_adv` +
+`cordic_calc_iq` + `polynomial_calc` (1448/1448 via scalar-field wrappers —
+`ports/lib-math/wrappers.c` converts struct out-params into scalar returns so
+the standard record/diff pipeline verifies the real functions transitively).
+`verify-all.sh` re-runs every crate's diff+gate plus the pointer-arg check.
 
 Harness notes learned along the way: kernel typedefs must be normalized to
 stdint names (`u64`→`uint64_t`) for the bridge's scalar map; functions inside

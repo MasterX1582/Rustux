@@ -252,8 +252,7 @@ pub fn mul_u64_add_u64_div_u64(a: u64, b: u64, c: u64, d: u64) -> u64 {
         n_hi = (n_hi << BITS_PER_ITER).wrapping_add(n_lo >> (64 - BITS_PER_ITER));
         n_lo <<= BITS_PER_ITER;
         let n = n_hi;
-        overflow =
-            overflow.wrapping_add(mul_u64_u64_add_u64(&mut n_hi, d, q_digit, n) as u32);
+        overflow = overflow.wrapping_add(mul_u64_u64_add_u64(&mut n_hi, d, q_digit, n) as u32);
         while overflow < (0xffff_ffffu32 >> (32 - BITS_PER_ITER)) {
             q_digit = q_digit.wrapping_add(1);
             n_hi = n_hi.wrapping_add(d);
@@ -268,13 +267,256 @@ pub fn mul_u64_add_u64_div_u64(a: u64, b: u64, c: u64, d: u64) -> u64 {
     quotient
 }
 
+/// Port of `lib/math/rational.c`: `rational_best_approximation` —
+/// continued-fraction best approximation of `gn/gd` bounded by `mn`/`md`.
+/// Returns `(best_numerator, best_denominator)` (the C out-params as a tuple).
+pub fn rational_best_approximation(
+    gn: c_ulong,
+    gd: c_ulong,
+    mn: c_ulong,
+    md: c_ulong,
+) -> (c_ulong, c_ulong) {
+    let mut n = gn;
+    let mut d = gd;
+    let mut n0: c_ulong = 0;
+    let mut d0: c_ulong = 1;
+    let mut n1: c_ulong = 1;
+    let mut d1: c_ulong = 0;
+
+    loop {
+        if d == 0 {
+            break;
+        }
+        let dp = d;
+        let a = n / d;
+        d = n % d;
+        n = dp;
+
+        let n2 = n0.wrapping_add(a.wrapping_mul(n1));
+        let d2 = d0.wrapping_add(a.wrapping_mul(d1));
+
+        if n2 > mn || d2 > md {
+            let mut t: c_ulong = c_ulong::MAX;
+
+            t = md.wrapping_sub(d0).checked_div(d1).unwrap_or(t);
+            t = t.min(mn.wrapping_sub(n0).checked_div(n1).unwrap_or(t));
+
+            if d1 == 0
+                || t.wrapping_mul(2) > a
+                || (t.wrapping_mul(2) == a && d0.wrapping_mul(dp) > d1.wrapping_mul(d))
+            {
+                n1 = n0.wrapping_add(t.wrapping_mul(n1));
+                d1 = d0.wrapping_add(t.wrapping_mul(d1));
+            }
+            break;
+        }
+        n0 = n1;
+        n1 = n2;
+        d0 = d1;
+        d1 = d2;
+    }
+    (n1, d1)
+}
+
+/// `fls` for a u32-sized value, as the port of `reciprocal_div.c` uses it.
+fn fls32(v: u32) -> i32 {
+    if v == 0 {
+        0
+    } else {
+        (32 - v.leading_zeros()) as i32
+    }
+}
+
+/// Port of `include/linux/reciprocal_div.h`: `struct reciprocal_value`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReciprocalValue {
+    pub m: u32,
+    pub sh1: u8,
+    pub sh2: u8,
+}
+
+/// Port of `lib/math/reciprocal_div.c`: `reciprocal_value`.
+///
+/// `d == 0` faults in C (UB — recorded as a crash); the port returns whatever
+/// the checked_div fallback produces. Callers must not pass 0, as upstream.
+pub fn reciprocal_value(d: u32) -> ReciprocalValue {
+    let l = fls32(d.wrapping_sub(1));
+    let mut m = (1u64 << 32).wrapping_mul((1u64 << l) - d as u64);
+    m = m.checked_div(d as u64).unwrap_or(u64::MAX);
+    m = m.wrapping_add(1);
+
+    ReciprocalValue {
+        m: m as u32,
+        sh1: l.min(1) as u8,
+        sh2: (l - 1).max(0) as u8,
+    }
+}
+
+/// Port of `include/linux/reciprocal_div.h`: `struct reciprocal_value_adv`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReciprocalValueAdv {
+    pub m: u32,
+    pub sh: u8,
+    pub exp: u8,
+    pub is_wide_m: bool,
+}
+
+/// Port of `lib/math/reciprocal_div.c`: `reciprocal_value_adv`.
+pub fn reciprocal_value_adv(d: u32, prec: u8) -> ReciprocalValueAdv {
+    let l = fls32(d.wrapping_sub(1)) as u32;
+    let mut post_shift = l;
+    let mut mlow = 1u64.wrapping_shl(32 + l);
+    mlow = mlow.checked_div(d as u64).unwrap_or(u64::MAX);
+    let mut mhigh = (1u64.wrapping_shl(32 + l))
+        .wrapping_add(1u64.wrapping_shl(32u32.wrapping_add(l).wrapping_sub(prec as u32)));
+    mhigh = mhigh.checked_div(d as u64).unwrap_or(u64::MAX);
+
+    while post_shift > 0 {
+        let lo = mlow >> 1;
+        let hi = mhigh >> 1;
+        if lo >= hi {
+            break;
+        }
+        mlow = lo;
+        mhigh = hi;
+        post_shift -= 1;
+    }
+
+    ReciprocalValueAdv {
+        m: mhigh as u32,
+        sh: post_shift as u8,
+        exp: l as u8,
+        is_wide_m: mhigh > u32::MAX as u64,
+    }
+}
+
+const ARCTAN_TABLE: [i32; 18] = [
+    2949120, 1740967, 919879, 466945, 234379, 117304, 58666, 29335, 14668, 7334, 3667, 1833, 917,
+    458, 229, 115, 57, 29,
+];
+
+const CORDIC_ANGLE_GEN: i32 = 39797;
+const CORDIC_PRECISION_SHIFT: u32 = 16;
+const CORDIC_NUM_ITER: u32 = CORDIC_PRECISION_SHIFT + 2;
+
+fn cordic_fixed(x: i32) -> i32 {
+    x.wrapping_shl(CORDIC_PRECISION_SHIFT)
+}
+
+fn cordic_float(x: i32) -> i32 {
+    if x >= 0 {
+        ((x >> (CORDIC_PRECISION_SHIFT - 1)) + 1) >> 1
+    } else {
+        -(((x.wrapping_neg() >> (CORDIC_PRECISION_SHIFT - 1)) + 1) >> 1)
+    }
+}
+
+/// Port of `include/linux/cordic.h`: `struct cordic_iq`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CordicIq {
+    pub i: i32,
+    pub q: i32,
+}
+
+/// Port of `lib/math/cordic.c`: `cordic_calc_iq` — CORDIC sine/cosine pair,
+/// scaled by 2^16, for `theta` in degrees.
+pub fn cordic_calc_iq(theta: i32) -> CordicIq {
+    let mut coord_i: i32 = CORDIC_ANGLE_GEN;
+    let mut coord_q: i32 = 0;
+    let mut angle: i32 = 0;
+    let mut signx: i32 = 1;
+
+    let mut theta = cordic_fixed(theta);
+    let signtheta: i32 = if theta < 0 { -1 } else { 1 };
+    theta = theta
+        .wrapping_add(cordic_fixed(180).wrapping_mul(signtheta))
+        .wrapping_rem(cordic_fixed(360))
+        .wrapping_sub(cordic_fixed(180).wrapping_mul(signtheta));
+
+    if cordic_float(theta) > 90 {
+        theta = theta.wrapping_sub(cordic_fixed(180));
+        signx = -1;
+    } else if cordic_float(theta) < -90 {
+        theta = theta.wrapping_add(cordic_fixed(180));
+        signx = -1;
+    }
+
+    for iter in 0..CORDIC_NUM_ITER {
+        let valtmp;
+        if theta > angle {
+            valtmp = coord_i.wrapping_sub(coord_q >> iter);
+            coord_q = coord_q.wrapping_add(coord_i >> iter);
+            angle = angle.wrapping_add(ARCTAN_TABLE[iter as usize]);
+        } else {
+            valtmp = coord_i.wrapping_add(coord_q >> iter);
+            coord_q = coord_q.wrapping_sub(coord_i >> iter);
+            angle = angle.wrapping_sub(ARCTAN_TABLE[iter as usize]);
+        }
+        coord_i = valtmp;
+    }
+
+    CordicIq {
+        i: coord_i.wrapping_mul(signx),
+        q: coord_q.wrapping_mul(signx),
+    }
+}
+
+/// Port of `include/linux/polynomial.h`: `struct polynomial_term`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PolynomialTerm {
+    pub deg: u32,
+    pub coef: i64,
+    pub divider: i64,
+    pub divider_leftover: i64,
+}
+
+/// `mult_frac(x, n, d)` verbatim (`linux/math.h`). Division by zero faults in
+/// C (UB); the port returns `i64::MAX` there, matching its other
+/// deliberate-divergence markers.
+fn mult_frac(x: i64, n: i64, d: i64) -> i64 {
+    let q = x.checked_div(d).unwrap_or(i64::MAX);
+    let r = x.checked_rem(d).unwrap_or(0);
+    q.wrapping_mul(n)
+        .wrapping_add(r.wrapping_mul(n).checked_div(d).unwrap_or(i64::MAX))
+}
+
+/// Port of `lib/math/polynomial.c`: `polynomial_calc`. `terms` plays the C
+/// flexible array: it must end at its `deg == 0` entry (also the constant
+/// coefficient), exactly like the kernel descriptor.
+pub fn polynomial_calc(terms: &[PolynomialTerm], total_divider: i64, data: i64) -> i64 {
+    let td = if total_divider != 0 { total_divider } else { 1 };
+    let mut ret: i64 = 0;
+
+    for term in terms {
+        let mut tmp = term.coef;
+        for _ in 0..term.deg {
+            tmp = mult_frac(tmp, data, term.divider);
+        }
+        ret = ret.wrapping_add(tmp.checked_div(term.divider_leftover).unwrap_or(i64::MAX));
+        if term.deg == 0 {
+            break;
+        }
+    }
+
+    ret.checked_div(td).unwrap_or(i64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn small_values() {
-        for (x, want) in [(0, 0), (1, 1), (2, 1), (3, 1), (4, 2), (15, 3), (16, 4), (17, 4)] {
+        for (x, want) in [
+            (0, 0),
+            (1, 1),
+            (2, 1),
+            (3, 1),
+            (4, 2),
+            (15, 3),
+            (16, 4),
+            (17, 4),
+        ] {
             assert_eq!(int_sqrt(x), want, "int_sqrt({x})");
         }
     }
@@ -337,7 +579,10 @@ mod tests {
     #[test]
     fn mul_div_u64_basics() {
         assert_eq!(mul_u64_add_u64_div_u64(3, 4, 5, 2), 8);
-        assert_eq!(mul_u64_add_u64_div_u64(1 << 63, 1 << 63, 0, 1 << 63), 1 << 63);
+        assert_eq!(
+            mul_u64_add_u64_div_u64(1 << 63, 1 << 63, 0, 1 << 63),
+            1 << 63
+        );
         assert_eq!(mul_u64_add_u64_div_u64(u64::MAX, 2, 0, 2), u64::MAX);
         assert_eq!(mul_u64_add_u64_div_u64(5, 7, 1, 0), u64::MAX);
     }
@@ -351,5 +596,70 @@ mod tests {
         assert_eq!(rem, 0);
         assert_eq!(iter_div_u64_rem(0xFFFF_FFFE, 0x7FFF_FFFF, &mut rem), 2);
         assert_eq!(rem, 0);
+    }
+
+    #[test]
+    fn rational_basics() {
+        // Values observed from the recorded harness: pi ≈ 22/7.
+        assert_eq!(rational_best_approximation(31415, 10000, 255, 31), (22, 7));
+        assert_eq!(rational_best_approximation(1, 2, 1, 1), (0, 1));
+        assert_eq!(rational_best_approximation(0, 5, 10, 10), (0, 1));
+    }
+
+    #[test]
+    fn reciprocal_basics() {
+        let r = reciprocal_value(7);
+        assert_eq!((r.m, r.sh1, r.sh2), (0x24924925, 1, 2));
+        let r = reciprocal_value(1);
+        assert_eq!((r.m, r.sh1, r.sh2), (1, 0, 0));
+        let adv = reciprocal_value_adv(7, 32);
+        assert_eq!(adv.exp, 3);
+    }
+
+    #[test]
+    fn cordic_basics() {
+        // cos(45°) == sin(45°) ≈ 0.707 * 2^16 = 46341 (one-ulp table error ok).
+        let c = cordic_calc_iq(45);
+        assert_eq!(c, CordicIq { i: 46342, q: 46341 });
+        let c = cordic_calc_iq(0);
+        assert_eq!(c, CordicIq { i: 65541, q: 0 });
+        let c = cordic_calc_iq(-45);
+        assert_eq!(
+            c,
+            CordicIq {
+                i: 46342,
+                q: -46342
+            }
+        );
+        let c = cordic_calc_iq(180);
+        assert_eq!(c, CordicIq { i: -65541, q: 0 });
+    }
+
+    #[test]
+    fn polynomial_basics() {
+        // x^2 + 2x + 3 at x=4 = 27, with unit dividers.
+        let terms = [
+            PolynomialTerm {
+                deg: 2,
+                coef: 1,
+                divider: 1,
+                divider_leftover: 1,
+            },
+            PolynomialTerm {
+                deg: 1,
+                coef: 2,
+                divider: 1,
+                divider_leftover: 1,
+            },
+            PolynomialTerm {
+                deg: 0,
+                coef: 3,
+                divider: 1,
+                divider_leftover: 1,
+            },
+        ];
+        assert_eq!(polynomial_calc(&terms, 1, 4), 27);
+        // total_divider 0 resolves to 1 (the ?: contract).
+        assert_eq!(polynomial_calc(&terms, 0, 4), 27);
     }
 }
