@@ -114,9 +114,19 @@ paths (no RCU semantics in klib yet). Remaining thin surface for a later
 pass: `rbtree_postorder_for_each_entry_safe`/`rb_entry_safe` macros,
 `RB_EMPTY_ROOT` inline (trivial), multi-field `RB_DECLARE_CALLBACKS`.
 
-Next units (userspace-compilable today): `tools/lib/string.c`,
-`crypto/sha256_generic.c`,
-`crypto/xxhash_generic.c`, `lib/siphash.c`, `lib/kfifo.c`.
+`lib/string.c` done (8038/8038 differential cases, gate passed): all 34
+functions — case-insensitive compares, strcpy/stpcpy/strcat/strncat/strlcat,
+`sized_strscpy` (all three return classes incl. `-E2BIG`), strcmp/strncmp
+(kernel sign-normalized `±1`, not glibc byte-diffs), the chr/len/spn/pbrk/
+strsep finders, memset{,16,32,64}/memcpy/memmove/memcmp/bcmp, memscan,
+strstr/strnstr, memchr, and word-at-a-time `memchr_inv`. Adopted as
+`klib::string` — `&[u8]` slices + `usize` offsets, NULL→`Option<usize>`,
+scan-for-NUL functions panic on unterminated slices (bounded, where C
+over-reads). Harness needed glibc-symbol hiding (hidden-visibility
+prototypes) plus `#undef __BIG_ENDIAN` after glibc's endian.h.
+
+Next units (userspace-compilable today): `crypto/sha256.c`,
+`crypto/sha1.c`, `crypto/sha512.c`, `lib/kfifo.c`.
 
 ### Wave 1 — kernel data structures (test harnesses exist)
 

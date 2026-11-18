@@ -239,6 +239,25 @@ fn main() -> Status {
         assert_eq!(h, 8);
     }
 
+    {
+        use klib::string::*;
+        let mut dst = [0u8; 16];
+        let copied = sized_strscpy(&mut dst, b"linux-rust\0", 16);
+        let hay = b"the quick brown fox\0";
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::string: strscpy={} strstr(fox)={:?} memchr_inv={:?} strcasecmp={} (verified port of lib/string.c)",
+            copied,
+            strstr(hay, b"fox\0"),
+            memchr_inv(b"aaaab", b'a', 5),
+            strcasecmp(b"ReSeT\0", b"reset\0")
+        );
+        assert_eq!(copied, 10);
+        assert_eq!(strstr(hay, b"fox\0"), Some(16));
+        assert_eq!(memchr_inv(b"aaaab", b'a', 5), Some(4));
+        assert_eq!(strcasecmp(b"ReSeT\0", b"reset\0"), 0);
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

@@ -17,3 +17,4 @@ pub mod list_sort;
 pub mod math;
 pub mod rbtree;
 pub mod sort;
+pub mod string;
