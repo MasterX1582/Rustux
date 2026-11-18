@@ -1,0 +1,9 @@
+[workspace]
+resolver = "2"
+members = ["kernel", "klib"]
+# rust-anything port crates are standalone: each verifies one unit with its own lockfile.
+exclude = ["ports/**"]
+
+[profile.release]
+opt-level = 2
+debug = true
