@@ -1,0 +1,135 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-seqbuf",
+  "unit": "wrappers.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "wrappers-rs",
+  "exports": [
+    {
+      "name": "wrap_seqbuf_seq",
+      "file": "wrappers.c",
+      "line": 203,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "bsz_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_seqbuf_seq(uint64_t seed, int64_t bsz_i, int64_t nops_i)"
+    },
+    {
+      "name": "wrap_seqbuf_printf",
+      "file": "wrappers.c",
+      "line": 360,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "bsz_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_seqbuf_printf(uint64_t seed, int64_t bsz_i)"
+    },
+    {
+      "name": "wrap_seqbuf_hexdump",
+      "file": "wrappers.c",
+      "line": 387,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "bsz_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "n_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_seqbuf_hexdump(uint64_t seed, int64_t bsz_i, int64_t n_i)"
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "kshim_printk",
+      "file": "wrappers.c",
+      "line": 59,
+      "reason": "is variadic"
+    },
+    {
+      "name": "seq_write",
+      "file": "wrappers.c",
+      "line": 76,
+      "reason": "passes a pointer (`struct seq_file*`): ownership must be designed"
+    },
+    {
+      "name": "d_path",
+      "file": "wrappers.c",
+      "line": 82,
+      "reason": "passes a pointer (`const struct path*`): ownership must be designed"
+    },
+    {
+      "name": "seq_mangle_path",
+      "file": "wrappers.c",
+      "line": 88,
+      "reason": "passes a pointer (`char*`): ownership must be designed"
+    }
+  ]
+}

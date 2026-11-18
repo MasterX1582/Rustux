@@ -157,6 +157,12 @@ kfifo ring, printk ringbuffer, seq_buf. `tools/testing/{radix-tree,maple,vma,bit
 already builds them in userspace — record against those harnesses.
 ~100 units, most of `lib/` + key `mm/` internals.
 
+Done: `lib/llist.c`+`llist.h` (531 cases) → `klib::llist` index-model
+(atomics sequential); `lib/seq_buf.c`+`seq_buf.h` (599 cases) →
+`klib::seqbuf` + `klib::fmt` interim mini-vsnprintf (real printf lands
+with `lib/vsprintf.c`). Skipped: seq_buf_print_seq/path/bprintf
+(seq_file/d_path/CONFIG_BINARY_PRINTF deps).
+
 ### Wave 2 — core services (custom shims needed)
 
 Timer wheels, workqueues, sched policy math (deadline calc, fair scheduling

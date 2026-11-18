@@ -315,6 +315,48 @@ fn main() -> Status {
         assert_eq!(&all[..6], b"efghij");
     }
 
+    {
+        use klib::llist::*;
+        let mut head = LlistHead::new();
+        let mut next = [NIL; 8];
+        for i in 0..3 {
+            init_llist_node(&mut next, i);
+            llist_add(&mut head, &mut next, i);
+        }
+        let a = llist_del_first(&mut head, &mut next); // 2 (LIFO)
+        let chain = llist_del_all(&mut head); // 1 -> 0
+        let rev = llist_reverse_order(&mut next, chain); // 0 -> 1
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::llist: pop={} chain={} rev-head={} (verified port of lib/llist.c)",
+            a,
+            chain,
+            rev
+        );
+        assert_eq!((a, chain, rev), (2, 1, 0));
+        assert_eq!(next[0], 1);
+        assert_eq!(next[1], NIL);
+    }
+
+    {
+        use klib::fmt::Arg;
+        use klib::seqbuf::*;
+        let mut buf = [0u8; 64];
+        let mut s = SeqBuf::new(&mut buf);
+        s.puts(b"boot\0");
+        s.printf(b"=%d", &[Arg::I(33)]);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::seqbuf: puts+printf -> {:?} (verified port of lib/seq_buf.c)",
+            s.as_slice()
+        );
+        assert_eq!(s.as_slice(), b"boot=33");
+        assert_eq!(s.pop(), b'3' as i64);
+        let mut lb = [0u8; 131];
+        let n = hex_dump_to_buffer(&[0xde, 0xad], 2, 16, 1, &mut lb, false);
+        assert_eq!(&lb[..n as usize], b"de ad");
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

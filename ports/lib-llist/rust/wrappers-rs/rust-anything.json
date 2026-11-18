@@ -1,0 +1,103 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-llist",
+  "unit": "wrappers.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "wrappers-rs",
+  "exports": [
+    {
+      "name": "wrap_llist_seq",
+      "file": "wrappers.c",
+      "line": 141,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "npool_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_llist_seq(uint64_t seed, int64_t npool_i, int64_t nops_i)"
+    },
+    {
+      "name": "wrap_llist_reverse",
+      "file": "wrappers.c",
+      "line": 308,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "n_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_llist_reverse(uint64_t seed, int64_t n_i)"
+    },
+    {
+      "name": "wrap_llist_batch",
+      "file": "wrappers.c",
+      "line": 345,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_llist_batch(uint64_t seed, int64_t k_i)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}
