@@ -1,0 +1,1811 @@
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 2, 2147483647], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 7, -100], "ok": 11314236272610099495}
+{"fn": "wrap_rbtree_run", "args": [7, -100, 2147483647], "ok": 375816130487387821}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 100, 42], "ok": 2305601332416156016}
+{"fn": "wrap_rbtree_run", "args": [-100, 1, -1], "ok": 12255857665675631938}
+{"fn": "wrap_rbtree_run", "args": [100, 0, 2], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [2, 0, -1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -1, 2], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-100, 255, -1], "ok": 11623777307870349174}
+{"fn": "wrap_rbtree_run", "args": [42, 7, 2], "ok": 10254585119194568668}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 255, 255], "ok": 2748063197214391283}
+{"fn": "wrap_rbtree_run", "args": [255, 2, 255], "ok": 5570254192027094235}
+{"fn": "wrap_rbtree_run", "args": [255, 0, 1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [-100, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-100, -1, 2], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [100, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [1, 2, 7], "ok": 5627973195429335253}
+{"fn": "wrap_rbtree_run", "args": [2, -1, 1], "ok": 1915085631773888448}
+{"fn": "wrap_rbtree_run", "args": [2, 255, 100], "ok": 199158272128213447}
+{"fn": "wrap_rbtree_run", "args": [100, 2147483647, 42], "ok": 18159711252390068481}
+{"fn": "wrap_rbtree_run", "args": [255, 7, 42], "ok": 2522659332693751859}
+{"fn": "wrap_rbtree_run", "args": [255, -1, 1], "ok": 3698942867420323808}
+{"fn": "wrap_rbtree_run", "args": [2147483647, -2147483648, -100], "ok": 16912161076228231086}
+{"fn": "wrap_rbtree_run", "args": [1, -1, 9223372036854775807], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [1, 100, -100], "ok": 11444162774817475747}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 9223372036854775807, 255], "ok": 13801364814395899451}
+{"fn": "wrap_rbtree_run", "args": [-100, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [100, 7, 255], "ok": 4372406610354006853}
+{"fn": "wrap_rbtree_run", "args": [255, 42, -1], "ok": 13802448868131116840}
+{"fn": "wrap_rbtree_run", "args": [-100, 2, 1], "ok": 5695415814158325669}
+{"fn": "wrap_rbtree_run", "args": [2, 1, -100], "ok": 1915085631773888448}
+{"fn": "wrap_rbtree_run", "args": [1, -2147483648, 100], "ok": 10355238083591027758}
+{"fn": "wrap_rbtree_run", "args": [1, 9223372036854775807, -100], "ok": 1733273571353066764}
+{"fn": "wrap_rbtree_run", "args": [255, 9223372036854775807, 0], "ok": 12117133663628238024}
+{"fn": "wrap_rbtree_run", "args": [42, -100, 1], "ok": 2181338819374586104}
+{"fn": "wrap_rbtree_run", "args": [0, -100, 0], "ok": 11444162774817475747}
+{"fn": "wrap_rbtree_run", "args": [42, 9223372036854775807, -1], "ok": 6379090201810016998}
+{"fn": "wrap_rbtree_run", "args": [-100, 9223372036854775807, 1], "ok": 528704692930195228}
+{"fn": "wrap_rbtree_run", "args": [42, -100, 9223372036854775807], "ok": 8064345789552813201}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [2147483647, -1, 42], "ok": 2711002067851089870}
+{"fn": "wrap_rbtree_run", "args": [255, 7, 100], "ok": 12117133663628238024}
+{"fn": "wrap_rbtree_run", "args": [42, 1, -100], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-1, 100, -1], "ok": 5958238055726683652}
+{"fn": "wrap_rbtree_run", "args": [42, 7, 100], "ok": 10254585119194568668}
+{"fn": "wrap_rbtree_run", "args": [-100, 9223372036854775807, 255], "ok": 5754032599194768460}
+{"fn": "wrap_rbtree_run", "args": [42, -100, 2], "ok": 7484454130641726715}
+{"fn": "wrap_rbtree_run", "args": [-100, 255, 9223372036854775807], "ok": 1849004869968236791}
+{"fn": "wrap_rbtree_run", "args": [255, 1, 255], "ok": 3698942867420323808}
+{"fn": "wrap_rbtree_run", "args": [-100, -2147483648, -2147483648], "ok": 2632278148511838827}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 2, 2], "ok": 6251125957118764091}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 255, 0], "ok": 6582009007901144758}
+{"fn": "wrap_rbtree_run", "args": [7, 42, 1], "ok": 17939925580259940702}
+{"fn": "wrap_rbtree_run", "args": [-1, 2, 0], "ok": 4919834258414603936}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 9223372036854775807, 100], "ok": 11314236272610099495}
+{"fn": "wrap_rbtree_run", "args": [7, 2, 0], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [2147483647, -100, -1], "ok": 12961958086672072790}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 100, 2147483647], "ok": 17265269158136725453}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -1, 7], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [255, 100, -100], "ok": 52615131278238604}
+{"fn": "wrap_rbtree_run", "args": [7, 2, -1], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [42, 2147483647, 7], "ok": 1604245662068299671}
+{"fn": "wrap_rbtree_run", "args": [7, -1, 255], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [2, 2147483647, 7], "ok": 696769029494679578}
+{"fn": "wrap_rbtree_run", "args": [-100, 9223372036854775807, -100], "ok": 13826011122243489462}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 100, -100], "ok": 9836932962075827217}
+{"fn": "wrap_rbtree_run", "args": [-1, 9223372036854775807, 42], "ok": 1488182212920441632}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 9223372036854775807, 2], "ok": 11314236272610099495}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 100, 7], "ok": 17265269158136725453}
+{"fn": "wrap_rbtree_run", "args": [255, 255, -1], "ok": 16980324845607428813}
+{"fn": "wrap_rbtree_run", "args": [255, 42, 0], "ok": 6560270315144032597}
+{"fn": "wrap_rbtree_run", "args": [-1, 0, -1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [42, 2147483647, -1], "ok": 6545533721214643887}
+{"fn": "wrap_rbtree_run", "args": [1, 7, 42], "ok": 13892303969828508134}
+{"fn": "wrap_rbtree_run", "args": [0, 7, -100], "ok": 1733273571353066764}
+{"fn": "wrap_rbtree_run", "args": [2, -100, -100], "ok": 40831541279766202}
+{"fn": "wrap_rbtree_run", "args": [100, 9223372036854775807, 100], "ok": 1710155050032285527}
+{"fn": "wrap_rbtree_run", "args": [2, 2, 1], "ok": 4193134900118663831}
+{"fn": "wrap_rbtree_run", "args": [1, -2147483648, 9223372036854775807], "ok": 5372846099824553434}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 42, 2], "ok": 16054579695669012951}
+{"fn": "wrap_rbtree_run", "args": [2147483647, -100, 1], "ok": 12961958086672072790}
+{"fn": "wrap_rbtree_run", "args": [42, 1, 9223372036854775807], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [1, 2, -100], "ok": 5627973195429335253}
+{"fn": "wrap_rbtree_run", "args": [0, 100, 100], "ok": 11444162774817475747}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 0, 9223372036854775807], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [0, -1, 1], "ok": 7958498541456800537}
+{"fn": "wrap_rbtree_run", "args": [0, 42, 7], "ok": 1359396799492527329}
+{"fn": "wrap_rbtree_run", "args": [7, 1, 1], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [-100, 1, -2147483648], "ok": 12255857665675631938}
+{"fn": "wrap_rbtree_run", "args": [7, 1, -1], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [255, 1, -2147483648], "ok": 3698942867420323808}
+{"fn": "wrap_rbtree_run", "args": [2, 255, 2], "ok": 3372043254930533372}
+{"fn": "wrap_rbtree_run", "args": [100, 100, 2], "ok": 14828436319108366888}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -1, 9223372036854775807], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [0, 2147483647, 7], "ok": 11627928808140814603}
+{"fn": "wrap_rbtree_run", "args": [-100, -100, 2147483647], "ok": 8926857265922856189}
+{"fn": "wrap_rbtree_run", "args": [2, 255, 255], "ok": 16227101599773831490}
+{"fn": "wrap_rbtree_run", "args": [0, 2147483647, -2147483648], "ok": 5371702410848879108}
+{"fn": "wrap_rbtree_run", "args": [255, 2147483647, 9223372036854775807], "ok": 6730485724470779693}
+{"fn": "wrap_rbtree_run", "args": [0, -1, 2], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [255, 42, 2], "ok": 15401824966365342536}
+{"fn": "wrap_rbtree_run", "args": [-1, 2147483647, 0], "ok": 14332573453543300021}
+{"fn": "wrap_rbtree_run", "args": [2, 1, 42], "ok": 1915085631773888448}
+{"fn": "wrap_rbtree_run", "args": [42, -100, -2147483648], "ok": 17981466765801225268}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, -2147483648, -1], "ok": 4884213721233356452}
+{"fn": "wrap_rbtree_run", "args": [42, 100, -100], "ok": 17981466765801225268}
+{"fn": "wrap_rbtree_run", "args": [-1, 2147483647, -2147483648], "ok": 14332573453543300021}
+{"fn": "wrap_rbtree_run", "args": [0, 255, 100], "ok": 5749981042688188452}
+{"fn": "wrap_rbtree_run", "args": [1, -2147483648, 255], "ok": 5372846099824553434}
+{"fn": "wrap_rbtree_run", "args": [100, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [42, -100, 0], "ok": 17981466765801225268}
+{"fn": "wrap_rbtree_run", "args": [42, 9223372036854775807, 255], "ok": 12272628540515163589}
+{"fn": "wrap_rbtree_run", "args": [2, 42, 7], "ok": 9801300278890393745}
+{"fn": "wrap_rbtree_run", "args": [0, -100, -2147483648], "ok": 11444162774817475747}
+{"fn": "wrap_rbtree_run", "args": [0, -100, 2147483647], "ok": 4514161330130661652}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -2147483648, -1], "ok": 8013467439368132656}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 1, 255], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [100, 2147483647, 100], "ok": 12167488804819330640}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 255, 0], "ok": 2868756910811689554}
+{"fn": "wrap_rbtree_run", "args": [-1, -100, 1], "ok": 5958238055726683652}
+{"fn": "wrap_rbtree_run", "args": [-100, 2147483647, 42], "ok": 6536084045304875770}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, 42], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-1, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [42, 9223372036854775807, 2], "ok": 10254585119194568668}
+{"fn": "wrap_rbtree_run", "args": [42, 7, -2147483648], "ok": 10254585119194568668}
+{"fn": "wrap_rbtree_run", "args": [255, -1, 100], "ok": 3698942867420323808}
+{"fn": "wrap_rbtree_run", "args": [1, 42, 1], "ok": 13683814854571014616}
+{"fn": "wrap_rbtree_run", "args": [42, 2147483647, -100], "ok": 1033452703949925904}
+{"fn": "wrap_rbtree_run", "args": [2, 100, 42], "ok": 443653740177243902}
+{"fn": "wrap_rbtree_run", "args": [100, 7, 42], "ok": 17335754132658602797}
+{"fn": "wrap_rbtree_run", "args": [100, 42, 2147483647], "ok": 3361880683746610574}
+{"fn": "wrap_rbtree_run", "args": [255, 2, 42], "ok": 17141905942105019278}
+{"fn": "wrap_rbtree_run", "args": [255, 2, 100], "ok": 17141905942105019278}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -100, 0], "ok": 9836932962075827217}
+{"fn": "wrap_rbtree_run", "args": [42, -2147483648, -1], "ok": 1961175727711911382}
+{"fn": "wrap_rbtree_run", "args": [7, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [-100, 255, 255], "ok": 1849004869968236791}
+{"fn": "wrap_rbtree_run", "args": [100, 0, -1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [-1, 1, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [42, -2147483648, 9223372036854775807], "ok": 1548684498182988126}
+{"fn": "wrap_rbtree_run", "args": [42, 2, 100], "ok": 4380206286160114173}
+{"fn": "wrap_rbtree_run", "args": [100, 0, -2147483648], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 100, 7], "ok": 375816130487387821}
+{"fn": "wrap_rbtree_run", "args": [100, 255, 0], "ok": 5860647429603691454}
+{"fn": "wrap_rbtree_run", "args": [7, -1, -1], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 42, 2147483647], "ok": 4360479702456788387}
+{"fn": "wrap_rbtree_run", "args": [1, 2, 2147483647], "ok": 5627973195429335253}
+{"fn": "wrap_rbtree_run", "args": [0, -100, -100], "ok": 11444162774817475747}
+{"fn": "wrap_rbtree_run", "args": [100, 2, 255], "ok": 13122621578295636538}
+{"fn": "wrap_rbtree_run", "args": [-100, 2147483647, 1], "ok": 9140157367772173638}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, -2147483648, 1], "ok": 4884213721233356452}
+{"fn": "wrap_rbtree_run", "args": [-1, 42, -1], "ok": 2743253431978693091}
+{"fn": "wrap_rbtree_run", "args": [1, 255, 2147483647], "ok": 7883851899727627236}
+{"fn": "wrap_rbtree_run", "args": [255, 0, -1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 7, -1], "ok": 15495834469152388215}
+{"fn": "wrap_rbtree_run", "args": [-100, 7, -1], "ok": 528704692930195228}
+{"fn": "wrap_rbtree_run", "args": [7, 255, 1], "ok": 9881651958154331211}
+{"fn": "wrap_rbtree_run", "args": [255, -1, 2], "ok": 3698942867420323808}
+{"fn": "wrap_rbtree_run", "args": [255, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [100, 2, -100], "ok": 13122621578295636538}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -1, 255], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [255, 42, 7], "ok": 6686937148354068175}
+{"fn": "wrap_rbtree_run", "args": [1, 1, 1], "ok": 7958498541456800537}
+{"fn": "wrap_rbtree_run", "args": [0, 100, -100], "ok": 11444162774817475747}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 7, -1], "ok": 10940526382657259535}
+{"fn": "wrap_rbtree_run", "args": [7, 0, 42], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [255, 42, 42], "ok": 15401824966365342536}
+{"fn": "wrap_rbtree_run", "args": [-100, -100, -1], "ok": 13501229136047936625}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 7, -2147483648], "ok": 11314236272610099495}
+{"fn": "wrap_rbtree_run", "args": [-1, -100, -1], "ok": 5958238055726683652}
+{"fn": "wrap_rbtree_run", "args": [1, 9223372036854775807, 100], "ok": 1733273571353066764}
+{"fn": "wrap_rbtree_run", "args": [42, 2, -100], "ok": 4380206286160114173}
+{"fn": "wrap_rbtree_run", "args": [0, 9223372036854775807, 9223372036854775807], "ok": 13892303969828508134}
+{"fn": "wrap_rbtree_run", "args": [2, -1, 255], "ok": 1915085631773888448}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, -2147483648, 0], "ok": 2302792884828090298}
+{"fn": "wrap_rbtree_run", "args": [0, 1, 100], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-1, 2147483647, 7], "ok": 13671453733918018019}
+{"fn": "wrap_rbtree_run", "args": [-100, 1, -100], "ok": 12255857665675631938}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 7, -1], "ok": 12443819636349972954}
+{"fn": "wrap_rbtree_run", "args": [-1, -2147483648, 9223372036854775807], "ok": 145490148525750206}
+{"fn": "wrap_rbtree_run", "args": [7, 9223372036854775807, -1], "ok": 15495834469152388215}
+{"fn": "wrap_rbtree_run", "args": [100, 2, -2147483648], "ok": 13122621578295636538}
+{"fn": "wrap_rbtree_run", "args": [0, 255, 2], "ok": 17385152838103497190}
+{"fn": "wrap_rbtree_run", "args": [42, 2147483647, 2147483647], "ok": 1604245662068299671}
+{"fn": "wrap_rbtree_run", "args": [2147483647, -1, 1], "ok": 2711002067851089870}
+{"fn": "wrap_rbtree_run", "args": [255, -2147483648, 2], "ok": 2573222191947774131}
+{"fn": "wrap_rbtree_run", "args": [2147483647, 9223372036854775807, 2], "ok": 9458749571605814486}
+{"fn": "wrap_rbtree_run", "args": [-1, -100, 7], "ok": 7515040526486186631}
+{"fn": "wrap_rbtree_run", "args": [7, -1, 2147483647], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [255, -2147483648, 2147483647], "ok": 14316741664503122154}
+{"fn": "wrap_rbtree_run", "args": [255, -100, 7], "ok": 9841035944288229953}
+{"fn": "wrap_rbtree_run", "args": [-100, 100, -1], "ok": 13501229136047936625}
+{"fn": "wrap_rbtree_run", "args": [7, 2, -2147483648], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [7, -2147483648, 2], "ok": 1959819030435528284}
+{"fn": "wrap_rbtree_run", "args": [1, 2, -1], "ok": 8006560868750242079}
+{"fn": "wrap_rbtree_run", "args": [7, 2, 2], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 0, 255], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 255, 9223372036854775807], "ok": 16370262964511871883}
+{"fn": "wrap_rbtree_run", "args": [100, 0, 100], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [-7, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-1, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [0, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [2147483648, 1, 2147483647], "ok": 17364575188086818874}
+{"fn": "wrap_rbtree_run", "args": [-2147483649, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [9007199254740993, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [9223372036854775807, 1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-9223372036854775808, 1, 2147483647], "ok": 457220720887760626}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -7, 2147483647], "ok": 1022800109891730863}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -1, 2147483647], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 2147483648, 2147483647], "ok": 3201469517221961036}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -2147483649, 2147483647], "ok": 6137040009554520275}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 9007199254740993, 2147483647], "ok": 4179013303039724184}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 9223372036854775807, 2147483647], "ok": 1022800109891730863}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, -9223372036854775808, 2147483647], "ok": 12202380835658836153}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, -7], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, -1], "ok": 964712129228305271}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, 0], "ok": 964712129228305271}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, 2147483648], "ok": 964712129228305271}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, -2147483649], "ok": 964712129228305271}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, 9007199254740993], "ok": 964712129228305271}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, 9223372036854775807], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_run", "args": [-2147483648, 1, -9223372036854775808], "ok": 964712129228305271}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 100], "ok": 9560543086451629595}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, -1], "ok": 7842733031604367022}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 42], "ok": 11014025586681002380}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, -100], "ok": 10501317590739148480}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 100], "ok": 12366444201631339558}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 2], "ok": 2093727825086518168}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 1], "ok": 5535583792394977271}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, -100], "ok": 8818674312632452161}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 2], "ok": 5560384897692107739}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, -2147483648], "ok": 15137682680885047452}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 7], "ok": 194327486570624347}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 7], "ok": 14907493360455771765}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 255], "ok": 8182018578942736087}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, -2147483648], "ok": 9602688643233870920}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 9223372036854775807], "ok": 194327486570624347}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, -100], "ok": 5415235834215932810}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 7], "ok": 1865859118209844914}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 9223372036854775807], "ok": 11056866838866666973}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 2147483647], "ok": 5567562226616175499}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 7], "ok": 223913586264682182}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 1], "ok": 18336356248125232594}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, -100], "ok": 2599259612832918495}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 1], "ok": 1188911291464632210}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 7], "ok": 10197684491150080189}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 7], "ok": 2982243004688300469}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 100], "ok": 8818674312632452161}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 2], "ok": 11120733184478780023}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 2147483647], "ok": 13844747531147229368}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, -100], "ok": 8728781487706374433}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, -1], "ok": 5535583792394977271}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 42], "ok": 8736051157740243080}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 9223372036854775807], "ok": 1865859118209844914}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 9223372036854775807], "ok": 10197684491150080189}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 2147483647], "ok": 16420112612925236295}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, -1], "ok": 16123383802618445492}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, -2147483648], "ok": 993081492927198102}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 42], "ok": 17071470146089588605}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 1], "ok": 17037057131076281362}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 255], "ok": 13455950836457705574}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 9223372036854775807], "ok": 11834908071640986011}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 2147483647], "ok": 15425643151896673604}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 42], "ok": 15879036179917241374}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 2147483647], "ok": 15460229489797512951}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 100], "ok": 2599259612832918495}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, -100], "ok": 14032766402637251297}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 9223372036854775807], "ok": 2982243004688300469}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 2], "ok": 285251606787856190}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 2], "ok": 13626854413964244653}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 2], "ok": 17545652728639309549}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 1], "ok": 7842733031604367022}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 9223372036854775807], "ok": 9613869232823454036}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 255], "ok": 9635364614609157551}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 100], "ok": 5116652676278053399}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, -100], "ok": 7257304318183102570}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, -1], "ok": 15650822316083624621}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 42], "ok": 1064726623779476574}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 2], "ok": 14912508620785373839}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 100], "ok": 8728781487706374433}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 42], "ok": 10821826576612236548}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, -1], "ok": 13823644012458675313}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 2], "ok": 6969328044622591114}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, -2147483648], "ok": 17368053556793990185}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, -100], "ok": 12366444201631339558}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, -1], "ok": 10768861179527661912}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, -100], "ok": 17528955682705348167}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 9223372036854775807], "ok": 17580438792945784794}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, -1], "ok": 18336356248125232594}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 2147483647], "ok": 14082899446206037434}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, -2147483648], "ok": 13776913823132042900}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 7], "ok": 17580438792945784794}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 9223372036854775807], "ok": 14907493360455771765}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, -1], "ok": 11790245522815848576}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, -100], "ok": 5116652676278053399}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, -1], "ok": 5535583792394977271}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, -2147483648], "ok": 10573409297133570589}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 1], "ok": 5535583792394977271}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 2], "ok": 7184145100270188612}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, -100], "ok": 8728781487706374433}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, -2147483648], "ok": 993081492927198102}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 2], "ok": 5560384897692107739}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 9223372036854775807], "ok": 194327486570624347}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 2], "ok": 485825033778287226}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 9223372036854775807], "ok": 223913586264682182}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 2147483647], "ok": 14410755258543620997}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 2147483647], "ok": 8625101416160143588}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 255], "ok": 5118178469198748760}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 100], "ok": 10501317590739148480}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, -2147483648], "ok": 8127003400167478841}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 2147483647], "ok": 10385970870656215921}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 2147483647], "ok": 7518372584615568365}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 255], "ok": 16616494445591558203}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 1], "ok": 15650822316083624621}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 42], "ok": 4065223579557977190}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 9223372036854775807], "ok": 8422379066507391633}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 255], "ok": 7520402770627821128}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 100], "ok": 5415235834215932810}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 1], "ok": 11790245522815848576}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 255], "ok": 16248368754966922895}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 42], "ok": 16001496543104469330}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483648, 1], "ok": 10768861179527661912}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, -1], "ok": 1188911291464632210}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 255], "ok": 4551033862801131780}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 7], "ok": 194327486570624347}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 7], "ok": 9613869232823454036}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 255], "ok": 14753015498551424109}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 1], "ok": 12231189011448141143}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 100], "ok": 17528955682705348167}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, -100], "ok": 9560543086451629595}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 7], "ok": 11834908071640986011}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 100], "ok": 8728781487706374433}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 255], "ok": 16864989312483363333}
+{"fn": "wrap_rbtree_insert_seq", "args": [1, 2147483647], "ok": 8625101416160143588}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 255], "ok": 16616494445591558203}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 7], "ok": 11056866838866666973}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, 42], "ok": 5268895188004796583}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, -2147483648], "ok": 9078920894737099440}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 2], "ok": 11246162728054739065}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 255], "ok": 2750494138901738105}
+{"fn": "wrap_rbtree_insert_seq", "args": [-100, 1], "ok": 16123383802618445492}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 1], "ok": 13823644012458675313}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 42], "ok": 4065223579557977190}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 42], "ok": 13079909571298408241}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483647, 42], "ok": 17049100490249745236}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, 7], "ok": 8422379066507391633}
+{"fn": "wrap_rbtree_insert_seq", "args": [42, -1], "ok": 12231189011448141143}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, -2147483648], "ok": 7561442302491506425}
+{"fn": "wrap_rbtree_insert_seq", "args": [255, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [7, 100], "ok": 7257304318183102570}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, -2147483648], "ok": 8312463597670223164}
+{"fn": "wrap_rbtree_insert_seq", "args": [-1, -1], "ok": 17037057131076281362}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, 2147483647], "ok": 17969701473605287080}
+{"fn": "wrap_rbtree_insert_seq", "args": [100, -2147483648], "ok": 17245078231916396842}
+{"fn": "wrap_rbtree_insert_seq", "args": [9223372036854775807, 100], "ok": 14032766402637251297}
+{"fn": "wrap_rbtree_insert_seq", "args": [-7, 100], "ok": 11935676039170876902}
+{"fn": "wrap_rbtree_insert_seq", "args": [2147483648, 100], "ok": 6391637973647706205}
+{"fn": "wrap_rbtree_insert_seq", "args": [-2147483649, 100], "ok": 16926583114029282691}
+{"fn": "wrap_rbtree_insert_seq", "args": [9007199254740993, 100], "ok": 13334572978042330592}
+{"fn": "wrap_rbtree_insert_seq", "args": [-9223372036854775808, 100], "ok": 8928283137168724190}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, -7], "ok": 1865859118209844914}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 2147483648], "ok": 9078920894737099440}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, -2147483649], "ok": 1811929406184658227}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, 9007199254740993], "ok": 1526243817134571514}
+{"fn": "wrap_rbtree_insert_seq", "args": [2, -9223372036854775808], "ok": 12367367480041284897}
+{"fn": "wrap_rbtree_erase_all", "args": [0, -100], "ok": 11516135455370556264}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 2147483647], "ok": 5848239859059282388}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 7], "ok": 13728085637996359150}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [2, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 2], "ok": 14484980865390131548}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 9223372036854775807], "ok": 8741579513586308076}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 255], "ok": 10608164459799221179}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 100], "ok": 1501218554607934570}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 100], "ok": 3413920557726934234}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 255], "ok": 9066192649401642003}
+{"fn": "wrap_rbtree_erase_all", "args": [7, -100], "ok": 3413920557726934234}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 42], "ok": 12779732615204286362}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [42, -100], "ok": 1501218554607934570}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 2147483647], "ok": 15472618267102548850}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 9223372036854775807], "ok": 5775314039597405832}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [2, -2147483648], "ok": 13577447286743197880}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 9223372036854775807], "ok": 13728085637996359150}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 255], "ok": 13822198991498146519}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 9223372036854775807], "ok": 151226477931013308}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 2147483647], "ok": 7288603152269919206}
+{"fn": "wrap_rbtree_erase_all", "args": [1, -100], "ok": 11516135455370556264}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [0, -2147483648], "ok": 14451506047633712074}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 42], "ok": 12521442278754613318}
+{"fn": "wrap_rbtree_erase_all", "args": [255, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 9223372036854775807], "ok": 18184469329868397724}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 7], "ok": 8741579513586308076}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 7], "ok": 5775314039597405832}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 255], "ok": 7432903714340481877}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 2], "ok": 14484980865390131548}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, -2147483648], "ok": 10227319197171837910}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 255], "ok": 5204213542393043511}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, -100], "ok": 7268276966826765710}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 2147483647], "ok": 15472618267102548850}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 9223372036854775807], "ok": 2198684224079132182}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, -2147483648], "ok": 13237229202713776510}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 255], "ok": 9066192649401642003}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 7], "ok": 6375589874358173066}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 9223372036854775807], "ok": 8741579513586308076}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 100], "ok": 17230216428792568288}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 7], "ok": 5775314039597405832}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 42], "ok": 6929188807368914930}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 2147483647], "ok": 9184609191900045968}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 2147483647], "ok": 9161972271463209308}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 42], "ok": 1201491063501602870}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 2147483647], "ok": 13121655472579622670}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 42], "ok": 13322957765944936462}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, -100], "ok": 16410813354676541880}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 42], "ok": 6929188807368914930}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 7], "ok": 8741579513586308076}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 7], "ok": 151226477931013308}
+{"fn": "wrap_rbtree_erase_all", "args": [100, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 7], "ok": 18184469329868397724}
+{"fn": "wrap_rbtree_erase_all", "args": [1, -2147483648], "ok": 14451506047633712074}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 100], "ok": 8393463489499357224}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, -2147483648], "ok": 7802519234206400820}
+{"fn": "wrap_rbtree_erase_all", "args": [42, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [100, -100], "ok": 4531990615977754730}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 2147483647], "ok": 17447525776420970030}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 9223372036854775807], "ok": 2748449334202031586}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 100], "ok": 16410813354676541880}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, -2147483648], "ok": 17476377729797457216}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [42, -2147483648], "ok": 17083033014158758720}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 255], "ok": 6867406821476455191}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 42], "ok": 16009774395376774758}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 255], "ok": 10608164459799221179}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 2147483647], "ok": 17764938674282082386}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 7], "ok": 2748449334202031586}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 2147483647], "ok": 15472618267102548850}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 42], "ok": 14988257032596328988}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 100], "ok": 7268276966826765710}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, -100], "ok": 8393463489499357224}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 42], "ok": 5174320392850252314}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 7], "ok": 5775314039597405832}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 2147483647], "ok": 9184609191900045968}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 7], "ok": 2198684224079132182}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 7], "ok": 199577090595474838}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 255], "ok": 10608164459799221179}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [1, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 100], "ok": 8393463489499357224}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 42], "ok": 12650836815676857650}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 42], "ok": 2105777978320616834}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [1, 100], "ok": 11516135455370556264}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 100], "ok": 9872347345640163300}
+{"fn": "wrap_rbtree_erase_all", "args": [255, -100], "ok": 17230216428792568288}
+{"fn": "wrap_rbtree_erase_all", "args": [255, -2147483648], "ok": 8567368324847040818}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 100], "ok": 11516135455370556264}
+{"fn": "wrap_rbtree_erase_all", "args": [7, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 2147483647], "ok": 15472618267102548850}
+{"fn": "wrap_rbtree_erase_all", "args": [100, -2147483648], "ok": 2291443722388051184}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 100], "ok": 4531990615977754730}
+{"fn": "wrap_rbtree_erase_all", "args": [7, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 255], "ok": 13243814682782161211}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [100, 9223372036854775807], "ok": 5775314039597405832}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 42], "ok": 10770101856083080774}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 100], "ok": 13132870506536486610}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 9223372036854775807], "ok": 5775314039597405832}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, -100], "ok": 13132870506536486610}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483648, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [0, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, 255], "ok": 2373550321914068891}
+{"fn": "wrap_rbtree_erase_all", "args": [255, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [2, -100], "ok": 9872347345640163300}
+{"fn": "wrap_rbtree_erase_all", "args": [42, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [9223372036854775807, -100], "ok": 8393463489499357224}
+{"fn": "wrap_rbtree_erase_all", "args": [2, 9223372036854775807], "ok": 199577090595474838}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483647, -2147483648], "ok": 9164571961991049832}
+{"fn": "wrap_rbtree_erase_all", "args": [-100, 255], "ok": 3452601912073733699}
+{"fn": "wrap_rbtree_erase_all", "args": [7, -2147483648], "ok": 9659320998497429728}
+{"fn": "wrap_rbtree_erase_all", "args": [-1, 9223372036854775807], "ok": 6375589874358173066}
+{"fn": "wrap_rbtree_erase_all", "args": [-7, -100], "ok": 5515436844244239856}
+{"fn": "wrap_rbtree_erase_all", "args": [2147483648, -100], "ok": 8393463489499357224}
+{"fn": "wrap_rbtree_erase_all", "args": [-2147483649, -100], "ok": 8393463489499357224}
+{"fn": "wrap_rbtree_erase_all", "args": [9007199254740993, -100], "ok": 7434126408014434958}
+{"fn": "wrap_rbtree_erase_all", "args": [-9223372036854775808, -100], "ok": 4142815878371357598}
+{"fn": "wrap_rbtree_erase_all", "args": [0, -7], "ok": 8741579513586308076}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 2147483648], "ok": 14451506047633712074}
+{"fn": "wrap_rbtree_erase_all", "args": [0, -2147483649], "ok": 11957371122810255181}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 9007199254740993], "ok": 5659519593192506297}
+{"fn": "wrap_rbtree_erase_all", "args": [0, -9223372036854775808], "ok": 13281255201395244855}
+{"fn": "wrap_rbtree_find", "args": [0, 42, 255], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [2, 9223372036854775807, 0], "ok": 4760574765615400615}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -1, 9223372036854775807], "ok": 4695681741627770466}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 2, 0], "ok": 16319755666140699407}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 255, -1], "ok": 6960315321076490799}
+{"fn": "wrap_rbtree_find", "args": [100, 2147483647, 7], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [100, 2, 100], "ok": 10680662621445873292}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 100, 1], "ok": 704234236725315492}
+{"fn": "wrap_rbtree_find", "args": [-1, -1, 9223372036854775807], "ok": 11716351731712250541}
+{"fn": "wrap_rbtree_find", "args": [7, 7, 42], "ok": 7248251593857742423}
+{"fn": "wrap_rbtree_find", "args": [1, 7, 9223372036854775807], "ok": 390709007718337254}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 2147483647, 42], "ok": 6960315321076490799}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, -2147483648, -100], "ok": 15969437721400476772}
+{"fn": "wrap_rbtree_find", "args": [7, -100, 255], "ok": 2289955018867595843}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 42, 2147483647], "ok": 9618728541847148274}
+{"fn": "wrap_rbtree_find", "args": [-100, 100, 255], "ok": 6069651671842175070}
+{"fn": "wrap_rbtree_find", "args": [7, 7, -2147483648], "ok": 7248251593857742423}
+{"fn": "wrap_rbtree_find", "args": [-1, 0, -2147483648], "ok": 3037353960918730249}
+{"fn": "wrap_rbtree_find", "args": [1, 2147483647, -100], "ok": 4889582451722831411}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 9223372036854775807, 2147483647], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [0, 0, 7], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [-1, 2, 9223372036854775807], "ok": 7748774596839873638}
+{"fn": "wrap_rbtree_find", "args": [-100, 7, 9223372036854775807], "ok": 3132280939359960914}
+{"fn": "wrap_rbtree_find", "args": [-1, 9223372036854775807, 0], "ok": 16894667561706505000}
+{"fn": "wrap_rbtree_find", "args": [-100, 7, 42], "ok": 3132280939359960914}
+{"fn": "wrap_rbtree_find", "args": [255, 1, 2147483647], "ok": 10072346206872508042}
+{"fn": "wrap_rbtree_find", "args": [42, 0, 0], "ok": 3758833923054833243}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -100, 2147483647], "ok": 704234236725315492}
+{"fn": "wrap_rbtree_find", "args": [255, -2147483648, 2147483647], "ok": 3903839697250714204}
+{"fn": "wrap_rbtree_find", "args": [-100, 1, 42], "ok": 1049003794972331088}
+{"fn": "wrap_rbtree_find", "args": [42, 100, 2], "ok": 9555976733132268607}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -1, -1], "ok": 4695681741627770466}
+{"fn": "wrap_rbtree_find", "args": [1, 7, 1], "ok": 390709007718337254}
+{"fn": "wrap_rbtree_find", "args": [255, -1, 100], "ok": 10072346206872508042}
+{"fn": "wrap_rbtree_find", "args": [255, 1, 100], "ok": 10072346206872508042}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 42, -1], "ok": 13367361623890415694}
+{"fn": "wrap_rbtree_find", "args": [42, 9223372036854775807, -2147483648], "ok": 2286317014078267627}
+{"fn": "wrap_rbtree_find", "args": [-100, -2147483648, 0], "ok": 3281704645093612924}
+{"fn": "wrap_rbtree_find", "args": [100, 2, 1], "ok": 10680662621445873292}
+{"fn": "wrap_rbtree_find", "args": [1, 7, 7], "ok": 390709007718337254}
+{"fn": "wrap_rbtree_find", "args": [-1, 2, 7], "ok": 7748774596839873638}
+{"fn": "wrap_rbtree_find", "args": [-1, 100, 2147483647], "ok": 7995585864849745279}
+{"fn": "wrap_rbtree_find", "args": [-100, -1, -2147483648], "ok": 1049003794972331088}
+{"fn": "wrap_rbtree_find", "args": [-1, 2147483647, 7], "ok": 16894667561706505000}
+{"fn": "wrap_rbtree_find", "args": [7, 100, 100], "ok": 2289955018867595843}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 0, 42], "ok": 15969437721400476772}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 9223372036854775807, -1], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [2, 9223372036854775807, 100], "ok": 4760574765615400615}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 1, 9223372036854775807], "ok": 1393900822670428455}
+{"fn": "wrap_rbtree_find", "args": [42, 255, -1], "ok": 2286317014078267627}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 255, 2], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [2, -100, 1], "ok": 8774590787407426460}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 2147483647, 1], "ok": 5708388261956835214}
+{"fn": "wrap_rbtree_find", "args": [100, -2147483648, 0], "ok": 5414289757875486126}
+{"fn": "wrap_rbtree_find", "args": [0, -100, 1], "ok": 2285546814441999869}
+{"fn": "wrap_rbtree_find", "args": [-100, 2147483647, 7], "ok": 6307332519206080911}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 2, -1], "ok": 1241307680607416744}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 255, 2147483647], "ok": 6960315321076490799}
+{"fn": "wrap_rbtree_find", "args": [255, 9223372036854775807, 255], "ok": 16204588674576172201}
+{"fn": "wrap_rbtree_find", "args": [1, 100, 7], "ok": 2285546814441999869}
+{"fn": "wrap_rbtree_find", "args": [1, 42, 0], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [7, 2147483647, 100], "ok": 2509683496413158719}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 42, 100], "ok": 2344092523849460598}
+{"fn": "wrap_rbtree_find", "args": [42, 0, -2147483648], "ok": 3758833923054833243}
+{"fn": "wrap_rbtree_find", "args": [2, 2, 255], "ok": 14525532194039513895}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, -2147483648, -1], "ok": 15969437721400476772}
+{"fn": "wrap_rbtree_find", "args": [1, 0, 2147483647], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [7, 0, 0], "ok": 16769063414141676222}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 2147483647, -100], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 0, 9223372036854775807], "ok": 15969437721400476772}
+{"fn": "wrap_rbtree_find", "args": [7, 0, -1], "ok": 16769063414141676222}
+{"fn": "wrap_rbtree_find", "args": [1, 2, 100], "ok": 17346672799429560901}
+{"fn": "wrap_rbtree_find", "args": [7, 9223372036854775807, 42], "ok": 2509683496413158719}
+{"fn": "wrap_rbtree_find", "args": [100, 2147483647, -2147483648], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [-100, 2147483647, 2147483647], "ok": 6307332519206080911}
+{"fn": "wrap_rbtree_find", "args": [-100, 42, -100], "ok": 17326247372145629982}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 255, 255], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [255, 100, 42], "ok": 9372047868465053948}
+{"fn": "wrap_rbtree_find", "args": [100, -1, 9223372036854775807], "ok": 10926291637385603345}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 1, -100], "ok": 13065547683672170079}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 255, -100], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [2, 9223372036854775807, 255], "ok": 4760574765615400615}
+{"fn": "wrap_rbtree_find", "args": [255, 2, 7], "ok": 2446942977156538021}
+{"fn": "wrap_rbtree_find", "args": [7, 9223372036854775807, -1], "ok": 2509683496413158719}
+{"fn": "wrap_rbtree_find", "args": [255, -2147483648, 7], "ok": 3903839697250714204}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, -2147483648, 255], "ok": 2640472473752893815}
+{"fn": "wrap_rbtree_find", "args": [-1, 2147483647, 0], "ok": 16894667561706505000}
+{"fn": "wrap_rbtree_find", "args": [-1, 7, 9223372036854775807], "ok": 1320939550019959289}
+{"fn": "wrap_rbtree_find", "args": [100, 9223372036854775807, 0], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 7, 42], "ok": 4669084267277815661}
+{"fn": "wrap_rbtree_find", "args": [255, 2147483647, -100], "ok": 16204588674576172201}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, -1, -100], "ok": 1393900822670428455}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 7, 100], "ok": 3456293530657839140}
+{"fn": "wrap_rbtree_find", "args": [255, 42, 255], "ok": 13370076675421446295}
+{"fn": "wrap_rbtree_find", "args": [100, 255, 100], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [-100, 255, 2], "ok": 6307332519206080911}
+{"fn": "wrap_rbtree_find", "args": [0, -100, 255], "ok": 2285546814441999869}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 2, 9223372036854775807], "ok": 1241307680607416744}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, -100, 255], "ok": 2791401486205555707}
+{"fn": "wrap_rbtree_find", "args": [1, -2147483648, -2147483648], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [100, 2147483647, 2], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [100, 2147483647, 42], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [7, -2147483648, 255], "ok": 16769063414141676222}
+{"fn": "wrap_rbtree_find", "args": [7, 2, 1], "ok": 14253671188475132451}
+{"fn": "wrap_rbtree_find", "args": [-1, 2, -100], "ok": 7748774596839873638}
+{"fn": "wrap_rbtree_find", "args": [-1, 100, 7], "ok": 7995585864849745279}
+{"fn": "wrap_rbtree_find", "args": [0, 255, 2], "ok": 4889582451722831411}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, -2147483648, 1], "ok": 2640472473752893815}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 7, 100], "ok": 4669084267277815661}
+{"fn": "wrap_rbtree_find", "args": [7, 2, 9223372036854775807], "ok": 14253671188475132451}
+{"fn": "wrap_rbtree_find", "args": [1, 255, 0], "ok": 4889582451722831411}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -2147483648, 1], "ok": 8774595413368049878}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 2147483647, 9223372036854775807], "ok": 6960315321076490799}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 100, 42], "ok": 2791401486205555707}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, -2147483648, 2], "ok": 15969437721400476772}
+{"fn": "wrap_rbtree_find", "args": [255, 2, -100], "ok": 2446942977156538021}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 255, 7], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, -1, 100], "ok": 1393900822670428455}
+{"fn": "wrap_rbtree_find", "args": [255, -100, -100], "ok": 9372047868465053948}
+{"fn": "wrap_rbtree_find", "args": [100, 9223372036854775807, 1], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [1, -2147483648, -1], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [255, 100, 255], "ok": 9372047868465053948}
+{"fn": "wrap_rbtree_find", "args": [0, 100, -100], "ok": 2285546814441999869}
+{"fn": "wrap_rbtree_find", "args": [100, 0, -1], "ok": 5414289757875486126}
+{"fn": "wrap_rbtree_find", "args": [2, 2147483647, 0], "ok": 4760574765615400615}
+{"fn": "wrap_rbtree_find", "args": [100, -2147483648, 1], "ok": 5414289757875486126}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 1, 100], "ok": 1393900822670428455}
+{"fn": "wrap_rbtree_find", "args": [-100, -2147483648, -1], "ok": 3281704645093612924}
+{"fn": "wrap_rbtree_find", "args": [2, 7, -100], "ok": 10146843241141701008}
+{"fn": "wrap_rbtree_find", "args": [1, -100, 7], "ok": 2285546814441999869}
+{"fn": "wrap_rbtree_find", "args": [2, -100, 2], "ok": 8774590787407426460}
+{"fn": "wrap_rbtree_find", "args": [2, 7, 42], "ok": 10146843241141701008}
+{"fn": "wrap_rbtree_find", "args": [0, 42, 1], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [100, 1, -100], "ok": 10926291637385603345}
+{"fn": "wrap_rbtree_find", "args": [1, 9223372036854775807, 1], "ok": 4889582451722831411}
+{"fn": "wrap_rbtree_find", "args": [2, -1, -100], "ok": 13922443313860378628}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 100, 0], "ok": 704234236725315492}
+{"fn": "wrap_rbtree_find", "args": [2, 7, 255], "ok": 10146843241141701008}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 100, 2147483647], "ok": 2791401486205555707}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -100, 2], "ok": 704234236725315492}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 7, 0], "ok": 8849352629067648011}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 0, 9223372036854775807], "ok": 2640472473752893815}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 255, 1], "ok": 5708388261956835214}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -1, 7], "ok": 4695681741627770466}
+{"fn": "wrap_rbtree_find", "args": [-100, 1, 0], "ok": 1049003794972331088}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 0, -1], "ok": 15969437721400476772}
+{"fn": "wrap_rbtree_find", "args": [100, 0, 255], "ok": 5414289757875486126}
+{"fn": "wrap_rbtree_find", "args": [100, -2147483648, -2147483648], "ok": 5414289757875486126}
+{"fn": "wrap_rbtree_find", "args": [42, -100, 42], "ok": 9555976733132268607}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 7, 2], "ok": 8849352629067648011}
+{"fn": "wrap_rbtree_find", "args": [1, 2147483647, 42], "ok": 4889582451722831411}
+{"fn": "wrap_rbtree_find", "args": [-100, 2147483647, -1], "ok": 6307332519206080911}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 42, 42], "ok": 2344092523849460598}
+{"fn": "wrap_rbtree_find", "args": [-100, 9223372036854775807, -100], "ok": 6307332519206080911}
+{"fn": "wrap_rbtree_find", "args": [-100, 7, -1], "ok": 3132280939359960914}
+{"fn": "wrap_rbtree_find", "args": [7, -2147483648, 0], "ok": 16769063414141676222}
+{"fn": "wrap_rbtree_find", "args": [-1, 7, 7], "ok": 1320939550019959289}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 2, 9223372036854775807], "ok": 16319755666140699407}
+{"fn": "wrap_rbtree_find", "args": [7, 42, 2147483647], "ok": 16844966542286051798}
+{"fn": "wrap_rbtree_find", "args": [1, 7, 100], "ok": 390709007718337254}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 9223372036854775807, 0], "ok": 14768176650259859722}
+{"fn": "wrap_rbtree_find", "args": [0, 1, 1], "ok": 6717761374532511534}
+{"fn": "wrap_rbtree_find", "args": [-100, 2, 9223372036854775807], "ok": 8088039724355388397}
+{"fn": "wrap_rbtree_find", "args": [-100, 100, 2], "ok": 6069651671842175070}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 100, 2], "ok": 704234236725315492}
+{"fn": "wrap_rbtree_find", "args": [255, 7, -1], "ok": 16075005831249833126}
+{"fn": "wrap_rbtree_find", "args": [-100, -1, -1], "ok": 1049003794972331088}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 2147483647, -1], "ok": 5708388261956835214}
+{"fn": "wrap_rbtree_find", "args": [2, -2147483648, 9223372036854775807], "ok": 11265096675769151347}
+{"fn": "wrap_rbtree_find", "args": [7, 2, -2147483648], "ok": 14253671188475132451}
+{"fn": "wrap_rbtree_find", "args": [100, 0, 2147483647], "ok": 5414289757875486126}
+{"fn": "wrap_rbtree_find", "args": [100, 2, 42], "ok": 10680662621445873292}
+{"fn": "wrap_rbtree_find", "args": [2, 7, -1], "ok": 10146843241141701008}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, -100, 42], "ok": 2791401486205555707}
+{"fn": "wrap_rbtree_find", "args": [2, -2147483648, 2], "ok": 11265096675769151347}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -2147483648, -1], "ok": 8774595413368049878}
+{"fn": "wrap_rbtree_find", "args": [42, 1, 1], "ok": 13697052308906958001}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 42, -1], "ok": 2344092523849460598}
+{"fn": "wrap_rbtree_find", "args": [255, 100, -1], "ok": 9372047868465053948}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, 9223372036854775807, 2147483647], "ok": 6960315321076490799}
+{"fn": "wrap_rbtree_find", "args": [2, 1, 7], "ok": 13922443313860378628}
+{"fn": "wrap_rbtree_find", "args": [-100, 1, 1], "ok": 1049003794972331088}
+{"fn": "wrap_rbtree_find", "args": [0, -1, 1], "ok": 6717761374532511534}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, -100, 1], "ok": 2791401486205555707}
+{"fn": "wrap_rbtree_find", "args": [7, 255, 2147483647], "ok": 2509683496413158719}
+{"fn": "wrap_rbtree_find", "args": [100, 100, 2147483647], "ok": 14373738644303617376}
+{"fn": "wrap_rbtree_find", "args": [2147483647, -1, -100], "ok": 4695681741627770466}
+{"fn": "wrap_rbtree_find", "args": [42, 100, 9223372036854775807], "ok": 9555976733132268607}
+{"fn": "wrap_rbtree_find", "args": [100, -1, 0], "ok": 10926291637385603345}
+{"fn": "wrap_rbtree_find", "args": [-100, 100, 1], "ok": 6069651671842175070}
+{"fn": "wrap_rbtree_find", "args": [100, 255, 2147483647], "ok": 15247645289247436917}
+{"fn": "wrap_rbtree_find", "args": [255, 0, 1], "ok": 3903839697250714204}
+{"fn": "wrap_rbtree_find", "args": [2, 2, -2147483648], "ok": 14525532194039513895}
+{"fn": "wrap_rbtree_find", "args": [0, 2, 2], "ok": 17346672799429560901}
+{"fn": "wrap_rbtree_find", "args": [1, 0, 1], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [2147483647, 2, 2147483647], "ok": 13416972254296280845}
+{"fn": "wrap_rbtree_find", "args": [-1, 100, -2147483648], "ok": 7995585864849745279}
+{"fn": "wrap_rbtree_find", "args": [-2147483648, -1, -1], "ok": 1393900822670428455}
+{"fn": "wrap_rbtree_find", "args": [42, -100, 0], "ok": 9555976733132268607}
+{"fn": "wrap_rbtree_find", "args": [-100, -2147483648, 1], "ok": 3281704645093612924}
+{"fn": "wrap_rbtree_find", "args": [-7, 42, 255], "ok": 4138183441353147204}
+{"fn": "wrap_rbtree_find", "args": [-1, 42, 255], "ok": 12454817345797974596}
+{"fn": "wrap_rbtree_find", "args": [2147483648, 42, 255], "ok": 17782656193015679405}
+{"fn": "wrap_rbtree_find", "args": [-2147483649, 42, 255], "ok": 15111582380770147162}
+{"fn": "wrap_rbtree_find", "args": [9007199254740993, 42, 255], "ok": 9497401767299088399}
+{"fn": "wrap_rbtree_find", "args": [9223372036854775807, 42, 255], "ok": 9618728541847148274}
+{"fn": "wrap_rbtree_find", "args": [-9223372036854775808, 42, 255], "ok": 6990674831486262163}
+{"fn": "wrap_rbtree_find", "args": [0, -7, 255], "ok": 390709007718337254}
+{"fn": "wrap_rbtree_find", "args": [0, -1, 255], "ok": 6717761374532511534}
+{"fn": "wrap_rbtree_find", "args": [0, 0, 255], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [0, 2147483648, 255], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [0, -2147483649, 255], "ok": 6717761374532511534}
+{"fn": "wrap_rbtree_find", "args": [0, 9007199254740993, 255], "ok": 6717761374532511534}
+{"fn": "wrap_rbtree_find", "args": [0, 9223372036854775807, 255], "ok": 4889582451722831411}
+{"fn": "wrap_rbtree_find", "args": [0, -9223372036854775808, 255], "ok": 9378657463830641386}
+{"fn": "wrap_rbtree_find", "args": [0, 42, -7], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, -1], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, 0], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, 2147483648], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, -2147483649], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, 9007199254740993], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, 9223372036854775807], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_find", "args": [0, 42, -9223372036854775808], "ok": 17701235721333136090}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 100], "ok": 2740500979948317522}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 255], "ok": 6564474646737293615}
+{"fn": "wrap_rbtree_cached", "args": [0, -100], "ok": 9583195440099882381}
+{"fn": "wrap_rbtree_cached", "args": [2, 100], "ok": 13978405873337715406}
+{"fn": "wrap_rbtree_cached", "args": [-1, 7], "ok": 17298425770817532913}
+{"fn": "wrap_rbtree_cached", "args": [0, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [100, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [7, -100], "ok": 10632990771372519819}
+{"fn": "wrap_rbtree_cached", "args": [-1, 2], "ok": 12162656985250280700}
+{"fn": "wrap_rbtree_cached", "args": [42, -100], "ok": 10055541684476379176}
+{"fn": "wrap_rbtree_cached", "args": [100, -2147483648], "ok": 10571929776273263124}
+{"fn": "wrap_rbtree_cached", "args": [0, 100], "ok": 9583195440099882381}
+{"fn": "wrap_rbtree_cached", "args": [-100, 42], "ok": 13353435497673281557}
+{"fn": "wrap_rbtree_cached", "args": [42, 2147483647], "ok": 16070256824718815595}
+{"fn": "wrap_rbtree_cached", "args": [0, 2], "ok": 4020055781531851990}
+{"fn": "wrap_rbtree_cached", "args": [-100, 100], "ok": 16326648303096739233}
+{"fn": "wrap_rbtree_cached", "args": [2, -2147483648], "ok": 11507307598420199573}
+{"fn": "wrap_rbtree_cached", "args": [255, 2], "ok": 2569838510035932248}
+{"fn": "wrap_rbtree_cached", "args": [7, 1], "ok": 8362871234656242350}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, -2147483648], "ok": 3907390790002579926}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 7], "ok": 5057079410198737767}
+{"fn": "wrap_rbtree_cached", "args": [42, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [0, 42], "ok": 9603298240741831603}
+{"fn": "wrap_rbtree_cached", "args": [42, -2147483648], "ok": 12643789162875768922}
+{"fn": "wrap_rbtree_cached", "args": [-1, -100], "ok": 15347507706970818253}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 1], "ok": 13492477642440252899}
+{"fn": "wrap_rbtree_cached", "args": [100, 9223372036854775807], "ok": 1480844323354733853}
+{"fn": "wrap_rbtree_cached", "args": [-100, 2], "ok": 17764624647239205252}
+{"fn": "wrap_rbtree_cached", "args": [2, 2147483647], "ok": 8360194329071398289}
+{"fn": "wrap_rbtree_cached", "args": [100, -100], "ok": 6273043004668424897}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [7, 9223372036854775807], "ok": 13539800841560671307}
+{"fn": "wrap_rbtree_cached", "args": [7, 7], "ok": 13539800841560671307}
+{"fn": "wrap_rbtree_cached", "args": [1, 42], "ok": 9603298240741831603}
+{"fn": "wrap_rbtree_cached", "args": [100, 2], "ok": 4975826108999803421}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 255], "ok": 12443330480797185679}
+{"fn": "wrap_rbtree_cached", "args": [42, 255], "ok": 2501784553829135509}
+{"fn": "wrap_rbtree_cached", "args": [255, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [42, 100], "ok": 10055541684476379176}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [-1, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [1, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [-1, 42], "ok": 14635865484906728429}
+{"fn": "wrap_rbtree_cached", "args": [42, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 2], "ok": 2076873435217790170}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 100], "ok": 719163103705663434}
+{"fn": "wrap_rbtree_cached", "args": [-1, 255], "ok": 3114486392962169833}
+{"fn": "wrap_rbtree_cached", "args": [255, 42], "ok": 1235755290431971762}
+{"fn": "wrap_rbtree_cached", "args": [1, 2147483647], "ok": 15422835119241677626}
+{"fn": "wrap_rbtree_cached", "args": [-1, -2147483648], "ok": 14550672720621362678}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 2147483647], "ok": 6779490780048119769}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 9223372036854775807], "ok": 5057079410198737767}
+{"fn": "wrap_rbtree_cached", "args": [255, -2147483648], "ok": 14806331697069219913}
+{"fn": "wrap_rbtree_cached", "args": [-100, 7], "ok": 17570306821111229018}
+{"fn": "wrap_rbtree_cached", "args": [42, 7], "ok": 16373369950371592056}
+{"fn": "wrap_rbtree_cached", "args": [-100, 255], "ok": 10990138185455947374}
+{"fn": "wrap_rbtree_cached", "args": [100, 100], "ok": 6273043004668424897}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, -100], "ok": 719163103705663434}
+{"fn": "wrap_rbtree_cached", "args": [7, 42], "ok": 11348452508685691141}
+{"fn": "wrap_rbtree_cached", "args": [100, 42], "ok": 2685157900513367469}
+{"fn": "wrap_rbtree_cached", "args": [-100, -100], "ok": 16326648303096739233}
+{"fn": "wrap_rbtree_cached", "args": [255, 1], "ok": 3050443708103864241}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 2], "ok": 7229354272909866210}
+{"fn": "wrap_rbtree_cached", "args": [255, -1], "ok": 3050443708103864241}
+{"fn": "wrap_rbtree_cached", "args": [0, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [42, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [1, 2], "ok": 4020055781531851990}
+{"fn": "wrap_rbtree_cached", "args": [2, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [2, -100], "ok": 13978405873337715406}
+{"fn": "wrap_rbtree_cached", "args": [-100, -2147483648], "ok": 271751789956854581}
+{"fn": "wrap_rbtree_cached", "args": [255, 255], "ok": 1477563135305767913}
+{"fn": "wrap_rbtree_cached", "args": [-1, 9223372036854775807], "ok": 17298425770817532913}
+{"fn": "wrap_rbtree_cached", "args": [7, -1], "ok": 8362871234656242350}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 100], "ok": 2583783351846647238}
+{"fn": "wrap_rbtree_cached", "args": [42, 9223372036854775807], "ok": 16373369950371592056}
+{"fn": "wrap_rbtree_cached", "args": [-1, 2147483647], "ok": 13688729872466456417}
+{"fn": "wrap_rbtree_cached", "args": [1, 9223372036854775807], "ok": 11098008015670222100}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 2147483647], "ok": 4849742428960002446}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 1], "ok": 3721951399539292480}
+{"fn": "wrap_rbtree_cached", "args": [255, 100], "ok": 6936402098159586747}
+{"fn": "wrap_rbtree_cached", "args": [1, 255], "ok": 10418372435876312799}
+{"fn": "wrap_rbtree_cached", "args": [255, 9223372036854775807], "ok": 13708342480061556011}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, -2147483648], "ok": 921706598567045673}
+{"fn": "wrap_rbtree_cached", "args": [0, 2147483647], "ok": 15422835119241677626}
+{"fn": "wrap_rbtree_cached", "args": [2, 2], "ok": 8768006847265765703}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, -1], "ok": 11857835811799911431}
+{"fn": "wrap_rbtree_cached", "args": [7, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 7], "ok": 15031282044602140832}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, -100], "ok": 2583783351846647238}
+{"fn": "wrap_rbtree_cached", "args": [2, 255], "ok": 6876657811286958751}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, -100], "ok": 2740500979948317522}
+{"fn": "wrap_rbtree_cached", "args": [7, 2], "ok": 10966885142792788184}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 42], "ok": 4347468242050945069}
+{"fn": "wrap_rbtree_cached", "args": [7, -2147483648], "ok": 3140817293707621120}
+{"fn": "wrap_rbtree_cached", "args": [-1, 100], "ok": 15347507706970818253}
+{"fn": "wrap_rbtree_cached", "args": [2, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [7, 100], "ok": 10632990771372519819}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 9223372036854775807], "ok": 15031282044602140832}
+{"fn": "wrap_rbtree_cached", "args": [7, 255], "ok": 12056354199675731773}
+{"fn": "wrap_rbtree_cached", "args": [0, -2147483648], "ok": 4415385251418707291}
+{"fn": "wrap_rbtree_cached", "args": [-1, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [42, 42], "ok": 5547883472918052565}
+{"fn": "wrap_rbtree_cached", "args": [7, 2147483647], "ok": 10138878508111008030}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 1], "ok": 11857835811799911431}
+{"fn": "wrap_rbtree_cached", "args": [255, -100], "ok": 6936402098159586747}
+{"fn": "wrap_rbtree_cached", "args": [2, 7], "ok": 17809898060140121491}
+{"fn": "wrap_rbtree_cached", "args": [100, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [-100, 9223372036854775807], "ok": 17570306821111229018}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, -2147483648], "ok": 1606447555454410713}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 2147483647], "ok": 10477276872355559072}
+{"fn": "wrap_rbtree_cached", "args": [-1, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [0, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [1, -100], "ok": 9583195440099882381}
+{"fn": "wrap_rbtree_cached", "args": [100, 7], "ok": 1480844323354733853}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 7], "ok": 6171262930581509740}
+{"fn": "wrap_rbtree_cached", "args": [-100, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, -1], "ok": 3721951399539292480}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [1, 100], "ok": 9583195440099882381}
+{"fn": "wrap_rbtree_cached", "args": [100, 2147483647], "ok": 10567195776951735534}
+{"fn": "wrap_rbtree_cached", "args": [2, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [-100, 1], "ok": 12186597034358321369}
+{"fn": "wrap_rbtree_cached", "args": [255, 7], "ok": 13708342480061556011}
+{"fn": "wrap_rbtree_cached", "args": [-100, 2147483647], "ok": 6607800137110850545}
+{"fn": "wrap_rbtree_cached", "args": [1, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, -1], "ok": 13492477642440252899}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 42], "ok": 17246755491559213841}
+{"fn": "wrap_rbtree_cached", "args": [100, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [-100, -1], "ok": 12186597034358321369}
+{"fn": "wrap_rbtree_cached", "args": [1, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 9223372036854775807], "ok": 6171262930581509740}
+{"fn": "wrap_rbtree_cached", "args": [0, 255], "ok": 10418372435876312799}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 2], "ok": 9564577913679218509}
+{"fn": "wrap_rbtree_cached", "args": [1, -2147483648], "ok": 4415385251418707291}
+{"fn": "wrap_rbtree_cached", "args": [2, 9223372036854775807], "ok": 17809898060140121491}
+{"fn": "wrap_rbtree_cached", "args": [255, 2147483647], "ok": 13304855612020540042}
+{"fn": "wrap_rbtree_cached", "args": [0, 9223372036854775807], "ok": 11098008015670222100}
+{"fn": "wrap_rbtree_cached", "args": [0, 7], "ok": 11098008015670222100}
+{"fn": "wrap_rbtree_cached", "args": [1, 7], "ok": 11098008015670222100}
+{"fn": "wrap_rbtree_cached", "args": [9223372036854775807, 255], "ok": 12960523378688625257}
+{"fn": "wrap_rbtree_cached", "args": [42, 2], "ok": 10767674131121795662}
+{"fn": "wrap_rbtree_cached", "args": [2, 42], "ok": 4809306760512536407}
+{"fn": "wrap_rbtree_cached", "args": [100, 255], "ok": 5080655206551964226}
+{"fn": "wrap_rbtree_cached", "args": [-2147483648, 42], "ok": 15935930907245310496}
+{"fn": "wrap_rbtree_cached", "args": [-7, 100], "ok": 5224006137866246699}
+{"fn": "wrap_rbtree_cached", "args": [2147483648, 100], "ok": 17590624452928879040}
+{"fn": "wrap_rbtree_cached", "args": [-2147483649, 100], "ok": 11968423576175621878}
+{"fn": "wrap_rbtree_cached", "args": [9007199254740993, 100], "ok": 4356011059353308011}
+{"fn": "wrap_rbtree_cached", "args": [-9223372036854775808, 100], "ok": 8389204511090872525}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, -7], "ok": 6171262930581509740}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 2147483648], "ok": 921706598567045673}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, -2147483649], "ok": 5216160098500935276}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, 9007199254740993], "ok": 3266122515467721069}
+{"fn": "wrap_rbtree_cached", "args": [2147483647, -9223372036854775808], "ok": 4337121592456987469}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 100], "ok": 10614884760574022742}
+{"fn": "wrap_rbtree_linked", "args": [0, -1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [-1, -2147483648], "ok": 14259869924042775754}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 255], "ok": 3724472822384432821}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 7], "ok": 9892933953455482072}
+{"fn": "wrap_rbtree_linked", "args": [42, 9223372036854775807], "ok": 5838913295270700331}
+{"fn": "wrap_rbtree_linked", "args": [1, -100], "ok": 5802722886922820433}
+{"fn": "wrap_rbtree_linked", "args": [255, 2], "ok": 9593494477840260221}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 9223372036854775807], "ok": 16270888141070054269}
+{"fn": "wrap_rbtree_linked", "args": [7, 9223372036854775807], "ok": 6693886284858205953}
+{"fn": "wrap_rbtree_linked", "args": [255, 7], "ok": 16703178399603206452}
+{"fn": "wrap_rbtree_linked", "args": [0, -2147483648], "ok": 1269256483072941944}
+{"fn": "wrap_rbtree_linked", "args": [100, 9223372036854775807], "ok": 13908561794524823412}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 2], "ok": 7223940646669394337}
+{"fn": "wrap_rbtree_linked", "args": [100, 7], "ok": 13908561794524823412}
+{"fn": "wrap_rbtree_linked", "args": [255, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [2, -1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [2, 100], "ok": 6570020136250832923}
+{"fn": "wrap_rbtree_linked", "args": [255, 100], "ok": 8818940318320485840}
+{"fn": "wrap_rbtree_linked", "args": [1, -1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [7, 2], "ok": 1710603106607035998}
+{"fn": "wrap_rbtree_linked", "args": [2, -2147483648], "ok": 5734413299499337999}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, -1], "ok": 6966929583892039964}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 42], "ok": 13935724121257981381}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [-100, 1], "ok": 12293621831790992234}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 9223372036854775807], "ok": 9892933953455482072}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, -100], "ok": 10614884760574022742}
+{"fn": "wrap_rbtree_linked", "args": [42, -1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [-100, 255], "ok": 15127309594543225518}
+{"fn": "wrap_rbtree_linked", "args": [100, -1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 2147483647], "ok": 12796601134602058307}
+{"fn": "wrap_rbtree_linked", "args": [-100, 7], "ok": 3881842050219919649}
+{"fn": "wrap_rbtree_linked", "args": [0, 9223372036854775807], "ok": 3696026882366795017}
+{"fn": "wrap_rbtree_linked", "args": [7, 255], "ok": 17582473040309299373}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 100], "ok": 12620844476345794705}
+{"fn": "wrap_rbtree_linked", "args": [255, 9223372036854775807], "ok": 16703178399603206452}
+{"fn": "wrap_rbtree_linked", "args": [42, 2], "ok": 8995475991424160421}
+{"fn": "wrap_rbtree_linked", "args": [-1, 7], "ok": 5309932499160761233}
+{"fn": "wrap_rbtree_linked", "args": [1, 2], "ok": 8830276304244461219}
+{"fn": "wrap_rbtree_linked", "args": [1, 1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [0, 255], "ok": 384414980581874538}
+{"fn": "wrap_rbtree_linked", "args": [7, 1], "ok": 7931429787041371544}
+{"fn": "wrap_rbtree_linked", "args": [-1, 100], "ok": 15022024306839389559}
+{"fn": "wrap_rbtree_linked", "args": [2, 42], "ok": 891779362803185111}
+{"fn": "wrap_rbtree_linked", "args": [7, -1], "ok": 7931429787041371544}
+{"fn": "wrap_rbtree_linked", "args": [100, 1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [2, -100], "ok": 6570020136250832923}
+{"fn": "wrap_rbtree_linked", "args": [2, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [7, 100], "ok": 15525811936869031787}
+{"fn": "wrap_rbtree_linked", "args": [255, -100], "ok": 8818940318320485840}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 2], "ok": 9575672675432733902}
+{"fn": "wrap_rbtree_linked", "args": [100, 42], "ok": 7948341115652046683}
+{"fn": "wrap_rbtree_linked", "args": [100, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [1, 100], "ok": 5802722886922820433}
+{"fn": "wrap_rbtree_linked", "args": [100, -100], "ok": 4135061232298368560}
+{"fn": "wrap_rbtree_linked", "args": [100, 255], "ok": 11449367632424214804}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, -2147483648], "ok": 9831967890251362215}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 255], "ok": 17882628912668077250}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 100], "ok": 13962007211099234856}
+{"fn": "wrap_rbtree_linked", "args": [-100, 100], "ok": 2602673252586963289}
+{"fn": "wrap_rbtree_linked", "args": [255, 255], "ok": 4896483157976144014}
+{"fn": "wrap_rbtree_linked", "args": [100, 100], "ok": 4135061232298368560}
+{"fn": "wrap_rbtree_linked", "args": [7, 2147483647], "ok": 16225823194631070317}
+{"fn": "wrap_rbtree_linked", "args": [42, 2147483647], "ok": 4479517105314097193}
+{"fn": "wrap_rbtree_linked", "args": [255, -1], "ok": 1633260912871755422}
+{"fn": "wrap_rbtree_linked", "args": [1, -2147483648], "ok": 1269256483072941944}
+{"fn": "wrap_rbtree_linked", "args": [2, 1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [-100, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 7], "ok": 16270888141070054269}
+{"fn": "wrap_rbtree_linked", "args": [1, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 2147483647], "ok": 8495535281056353668}
+{"fn": "wrap_rbtree_linked", "args": [-100, -100], "ok": 2602673252586963289}
+{"fn": "wrap_rbtree_linked", "args": [-100, -1], "ok": 12293621831790992234}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 7], "ok": 10237006271864204750}
+{"fn": "wrap_rbtree_linked", "args": [0, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [-1, -100], "ok": 15022024306839389559}
+{"fn": "wrap_rbtree_linked", "args": [-1, 42], "ok": 13138746567778215957}
+{"fn": "wrap_rbtree_linked", "args": [0, -100], "ok": 5802722886922820433}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, -1], "ok": 15531413038597131726}
+{"fn": "wrap_rbtree_linked", "args": [-100, 42], "ok": 14779103527896114749}
+{"fn": "wrap_rbtree_linked", "args": [1, 42], "ok": 5281400681865296262}
+{"fn": "wrap_rbtree_linked", "args": [-100, 2147483647], "ok": 8183729462227580033}
+{"fn": "wrap_rbtree_linked", "args": [0, 2], "ok": 8830276304244461219}
+{"fn": "wrap_rbtree_linked", "args": [0, 1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [7, 42], "ok": 1769545315306485330}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, -2147483648], "ok": 649477125376846326}
+{"fn": "wrap_rbtree_linked", "args": [1, 9223372036854775807], "ok": 3696026882366795017}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, -1], "ok": 15281914927020342212}
+{"fn": "wrap_rbtree_linked", "args": [-1, 2], "ok": 15669449483965179132}
+{"fn": "wrap_rbtree_linked", "args": [42, 1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [2, 2], "ok": 6986705432108502479}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, -100], "ok": 13962007211099234856}
+{"fn": "wrap_rbtree_linked", "args": [7, -100], "ok": 15525811936869031787}
+{"fn": "wrap_rbtree_linked", "args": [2, 255], "ok": 10421471978120016613}
+{"fn": "wrap_rbtree_linked", "args": [-1, 255], "ok": 7301987630593969503}
+{"fn": "wrap_rbtree_linked", "args": [100, 2], "ok": 11106534225960806589}
+{"fn": "wrap_rbtree_linked", "args": [0, 42], "ok": 5281400681865296262}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, -100], "ok": 12620844476345794705}
+{"fn": "wrap_rbtree_linked", "args": [-100, 9223372036854775807], "ok": 3881842050219919649}
+{"fn": "wrap_rbtree_linked", "args": [7, -2147483648], "ok": 4123198739444193060}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 2147483647], "ok": 1239703972846146616}
+{"fn": "wrap_rbtree_linked", "args": [1, 2147483647], "ok": 466974585564853165}
+{"fn": "wrap_rbtree_linked", "args": [0, 7], "ok": 3696026882366795017}
+{"fn": "wrap_rbtree_linked", "args": [42, 255], "ok": 6430549185934689816}
+{"fn": "wrap_rbtree_linked", "args": [-1, 2147483647], "ok": 4845634800996835484}
+{"fn": "wrap_rbtree_linked", "args": [255, -2147483648], "ok": 685096202940998290}
+{"fn": "wrap_rbtree_linked", "args": [42, 7], "ok": 5838913295270700331}
+{"fn": "wrap_rbtree_linked", "args": [-100, -2147483648], "ok": 2726600155978359018}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 9223372036854775807], "ok": 10237006271864204750}
+{"fn": "wrap_rbtree_linked", "args": [1, 255], "ok": 384414980581874538}
+{"fn": "wrap_rbtree_linked", "args": [2, 7], "ok": 2131944215878667673}
+{"fn": "wrap_rbtree_linked", "args": [42, -100], "ok": 6657506661240851983}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 1], "ok": 15531413038597131726}
+{"fn": "wrap_rbtree_linked", "args": [100, -2147483648], "ok": 16429673078302825411}
+{"fn": "wrap_rbtree_linked", "args": [42, -2147483648], "ok": 1683004674161773680}
+{"fn": "wrap_rbtree_linked", "args": [-1, 1], "ok": 4145566350715904422}
+{"fn": "wrap_rbtree_linked", "args": [42, 42], "ok": 7830055796275585826}
+{"fn": "wrap_rbtree_linked", "args": [0, 100], "ok": 5802722886922820433}
+{"fn": "wrap_rbtree_linked", "args": [42, 100], "ok": 6657506661240851983}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, -2147483648], "ok": 10225606157343908748}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 1], "ok": 15281914927020342212}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [7, 7], "ok": 6693886284858205953}
+{"fn": "wrap_rbtree_linked", "args": [2, 9223372036854775807], "ok": 2131944215878667673}
+{"fn": "wrap_rbtree_linked", "args": [-1, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [-1, -1], "ok": 4145566350715904422}
+{"fn": "wrap_rbtree_linked", "args": [7, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 42], "ok": 9677469154250024858}
+{"fn": "wrap_rbtree_linked", "args": [42, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [255, 42], "ok": 3102146007571672630}
+{"fn": "wrap_rbtree_linked", "args": [255, 1], "ok": 1633260912871755422}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 42], "ok": 16223460442560924422}
+{"fn": "wrap_rbtree_linked", "args": [1, 7], "ok": 3696026882366795017}
+{"fn": "wrap_rbtree_linked", "args": [-100, 2], "ok": 10890601733778451231}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 1], "ok": 6966929583892039964}
+{"fn": "wrap_rbtree_linked", "args": [0, 2147483647], "ok": 466974585564853165}
+{"fn": "wrap_rbtree_linked", "args": [-1, 9223372036854775807], "ok": 5309932499160761233}
+{"fn": "wrap_rbtree_linked", "args": [100, 2147483647], "ok": 5492230246780659466}
+{"fn": "wrap_rbtree_linked", "args": [2, 2147483647], "ok": 504203000835195150}
+{"fn": "wrap_rbtree_linked", "args": [255, 2147483647], "ok": 13135563337946944382}
+{"fn": "wrap_rbtree_linked", "args": [-2147483648, 2], "ok": 7258907778992952104}
+{"fn": "wrap_rbtree_linked", "args": [2147483647, 255], "ok": 17213782789663318702}
+{"fn": "wrap_rbtree_linked", "args": [-7, 100], "ok": 3377961540098970559}
+{"fn": "wrap_rbtree_linked", "args": [2147483648, 100], "ok": 16652924865254692034}
+{"fn": "wrap_rbtree_linked", "args": [-2147483649, 100], "ok": 6853469459764987295}
+{"fn": "wrap_rbtree_linked", "args": [9007199254740993, 100], "ok": 4552841932316348648}
+{"fn": "wrap_rbtree_linked", "args": [-9223372036854775808, 100], "ok": 5600386551667525306}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, -7], "ok": 10237006271864204750}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 2147483648], "ok": 649477125376846326}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, -2147483649], "ok": 322872178678927819}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, 9007199254740993], "ok": 11006862581857546005}
+{"fn": "wrap_rbtree_linked", "args": [9223372036854775807, -9223372036854775808], "ok": 4144910290024570097}
+{"fn": "wrap_rbtree_augmented", "args": [1, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, -100], "ok": 13761378231280795326}
+{"fn": "wrap_rbtree_augmented", "args": [100, -100], "ok": 15933647538730817201}
+{"fn": "wrap_rbtree_augmented", "args": [7, -2147483648], "ok": 1174913025297302265}
+{"fn": "wrap_rbtree_augmented", "args": [0, 42], "ok": 4098563536061596132}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 42], "ok": 2325176265253167817}
+{"fn": "wrap_rbtree_augmented", "args": [-1, -2147483648], "ok": 16209533944303813726}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, -1], "ok": 15975856085196047716}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 255], "ok": 1423589927450206140}
+{"fn": "wrap_rbtree_augmented", "args": [1, 2], "ok": 16597078887889332049}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 9223372036854775807], "ok": 2749616870094211933}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, -2147483648], "ok": 390269464361482438}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 9223372036854775807], "ok": 8569717024716592322}
+{"fn": "wrap_rbtree_augmented", "args": [7, 42], "ok": 9608036759062161828}
+{"fn": "wrap_rbtree_augmented", "args": [100, -2147483648], "ok": 11030943834850979087}
+{"fn": "wrap_rbtree_augmented", "args": [42, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [255, 9223372036854775807], "ok": 12308038390365483711}
+{"fn": "wrap_rbtree_augmented", "args": [7, 1], "ok": 11763479593575280181}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 255], "ok": 12112348985099434236}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 42], "ok": 539665543325237402}
+{"fn": "wrap_rbtree_augmented", "args": [0, 255], "ok": 14904155744757585888}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 7], "ok": 8569717024716592322}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 100], "ok": 13761378231280795326}
+{"fn": "wrap_rbtree_augmented", "args": [7, 2147483647], "ok": 16226567979539734939}
+{"fn": "wrap_rbtree_augmented", "args": [0, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [1, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 7], "ok": 651611360596585224}
+{"fn": "wrap_rbtree_augmented", "args": [7, 9223372036854775807], "ok": 13095570803781096496}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, -100], "ok": 975780257599183567}
+{"fn": "wrap_rbtree_augmented", "args": [7, 7], "ok": 13095570803781096496}
+{"fn": "wrap_rbtree_augmented", "args": [1, 100], "ok": 2003808923567469918}
+{"fn": "wrap_rbtree_augmented", "args": [1, 2147483647], "ok": 12996135974684976093}
+{"fn": "wrap_rbtree_augmented", "args": [100, 255], "ok": 8591248744316996074}
+{"fn": "wrap_rbtree_augmented", "args": [100, 2], "ok": 13161076476708586173}
+{"fn": "wrap_rbtree_augmented", "args": [255, -2147483648], "ok": 86418954919953856}
+{"fn": "wrap_rbtree_augmented", "args": [255, 7], "ok": 12308038390365483711}
+{"fn": "wrap_rbtree_augmented", "args": [-100, -1], "ok": 8028507819696208292}
+{"fn": "wrap_rbtree_augmented", "args": [255, 255], "ok": 8698880612137658219}
+{"fn": "wrap_rbtree_augmented", "args": [2, 9223372036854775807], "ok": 7552221052624438716}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 1], "ok": 6913221446445840328}
+{"fn": "wrap_rbtree_augmented", "args": [2, 100], "ok": 13875901495049693588}
+{"fn": "wrap_rbtree_augmented", "args": [255, 1], "ok": 11358940236616477005}
+{"fn": "wrap_rbtree_augmented", "args": [0, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [255, 100], "ok": 12263850492597627155}
+{"fn": "wrap_rbtree_augmented", "args": [42, 9223372036854775807], "ok": 15377703926896356755}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 2], "ok": 11225199778244325592}
+{"fn": "wrap_rbtree_augmented", "args": [2, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 42], "ok": 13979778835132096674}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 2], "ok": 11210613571383557610}
+{"fn": "wrap_rbtree_augmented", "args": [2, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [255, -100], "ok": 12263850492597627155}
+{"fn": "wrap_rbtree_augmented", "args": [0, -100], "ok": 2003808923567469918}
+{"fn": "wrap_rbtree_augmented", "args": [1, -2147483648], "ok": 14486264403124339456}
+{"fn": "wrap_rbtree_augmented", "args": [-100, -2147483648], "ok": 6046099792073011571}
+{"fn": "wrap_rbtree_augmented", "args": [42, 2], "ok": 177145731166517381}
+{"fn": "wrap_rbtree_augmented", "args": [1, 7], "ok": 1078626303210457220}
+{"fn": "wrap_rbtree_augmented", "args": [7, -100], "ok": 10268559399499381021}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 2147483647], "ok": 14311645968881438074}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 255], "ok": 13805953449614039854}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 7], "ok": 9330361286038757705}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 100], "ok": 12536812689501626931}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 2147483647], "ok": 16940069165556113791}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 2147483647], "ok": 7166345322384471291}
+{"fn": "wrap_rbtree_augmented", "args": [42, -100], "ok": 12978560674386398605}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 42], "ok": 180301843187006769}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, -2147483648], "ok": 5503382087168363432}
+{"fn": "wrap_rbtree_augmented", "args": [42, 255], "ok": 9843843358794718197}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 1], "ok": 15975856085196047716}
+{"fn": "wrap_rbtree_augmented", "args": [255, 2], "ok": 575229142625285964}
+{"fn": "wrap_rbtree_augmented", "args": [100, 9223372036854775807], "ok": 4585555755849717492}
+{"fn": "wrap_rbtree_augmented", "args": [7, 2], "ok": 8089959817860586874}
+{"fn": "wrap_rbtree_augmented", "args": [2, -100], "ok": 13875901495049693588}
+{"fn": "wrap_rbtree_augmented", "args": [0, 2], "ok": 16597078887889332049}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 100], "ok": 13110991787034925728}
+{"fn": "wrap_rbtree_augmented", "args": [42, -2147483648], "ok": 8137412869538072467}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 255], "ok": 15125699714822712406}
+{"fn": "wrap_rbtree_augmented", "args": [7, -1], "ok": 11763479593575280181}
+{"fn": "wrap_rbtree_augmented", "args": [2, 2147483647], "ok": 7452891039245636043}
+{"fn": "wrap_rbtree_augmented", "args": [0, 9223372036854775807], "ok": 1078626303210457220}
+{"fn": "wrap_rbtree_augmented", "args": [42, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [255, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 100], "ok": 975780257599183567}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 9223372036854775807], "ok": 15677213403160736197}
+{"fn": "wrap_rbtree_augmented", "args": [0, -2147483648], "ok": 14486264403124339456}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 9223372036854775807], "ok": 9330361286038757705}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 2147483647], "ok": 3028238684088578633}
+{"fn": "wrap_rbtree_augmented", "args": [2, 2], "ok": 10703503726377385216}
+{"fn": "wrap_rbtree_augmented", "args": [1, 9223372036854775807], "ok": 1078626303210457220}
+{"fn": "wrap_rbtree_augmented", "args": [100, 2147483647], "ok": 13522640126148459034}
+{"fn": "wrap_rbtree_augmented", "args": [0, 2147483647], "ok": 12996135974684976093}
+{"fn": "wrap_rbtree_augmented", "args": [1, 255], "ok": 14904155744757585888}
+{"fn": "wrap_rbtree_augmented", "args": [2, -2147483648], "ok": 7833420915420431094}
+{"fn": "wrap_rbtree_augmented", "args": [1, -100], "ok": 2003808923567469918}
+{"fn": "wrap_rbtree_augmented", "args": [-1, -100], "ok": 13110991787034925728}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, -1], "ok": 6913221446445840328}
+{"fn": "wrap_rbtree_augmented", "args": [42, 100], "ok": 12978560674386398605}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 1], "ok": 16698917423567850431}
+{"fn": "wrap_rbtree_augmented", "args": [-100, -100], "ok": 12536812689501626931}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, -1], "ok": 16698917423567850431}
+{"fn": "wrap_rbtree_augmented", "args": [-1, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [255, -1], "ok": 11358940236616477005}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 2147483647], "ok": 14861116635374106135}
+{"fn": "wrap_rbtree_augmented", "args": [100, 7], "ok": 4585555755849717492}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 100], "ok": 1705104310211905993}
+{"fn": "wrap_rbtree_augmented", "args": [42, 2147483647], "ok": 16342522825591001949}
+{"fn": "wrap_rbtree_augmented", "args": [7, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 255], "ok": 3883875592678050450}
+{"fn": "wrap_rbtree_augmented", "args": [255, 42], "ok": 9115584130575839398}
+{"fn": "wrap_rbtree_augmented", "args": [-1, 2], "ok": 16296833692183046233}
+{"fn": "wrap_rbtree_augmented", "args": [42, 42], "ok": 5167942868574409518}
+{"fn": "wrap_rbtree_augmented", "args": [255, 2147483647], "ok": 18415568435338579021}
+{"fn": "wrap_rbtree_augmented", "args": [2, 7], "ok": 7552221052624438716}
+{"fn": "wrap_rbtree_augmented", "args": [100, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 2], "ok": 8400699228948544868}
+{"fn": "wrap_rbtree_augmented", "args": [2147483647, 7], "ok": 15677213403160736197}
+{"fn": "wrap_rbtree_augmented", "args": [0, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [100, 42], "ok": 5146799293367830133}
+{"fn": "wrap_rbtree_augmented", "args": [100, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [100, 100], "ok": 15933647538730817201}
+{"fn": "wrap_rbtree_augmented", "args": [7, 100], "ok": 10268559399499381021}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, -2147483648], "ok": 14430611390697405415}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 7], "ok": 2749616870094211933}
+{"fn": "wrap_rbtree_augmented", "args": [0, 100], "ok": 2003808923567469918}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, -100], "ok": 1705104310211905993}
+{"fn": "wrap_rbtree_augmented", "args": [0, 7], "ok": 1078626303210457220}
+{"fn": "wrap_rbtree_augmented", "args": [2, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 2], "ok": 16540467487619899713}
+{"fn": "wrap_rbtree_augmented", "args": [-100, 1], "ok": 8028507819696208292}
+{"fn": "wrap_rbtree_augmented", "args": [42, 7], "ok": 15377703926896356755}
+{"fn": "wrap_rbtree_augmented", "args": [2, 42], "ok": 9220871460987138972}
+{"fn": "wrap_rbtree_augmented", "args": [100, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [7, 255], "ok": 15392649197089604442}
+{"fn": "wrap_rbtree_augmented", "args": [9223372036854775807, 42], "ok": 3212636735417192750}
+{"fn": "wrap_rbtree_augmented", "args": [42, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [2, 255], "ok": 8778767023464158033}
+{"fn": "wrap_rbtree_augmented", "args": [1, 42], "ok": 4098563536061596132}
+{"fn": "wrap_rbtree_augmented", "args": [1, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483648, 9223372036854775807], "ok": 651611360596585224}
+{"fn": "wrap_rbtree_augmented", "args": [-7, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [2147483648, -1], "ok": 260103613470390815}
+{"fn": "wrap_rbtree_augmented", "args": [-2147483649, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [9007199254740993, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [-9223372036854775808, -1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [1, -7], "ok": 1078626303210457220}
+{"fn": "wrap_rbtree_augmented", "args": [1, 2147483648], "ok": 14486264403124339456}
+{"fn": "wrap_rbtree_augmented", "args": [1, -2147483649], "ok": 15340531731273661759}
+{"fn": "wrap_rbtree_augmented", "args": [1, 9007199254740993], "ok": 17190269666277308558}
+{"fn": "wrap_rbtree_augmented", "args": [1, -9223372036854775808], "ok": 572005616477820384}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 9223372036854775807], "ok": 15133339767563185439}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 100], "ok": 3643425236551729406}
+{"fn": "wrap_rbtree_postorder", "args": [0, 255], "ok": 12586119373799411906}
+{"fn": "wrap_rbtree_postorder", "args": [1, 9223372036854775807], "ok": 13154737352282400445}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 2], "ok": 12663250589204279850}
+{"fn": "wrap_rbtree_postorder", "args": [100, 9223372036854775807], "ok": 9719042624500078824}
+{"fn": "wrap_rbtree_postorder", "args": [1, 2], "ok": 16192564414747687889}
+{"fn": "wrap_rbtree_postorder", "args": [0, 100], "ok": 12697800863630313770}
+{"fn": "wrap_rbtree_postorder", "args": [-1, -2147483648], "ok": 3619513676775890079}
+{"fn": "wrap_rbtree_postorder", "args": [7, 42], "ok": 1853043507613358271}
+{"fn": "wrap_rbtree_postorder", "args": [7, 2], "ok": 18246586536240003277}
+{"fn": "wrap_rbtree_postorder", "args": [255, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 7], "ok": 3788540956535418583}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 1], "ok": 3141592991466705714}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, -100], "ok": 3643425236551729406}
+{"fn": "wrap_rbtree_postorder", "args": [2, 100], "ok": 888390128989756269}
+{"fn": "wrap_rbtree_postorder", "args": [42, 255], "ok": 16190066435239300500}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [1, -1], "ok": 1142504039838272407}
+{"fn": "wrap_rbtree_postorder", "args": [100, -100], "ok": 9653647041896819237}
+{"fn": "wrap_rbtree_postorder", "args": [0, -100], "ok": 12697800863630313770}
+{"fn": "wrap_rbtree_postorder", "args": [1, -100], "ok": 12697800863630313770}
+{"fn": "wrap_rbtree_postorder", "args": [100, 100], "ok": 9653647041896819237}
+{"fn": "wrap_rbtree_postorder", "args": [255, -1], "ok": 3711255656956132850}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 9223372036854775807], "ok": 15671970185460164352}
+{"fn": "wrap_rbtree_postorder", "args": [0, -2147483648], "ok": 17901706085213969342}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, -1], "ok": 6375781426970957048}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 255], "ok": 13073791380489516555}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 2147483647], "ok": 11199937317904902999}
+{"fn": "wrap_rbtree_postorder", "args": [255, -100], "ok": 15687896599749118849}
+{"fn": "wrap_rbtree_postorder", "args": [7, 7], "ok": 7099047302684159326}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 100], "ok": 9360320391057603854}
+{"fn": "wrap_rbtree_postorder", "args": [7, 255], "ok": 17192277623041131866}
+{"fn": "wrap_rbtree_postorder", "args": [100, 2], "ok": 296394202508594435}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 9223372036854775807], "ok": 13920630748665492992}
+{"fn": "wrap_rbtree_postorder", "args": [255, -2147483648], "ok": 2056037179234272087}
+{"fn": "wrap_rbtree_postorder", "args": [0, 7], "ok": 13154737352282400445}
+{"fn": "wrap_rbtree_postorder", "args": [0, -1], "ok": 1142504039838272407}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 42], "ok": 13210806197930087332}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 7], "ok": 15133339767563185439}
+{"fn": "wrap_rbtree_postorder", "args": [2, -1], "ok": 16924722343532999825}
+{"fn": "wrap_rbtree_postorder", "args": [42, 42], "ok": 3485378511370488470}
+{"fn": "wrap_rbtree_postorder", "args": [100, 255], "ok": 10334265194267878959}
+{"fn": "wrap_rbtree_postorder", "args": [-100, -2147483648], "ok": 16361558650542935687}
+{"fn": "wrap_rbtree_postorder", "args": [7, 1], "ok": 16911188122405251680}
+{"fn": "wrap_rbtree_postorder", "args": [2, -2147483648], "ok": 3665595419654844901}
+{"fn": "wrap_rbtree_postorder", "args": [-1, -1], "ok": 542994757368803250}
+{"fn": "wrap_rbtree_postorder", "args": [42, 1], "ok": 783588973250490167}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 2], "ok": 9268917327348088100}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 2], "ok": 12007979633656728858}
+{"fn": "wrap_rbtree_postorder", "args": [100, 2147483647], "ok": 5086102926224236027}
+{"fn": "wrap_rbtree_postorder", "args": [1, 1], "ok": 1142504039838272407}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 42], "ok": 9227722238352088204}
+{"fn": "wrap_rbtree_postorder", "args": [255, 2], "ok": 5881940856921911850}
+{"fn": "wrap_rbtree_postorder", "args": [7, 100], "ok": 13614722879723055113}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 1], "ok": 542994757368803250}
+{"fn": "wrap_rbtree_postorder", "args": [42, 2], "ok": 6343323023858175063}
+{"fn": "wrap_rbtree_postorder", "args": [255, 42], "ok": 16637557557346374827}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, -100], "ok": 15625915767220033379}
+{"fn": "wrap_rbtree_postorder", "args": [0, 2], "ok": 16192564414747687889}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 100], "ok": 2904151234365261579}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 2147483647], "ok": 15672953337981396734}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 1], "ok": 1604455690497348749}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 2147483647], "ok": 7320672799030979648}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 2], "ok": 16915775426519690877}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 100], "ok": 3684563334482959672}
+{"fn": "wrap_rbtree_postorder", "args": [42, -100], "ok": 14267112323162014837}
+{"fn": "wrap_rbtree_postorder", "args": [1, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 9223372036854775807], "ok": 3788540956535418583}
+{"fn": "wrap_rbtree_postorder", "args": [7, -1], "ok": 16911188122405251680}
+{"fn": "wrap_rbtree_postorder", "args": [42, 100], "ok": 14267112323162014837}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 7], "ok": 5753955207694411386}
+{"fn": "wrap_rbtree_postorder", "args": [-1, -100], "ok": 3684563334482959672}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 255], "ok": 13524572554657864388}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, -2147483648], "ok": 3378558062089935424}
+{"fn": "wrap_rbtree_postorder", "args": [100, 1], "ok": 9795414731606440526}
+{"fn": "wrap_rbtree_postorder", "args": [2, -100], "ok": 888390128989756269}
+{"fn": "wrap_rbtree_postorder", "args": [255, 255], "ok": 4843003344194911111}
+{"fn": "wrap_rbtree_postorder", "args": [255, 9223372036854775807], "ok": 2579001548122139953}
+{"fn": "wrap_rbtree_postorder", "args": [100, -1], "ok": 9795414731606440526}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [42, -2147483648], "ok": 4242986197770723786}
+{"fn": "wrap_rbtree_postorder", "args": [0, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, -2147483648], "ok": 15935998260264562139}
+{"fn": "wrap_rbtree_postorder", "args": [7, 9223372036854775807], "ok": 7099047302684159326}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 42], "ok": 17405482290283408777}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 7], "ok": 15671970185460164352}
+{"fn": "wrap_rbtree_postorder", "args": [255, 2147483647], "ok": 14325338026539731458}
+{"fn": "wrap_rbtree_postorder", "args": [1, 2147483647], "ok": 18137495821289438164}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 42], "ok": 14043309754567550228}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 1], "ok": 4097049798837970644}
+{"fn": "wrap_rbtree_postorder", "args": [2, 2147483647], "ok": 8508952243012418160}
+{"fn": "wrap_rbtree_postorder", "args": [0, 9223372036854775807], "ok": 13154737352282400445}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 2147483647], "ok": 12265442336170517622}
+{"fn": "wrap_rbtree_postorder", "args": [100, -2147483648], "ok": 15981809375879387469}
+{"fn": "wrap_rbtree_postorder", "args": [255, 1], "ok": 3711255656956132850}
+{"fn": "wrap_rbtree_postorder", "args": [7, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [42, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [255, 100], "ok": 15687896599749118849}
+{"fn": "wrap_rbtree_postorder", "args": [2, 255], "ok": 17575443333036300610}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 42], "ok": 6445173024335892242}
+{"fn": "wrap_rbtree_postorder", "args": [1, 7], "ok": 13154737352282400445}
+{"fn": "wrap_rbtree_postorder", "args": [1, 255], "ok": 12586119373799411906}
+{"fn": "wrap_rbtree_postorder", "args": [0, 2147483647], "ok": 18137495821289438164}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, -100], "ok": 2904151234365261579}
+{"fn": "wrap_rbtree_postorder", "args": [1, 42], "ok": 17594918370230882255}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 255], "ok": 16232871266968172010}
+{"fn": "wrap_rbtree_postorder", "args": [7, 2147483647], "ok": 10748659276704073491}
+{"fn": "wrap_rbtree_postorder", "args": [255, 7], "ok": 2579001548122139953}
+{"fn": "wrap_rbtree_postorder", "args": [7, -2147483648], "ok": 14111978024971651325}
+{"fn": "wrap_rbtree_postorder", "args": [2, 42], "ok": 7203723764672849402}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 100], "ok": 15625915767220033379}
+{"fn": "wrap_rbtree_postorder", "args": [42, -1], "ok": 783588973250490167}
+{"fn": "wrap_rbtree_postorder", "args": [100, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 255], "ok": 12112306263821796457}
+{"fn": "wrap_rbtree_postorder", "args": [2, 7], "ok": 4702625697974891615}
+{"fn": "wrap_rbtree_postorder", "args": [0, 42], "ok": 17594918370230882255}
+{"fn": "wrap_rbtree_postorder", "args": [100, 7], "ok": 9719042624500078824}
+{"fn": "wrap_rbtree_postorder", "args": [2, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 2147483647], "ok": 626753952402650469}
+{"fn": "wrap_rbtree_postorder", "args": [1, -2147483648], "ok": 17901706085213969342}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 7], "ok": 13920630748665492992}
+{"fn": "wrap_rbtree_postorder", "args": [0, 1], "ok": 1142504039838272407}
+{"fn": "wrap_rbtree_postorder", "args": [100, 42], "ok": 14939671153504332735}
+{"fn": "wrap_rbtree_postorder", "args": [42, 9223372036854775807], "ok": 763377149691232181}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [-100, 255], "ok": 13702996491305567192}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, -1], "ok": 3141592991466705714}
+{"fn": "wrap_rbtree_postorder", "args": [7, -100], "ok": 13614722879723055113}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483648, 1], "ok": 6375781426970957048}
+{"fn": "wrap_rbtree_postorder", "args": [42, 7], "ok": 763377149691232181}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, 2], "ok": 17903985295770002846}
+{"fn": "wrap_rbtree_postorder", "args": [2, 9223372036854775807], "ok": 4702625697974891615}
+{"fn": "wrap_rbtree_postorder", "args": [42, 2147483647], "ok": 15658874269738561819}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, -1], "ok": 1604455690497348749}
+{"fn": "wrap_rbtree_postorder", "args": [2, 1], "ok": 16924722343532999825}
+{"fn": "wrap_rbtree_postorder", "args": [2147483647, -2147483648], "ok": 8460226744911280764}
+{"fn": "wrap_rbtree_postorder", "args": [1, 100], "ok": 12697800863630313770}
+{"fn": "wrap_rbtree_postorder", "args": [-100, -1], "ok": 4097049798837970644}
+{"fn": "wrap_rbtree_postorder", "args": [2, 2], "ok": 16432191792508271501}
+{"fn": "wrap_rbtree_postorder", "args": [-1, 9223372036854775807], "ok": 5753955207694411386}
+{"fn": "wrap_rbtree_postorder", "args": [-100, -100], "ok": 9360320391057603854}
+{"fn": "wrap_rbtree_postorder", "args": [-7, 9223372036854775807], "ok": 9033055570573896594}
+{"fn": "wrap_rbtree_postorder", "args": [2147483648, 9223372036854775807], "ok": 4627668785075780051}
+{"fn": "wrap_rbtree_postorder", "args": [-2147483649, 9223372036854775807], "ok": 8458361268544958293}
+{"fn": "wrap_rbtree_postorder", "args": [9007199254740993, 9223372036854775807], "ok": 7177067327330478515}
+{"fn": "wrap_rbtree_postorder", "args": [-9223372036854775808, 9223372036854775807], "ok": 5421443161051573938}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, -7], "ok": 15133339767563185439}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 2147483648], "ok": 3378558062089935424}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, -2147483649], "ok": 660319781136504821}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, 9007199254740993], "ok": 15744764917530210019}
+{"fn": "wrap_rbtree_postorder", "args": [9223372036854775807, -9223372036854775808], "ok": 12023541656368416225}
+{"fn": "wrap_rb_replace", "args": [2, 42, 9223372036854775807], "ok": 13701479914370656674}
+{"fn": "wrap_rb_replace", "args": [42, 100, 9223372036854775807], "ok": 5180058845864846671}
+{"fn": "wrap_rb_replace", "args": [-100, 1, 1], "ok": 7047303565343007798}
+{"fn": "wrap_rb_replace", "args": [42, -1, 42], "ok": 494145449600970077}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 42, 0], "ok": 7261586376439168174}
+{"fn": "wrap_rb_replace", "args": [-2147483648, -2147483648, 2], "ok": 15337613644623135105}
+{"fn": "wrap_rb_replace", "args": [2, 255, -1], "ok": 17634866579563235568}
+{"fn": "wrap_rb_replace", "args": [42, 255, 0], "ok": 4610461859098172581}
+{"fn": "wrap_rb_replace", "args": [-1, 7, -100], "ok": 10533237774304419151}
+{"fn": "wrap_rb_replace", "args": [-1, 7, 0], "ok": 13645322401702682487}
+{"fn": "wrap_rb_replace", "args": [100, 100, 0], "ok": 15651684119727558358}
+{"fn": "wrap_rb_replace", "args": [7, 100, 2147483647], "ok": 13312753658917493080}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 2, 7], "ok": 15727401258983494629}
+{"fn": "wrap_rb_replace", "args": [255, 100, -1], "ok": 366771103199939864}
+{"fn": "wrap_rb_replace", "args": [-1, 100, -100], "ok": 17388057194202128790}
+{"fn": "wrap_rb_replace", "args": [2147483647, 255, 100], "ok": 55972127087855186}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 255, -2147483648], "ok": 7561972288707159099}
+{"fn": "wrap_rb_replace", "args": [100, 42, 7], "ok": 11707062741702204230}
+{"fn": "wrap_rb_replace", "args": [-100, -2147483648, 1], "ok": 9985360776345718191}
+{"fn": "wrap_rb_replace", "args": [0, 2147483647, 1], "ok": 2383688843699750293}
+{"fn": "wrap_rb_replace", "args": [2147483647, 7, -2147483648], "ok": 15632495282378112395}
+{"fn": "wrap_rb_replace", "args": [255, -2147483648, -1], "ok": 11616582558887754321}
+{"fn": "wrap_rb_replace", "args": [-2147483648, -2147483648, 255], "ok": 4751036659055240908}
+{"fn": "wrap_rb_replace", "args": [0, -2147483648, 0], "ok": 3279943878053111568}
+{"fn": "wrap_rb_replace", "args": [2147483647, 9223372036854775807, 0], "ok": 15632495282378112395}
+{"fn": "wrap_rb_replace", "args": [2, 100, -1], "ok": 2634892895457181739}
+{"fn": "wrap_rb_replace", "args": [100, 7, 2], "ok": 555378498762916803}
+{"fn": "wrap_rb_replace", "args": [7, -2147483648, 9223372036854775807], "ok": 7171994971989640688}
+{"fn": "wrap_rb_replace", "args": [2, 255, 7], "ok": 3988526839524282283}
+{"fn": "wrap_rb_replace", "args": [2147483647, 2147483647, -2147483648], "ok": 4257921795876605061}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, -100, -100], "ok": 9173333959104972054}
+{"fn": "wrap_rb_replace", "args": [2147483647, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [-100, -1, -100], "ok": 10128790766476236984}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 9223372036854775807, 2147483647], "ok": 13471451986580950229}
+{"fn": "wrap_rb_replace", "args": [1, 255, 9223372036854775807], "ok": 7623991288086379792}
+{"fn": "wrap_rb_replace", "args": [0, 2147483647, 0], "ok": 7719338579425517599}
+{"fn": "wrap_rb_replace", "args": [-100, -100, 42], "ok": 724574184471756238}
+{"fn": "wrap_rb_replace", "args": [-2147483648, -100, 100], "ok": 1513200632587146516}
+{"fn": "wrap_rb_replace", "args": [1, -1, 9223372036854775807], "ok": 13753865500840508079}
+{"fn": "wrap_rb_replace", "args": [2147483647, -1, -1], "ok": 5854176927342059567}
+{"fn": "wrap_rb_replace", "args": [42, 1, 42], "ok": 494145449600970077}
+{"fn": "wrap_rb_replace", "args": [2147483647, 255, 1], "ok": 15801411377748413474}
+{"fn": "wrap_rb_replace", "args": [42, 100, 2], "ok": 494145449600970077}
+{"fn": "wrap_rb_replace", "args": [-100, -2147483648, 0], "ok": 12272015309178326841}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 2147483647, -1], "ok": 7282195221248145368}
+{"fn": "wrap_rb_replace", "args": [0, 0, 7], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [42, 2147483647, 100], "ok": 8742555951483580243}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 1, 2], "ok": 14510650064553318512}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 100, -100], "ok": 9173333959104972054}
+{"fn": "wrap_rb_replace", "args": [-1, 42, 2147483647], "ok": 4002810587761541972}
+{"fn": "wrap_rb_replace", "args": [100, 100, 1], "ok": 15142677820516576556}
+{"fn": "wrap_rb_replace", "args": [7, -100, 1], "ok": 12494464446354046234}
+{"fn": "wrap_rb_replace", "args": [-1, 255, 9223372036854775807], "ok": 17736314993695835356}
+{"fn": "wrap_rb_replace", "args": [-1, 2147483647, 0], "ok": 6943455727918213034}
+{"fn": "wrap_rb_replace", "args": [2, -2147483648, 1], "ok": 3151441911307809766}
+{"fn": "wrap_rb_replace", "args": [100, 7, 9223372036854775807], "ok": 10289341056679339574}
+{"fn": "wrap_rb_replace", "args": [-100, 2, 100], "ok": 2751105838873671935}
+{"fn": "wrap_rb_replace", "args": [1, -100, 2147483647], "ok": 13753865500840508079}
+{"fn": "wrap_rb_replace", "args": [2, 9223372036854775807, -2147483648], "ok": 17033098554477534028}
+{"fn": "wrap_rb_replace", "args": [42, 2, 42], "ok": 11646128437789289542}
+{"fn": "wrap_rb_replace", "args": [42, 2147483647, 7], "ok": 5180058845864846671}
+{"fn": "wrap_rb_replace", "args": [100, 7, 255], "ok": 10289341056679339574}
+{"fn": "wrap_rb_replace", "args": [-1, -2147483648, -100], "ok": 10559145498767680459}
+{"fn": "wrap_rb_replace", "args": [255, 42, 9223372036854775807], "ok": 8708703837396098435}
+{"fn": "wrap_rb_replace", "args": [1, 42, 7], "ok": 259487764092403333}
+{"fn": "wrap_rb_replace", "args": [7, -100, -2147483648], "ok": 17151332509527115240}
+{"fn": "wrap_rb_replace", "args": [100, -1, 9223372036854775807], "ok": 12533670420584063558}
+{"fn": "wrap_rb_replace", "args": [255, -100, 0], "ok": 8242754844967164266}
+{"fn": "wrap_rb_replace", "args": [0, 42, 7], "ok": 259487764092403333}
+{"fn": "wrap_rb_replace", "args": [1, 2147483647, 0], "ok": 7719338579425517599}
+{"fn": "wrap_rb_replace", "args": [7, -100, -1], "ok": 12494464446354046234}
+{"fn": "wrap_rb_replace", "args": [100, 2, 255], "ok": 13865988080151891214}
+{"fn": "wrap_rb_replace", "args": [2147483647, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [-1, 2, 255], "ok": 15254673768169577675}
+{"fn": "wrap_rb_replace", "args": [-100, 100, 255], "ok": 12784874472341495004}
+{"fn": "wrap_rb_replace", "args": [100, 9223372036854775807, 2147483647], "ok": 10289341056679339574}
+{"fn": "wrap_rb_replace", "args": [-100, -100, 2147483647], "ok": 12784874472341495004}
+{"fn": "wrap_rb_replace", "args": [100, 2, 9223372036854775807], "ok": 13865988080151891214}
+{"fn": "wrap_rb_replace", "args": [0, 1, 0], "ok": 7719338579425517599}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 7, 7], "ok": 10498743197930570855}
+{"fn": "wrap_rb_replace", "args": [42, 1, -2147483648], "ok": 13124715981523126975}
+{"fn": "wrap_rb_replace", "args": [2, 42, 2], "ok": 4578966459794595484}
+{"fn": "wrap_rb_replace", "args": [2147483647, -100, 7], "ok": 11013013868757722901}
+{"fn": "wrap_rb_replace", "args": [42, 255, 42], "ok": 12636756740075915827}
+{"fn": "wrap_rb_replace", "args": [7, 100, 255], "ok": 13312753658917493080}
+{"fn": "wrap_rb_replace", "args": [0, 9223372036854775807, 7], "ok": 4251670309555227828}
+{"fn": "wrap_rb_replace", "args": [255, 1, 255], "ok": 5124741145823669466}
+{"fn": "wrap_rb_replace", "args": [2, 9223372036854775807, 9223372036854775807], "ok": 366309178698655413}
+{"fn": "wrap_rb_replace", "args": [-100, 1, 2], "ok": 724574184471756238}
+{"fn": "wrap_rb_replace", "args": [2147483647, 1, 255], "ok": 11013013868757722901}
+{"fn": "wrap_rb_replace", "args": [1, 2, 2], "ok": 13540046713203929160}
+{"fn": "wrap_rb_replace", "args": [100, -1, 0], "ok": 15651684119727558358}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 0, -100], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [2, -100, 9223372036854775807], "ok": 7165802943326972569}
+{"fn": "wrap_rb_replace", "args": [0, -2147483648, -2147483648], "ok": 3279943878053111568}
+{"fn": "wrap_rb_replace", "args": [7, -1, 9223372036854775807], "ok": 13312753658917493080}
+{"fn": "wrap_rb_replace", "args": [-1, 7, 100], "ok": 10533237774304419151}
+{"fn": "wrap_rb_replace", "args": [1, 42, 2147483647], "ok": 259487764092403333}
+{"fn": "wrap_rb_replace", "args": [0, 100, 100], "ok": 15447232470630140851}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 42, -2147483648], "ok": 11728526822505073875}
+{"fn": "wrap_rb_replace", "args": [7, 100, -1], "ok": 12494464446354046234}
+{"fn": "wrap_rb_replace", "args": [2147483647, 42, -100], "ok": 18018171719917145493}
+{"fn": "wrap_rb_replace", "args": [2147483647, 1, 2], "ok": 18120022806063663111}
+{"fn": "wrap_rb_replace", "args": [-100, 42, -1], "ok": 13875103573502758169}
+{"fn": "wrap_rb_replace", "args": [2147483647, 0, 7], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 255, 9223372036854775807], "ok": 9393446214870193250}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 2, -100], "ok": 5849579909038827435}
+{"fn": "wrap_rb_replace", "args": [2147483647, 2, -2147483648], "ok": 7883580416853417563}
+{"fn": "wrap_rb_replace", "args": [-100, 1, 255], "ok": 12784874472341495004}
+{"fn": "wrap_rb_replace", "args": [0, 0, 9223372036854775807], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [-100, -2147483648, -1], "ok": 9985360776345718191}
+{"fn": "wrap_rb_replace", "args": [255, 0, -2147483648], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [100, 1, 100], "ok": 8679828802392783466}
+{"fn": "wrap_rb_replace", "args": [1, -100, 1], "ok": 2383688843699750293}
+{"fn": "wrap_rb_replace", "args": [2147483647, 2, 100], "ok": 11001047115904431834}
+{"fn": "wrap_rb_replace", "args": [7, 255, -100], "ok": 13869765652421938575}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [7, -1, 255], "ok": 13312753658917493080}
+{"fn": "wrap_rb_replace", "args": [100, -100, 255], "ok": 12533670420584063558}
+{"fn": "wrap_rb_replace", "args": [7, -2147483648, 2], "ok": 4273119506185116816}
+{"fn": "wrap_rb_replace", "args": [-100, 9223372036854775807, 42], "ok": 13183968017766163142}
+{"fn": "wrap_rb_replace", "args": [100, -100, -1], "ok": 15142677820516576556}
+{"fn": "wrap_rb_replace", "args": [1, 0, 42], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [42, 100, 42], "ok": 494145449600970077}
+{"fn": "wrap_rb_replace", "args": [0, 7, 100], "ok": 7523657294493165457}
+{"fn": "wrap_rb_replace", "args": [7, 42, -100], "ok": 5002998926630941148}
+{"fn": "wrap_rb_replace", "args": [42, 1, -1], "ok": 9088365362846310901}
+{"fn": "wrap_rb_replace", "args": [255, 2147483647, 9223372036854775807], "ok": 5124741145823669466}
+{"fn": "wrap_rb_replace", "args": [100, -1, -100], "ok": 8679828802392783466}
+{"fn": "wrap_rb_replace", "args": [42, 9223372036854775807, 100], "ok": 16082734822047772722}
+{"fn": "wrap_rb_replace", "args": [-100, 100, 100], "ok": 10128790766476236984}
+{"fn": "wrap_rb_replace", "args": [2, -2147483648, -2147483648], "ok": 4717522496581265368}
+{"fn": "wrap_rb_replace", "args": [2147483647, 42, 0], "ok": 7075713712820276029}
+{"fn": "wrap_rb_replace", "args": [42, -2147483648, 0], "ok": 13480216419179839290}
+{"fn": "wrap_rb_replace", "args": [-1, 42, 0], "ok": 7355811827924136591}
+{"fn": "wrap_rb_replace", "args": [255, 42, 255], "ok": 8708703837396098435}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, -1, 2147483647], "ok": 1947408946142943130}
+{"fn": "wrap_rb_replace", "args": [255, 7, 7], "ok": 15202993721780881296}
+{"fn": "wrap_rb_replace", "args": [42, 1, 2], "ok": 494145449600970077}
+{"fn": "wrap_rb_replace", "args": [7, -2147483648, 2147483647], "ok": 7171994971989640688}
+{"fn": "wrap_rb_replace", "args": [2, 255, 1], "ok": 17634866579563235568}
+{"fn": "wrap_rb_replace", "args": [0, 1, 2], "ok": 7198821968747530685}
+{"fn": "wrap_rb_replace", "args": [42, 9223372036854775807, 1], "ok": 14310564076148068704}
+{"fn": "wrap_rb_replace", "args": [1, -100, 42], "ok": 7198821968747530685}
+{"fn": "wrap_rb_replace", "args": [7, -100, 42], "ok": 3179679381642578050}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 1, 9223372036854775807], "ok": 1947408946142943130}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 100, -100], "ok": 1513200632587146516}
+{"fn": "wrap_rb_replace", "args": [-1, 1, 2147483647], "ok": 3825442028774718234}
+{"fn": "wrap_rb_replace", "args": [255, -100, 255], "ok": 5124741145823669466}
+{"fn": "wrap_rb_replace", "args": [2, 100, 0], "ok": 3730042609300606985}
+{"fn": "wrap_rb_replace", "args": [100, 0, 2147483647], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 2, -2147483648], "ok": 4220498866515644764}
+{"fn": "wrap_rb_replace", "args": [2, 42, 2147483647], "ok": 13701479914370656674}
+{"fn": "wrap_rb_replace", "args": [0, 1, 7], "ok": 13753865500840508079}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 1, 2147483647], "ok": 1947408946142943130}
+{"fn": "wrap_rb_replace", "args": [2147483647, 100, 100], "ok": 14702523262160520817}
+{"fn": "wrap_rb_replace", "args": [-100, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [100, 255, 2], "ok": 14048088163174756637}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 255, 7], "ok": 9393446214870193250}
+{"fn": "wrap_rb_replace", "args": [7, 255, -2147483648], "ok": 6941832567269078119}
+{"fn": "wrap_rb_replace", "args": [-1, 255, -100], "ok": 5291776457019813973}
+{"fn": "wrap_rb_replace", "args": [0, -1, -2147483648], "ok": 7719338579425517599}
+{"fn": "wrap_rb_replace", "args": [7, 2147483647, 9223372036854775807], "ok": 13312753658917493080}
+{"fn": "wrap_rb_replace", "args": [1, 9223372036854775807, -1], "ok": 6500173235610028022}
+{"fn": "wrap_rb_replace", "args": [-2147483648, -1, -1], "ok": 16869554558360794642}
+{"fn": "wrap_rb_replace", "args": [42, 255, 9223372036854775807], "ok": 10778091219251954836}
+{"fn": "wrap_rb_replace", "args": [2147483647, 9223372036854775807, 1], "ok": 6918820802465983784}
+{"fn": "wrap_rb_replace", "args": [2, 7, 42], "ok": 9950982063128658310}
+{"fn": "wrap_rb_replace", "args": [-2147483648, -100, 7], "ok": 2953720532521033856}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 1, 100], "ok": 9173333959104972054}
+{"fn": "wrap_rb_replace", "args": [1, 100, 42], "ok": 7198821968747530685}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 9223372036854775807, -2147483648], "ok": 17274672199804362625}
+{"fn": "wrap_rb_replace", "args": [2147483647, 2, 0], "ok": 7883580416853417563}
+{"fn": "wrap_rb_replace", "args": [2, 7, 2147483647], "ok": 366309178698655413}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 9223372036854775807, 0], "ok": 12580820074751824918}
+{"fn": "wrap_rb_replace", "args": [-1, -2147483648, 255], "ok": 15254673768169577675}
+{"fn": "wrap_rb_replace", "args": [-100, 2, -1], "ok": 9985360776345718191}
+{"fn": "wrap_rb_replace", "args": [1, 100, 2147483647], "ok": 13753865500840508079}
+{"fn": "wrap_rb_replace", "args": [2147483647, 1, 0], "ok": 4257921795876605061}
+{"fn": "wrap_rb_replace", "args": [2, 7, -1], "ok": 1474591132287296754}
+{"fn": "wrap_rb_replace", "args": [-1, 100, 255], "ok": 3825442028774718234}
+{"fn": "wrap_rb_replace", "args": [2147483647, 1, 7], "ok": 11013013868757722901}
+{"fn": "wrap_rb_replace", "args": [100, 255, -100], "ok": 8383916863353824401}
+{"fn": "wrap_rb_replace", "args": [255, -1, 7], "ok": 5124741145823669466}
+{"fn": "wrap_rb_replace", "args": [1, 2, 7], "ok": 15128482509231179722}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 2147483647, 7], "ok": 1947408946142943130}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 7, 0], "ok": 12580820074751824918}
+{"fn": "wrap_rb_replace", "args": [100, 0, 9223372036854775807], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [-1, 42, 42], "ok": 17013696648885839707}
+{"fn": "wrap_rb_replace", "args": [42, 9223372036854775807, 7], "ok": 11513190492963787778}
+{"fn": "wrap_rb_replace", "args": [1, 2147483647, -1], "ok": 2383688843699750293}
+{"fn": "wrap_rb_replace", "args": [-2147483648, 255, 2147483647], "ok": 9393446214870193250}
+{"fn": "wrap_rb_replace", "args": [1, -100, 255], "ok": 13753865500840508079}
+{"fn": "wrap_rb_replace", "args": [1, 255, 1], "ok": 17954635946408240683}
+{"fn": "wrap_rb_replace", "args": [7, 42, 42], "ok": 17289332142089732380}
+{"fn": "wrap_rb_replace", "args": [-100, 100, 9223372036854775807], "ok": 12784874472341495004}
+{"fn": "wrap_rb_replace", "args": [0, 100, 42], "ok": 7198821968747530685}
+{"fn": "wrap_rb_replace", "args": [1, 100, 1], "ok": 2383688843699750293}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, -100, -2147483648], "ok": 11411184097845216298}
+{"fn": "wrap_rb_replace", "args": [0, 9223372036854775807, 100], "ok": 7523657294493165457}
+{"fn": "wrap_rb_replace", "args": [-7, 42, 9223372036854775807], "ok": 18303740375550694264}
+{"fn": "wrap_rb_replace", "args": [-1, 42, 9223372036854775807], "ok": 4002810587761541972}
+{"fn": "wrap_rb_replace", "args": [0, 42, 9223372036854775807], "ok": 259487764092403333}
+{"fn": "wrap_rb_replace", "args": [2147483648, 42, 9223372036854775807], "ok": 18084020347702287370}
+{"fn": "wrap_rb_replace", "args": [-2147483649, 42, 9223372036854775807], "ok": 3084477535484388593}
+{"fn": "wrap_rb_replace", "args": [9007199254740993, 42, 9223372036854775807], "ok": 6155128414607232814}
+{"fn": "wrap_rb_replace", "args": [9223372036854775807, 42, 9223372036854775807], "ok": 7166730585935333527}
+{"fn": "wrap_rb_replace", "args": [-9223372036854775808, 42, 9223372036854775807], "ok": 15656167661636909286}
+{"fn": "wrap_rb_replace", "args": [2, -7, 9223372036854775807], "ok": 366309178698655413}
+{"fn": "wrap_rb_replace", "args": [2, -1, 9223372036854775807], "ok": 7165802943326972569}
+{"fn": "wrap_rb_replace", "args": [2, 0, 9223372036854775807], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [2, 2147483648, 9223372036854775807], "ok": 8137597514028530182}
+{"fn": "wrap_rb_replace", "args": [2, -2147483649, 9223372036854775807], "ok": 18426221320828505456}
+{"fn": "wrap_rb_replace", "args": [2, 9007199254740993, 9223372036854775807], "ok": 13701479914370656674}
+{"fn": "wrap_rb_replace", "args": [2, -9223372036854775808, 9223372036854775807], "ok": 11989424014684020630}
+{"fn": "wrap_rb_replace", "args": [2, 42, -7], "ok": 13701479914370656674}
+{"fn": "wrap_rb_replace", "args": [2, 42, -1], "ok": 199546529390827807}
+{"fn": "wrap_rb_replace", "args": [2, 42, 0], "ok": 1183470590892388005}
+{"fn": "wrap_rb_replace", "args": [2, 42, 2147483648], "ok": 1183470590892388005}
+{"fn": "wrap_rb_replace", "args": [2, 42, -2147483649], "ok": 199546529390827807}
+{"fn": "wrap_rb_replace", "args": [2, 42, 9007199254740993], "ok": 199546529390827807}
+{"fn": "wrap_rb_replace", "args": [2, 42, -9223372036854775808], "ok": 1183470590892388005}
+{"fn": "wrap_rbtree_run", "args": [7, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 1, 0], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 2, 0], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [7, 50, 0], "ok": 7848894392518871386}
+{"fn": "wrap_rbtree_run", "args": [7, 199, 0], "ok": 17028882756459339035}
+{"fn": "wrap_rbtree_run", "args": [7, 200, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 400, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, -9223372036854775808, 0], "ok": 5469637039394185090}
+{"fn": "wrap_rbtree_run", "args": [7, 9223372036854775807, 0], "ok": 953527784010681534}
+{"fn": "wrap_rbtree_run", "args": [7, -1, 0], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 0, 1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 1, 1], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 2, 1], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [7, 50, 1], "ok": 16053052859598832924}
+{"fn": "wrap_rbtree_run", "args": [7, 199, 1], "ok": 9035884619427773162}
+{"fn": "wrap_rbtree_run", "args": [7, 200, 1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 400, 1], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, -9223372036854775808, 1], "ok": 1892694772957523456}
+{"fn": "wrap_rbtree_run", "args": [7, 9223372036854775807, 1], "ok": 15495834469152388215}
+{"fn": "wrap_rbtree_run", "args": [7, -1, 1], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 0, 2], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 1, 2], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 2, 2], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [7, 50, 2], "ok": 9164294236235504299}
+{"fn": "wrap_rbtree_run", "args": [7, 199, 2], "ok": 8199842581645017793}
+{"fn": "wrap_rbtree_run", "args": [7, 200, 2], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 400, 2], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, -9223372036854775808, 2], "ok": 13883881030292624283}
+{"fn": "wrap_rbtree_run", "args": [7, 9223372036854775807, 2], "ok": 2843461726829255636}
+{"fn": "wrap_rbtree_run", "args": [7, -1, 2], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 0, 3], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 1, 3], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [7, 2, 3], "ok": 14755867542014726973}
+{"fn": "wrap_rbtree_run", "args": [7, 50, 3], "ok": 11386979766652939869}
+{"fn": "wrap_rbtree_run", "args": [7, 199, 3], "ok": 18184074020673140411}
+{"fn": "wrap_rbtree_run", "args": [7, 200, 3], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, 400, 3], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_run", "args": [7, -9223372036854775808, 3], "ok": 13883881030292624283}
+{"fn": "wrap_rbtree_run", "args": [7, 9223372036854775807, 3], "ok": 2843461726829255636}
+{"fn": "wrap_rbtree_run", "args": [7, -1, 3], "ok": 13919836250862820250}
+{"fn": "wrap_rbtree_run", "args": [0, 199, 1], "ok": 15751192522395261220}
+{"fn": "wrap_rbtree_run", "args": [1, 199, 1], "ok": 15751192522395261220}
+{"fn": "wrap_rbtree_run", "args": [18446744073709551615, 199, 1], "ok": 8828127354102798275}
+{"fn": "wrap_rbtree_run", "args": [3735928559, 199, 1], "ok": 18136844559055986720}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 1], "ok": 13823644012458675313}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 2], "ok": 13626854413964244653}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 31], "ok": 373234180937358019}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 32], "ok": 16784228447714405964}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 33], "ok": 1526243817134571514}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 63], "ok": 9078920894737099440}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 64], "ok": 1811929406184658227}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 65], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 127], "ok": 16420112612925236295}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 128], "ok": 9078920894737099440}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, -9223372036854775808], "ok": 12367367480041284897}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, 9223372036854775807], "ok": 1865859118209844914}
+{"fn": "wrap_rbtree_insert_seq", "args": [3, -1], "ok": 13823644012458675313}
+{"fn": "wrap_rbtree_insert_seq", "args": [0, 64], "ok": 11739617386822786741}
+{"fn": "wrap_rbtree_insert_seq", "args": [18446744073709551615, 64], "ok": 14923443024569501094}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 2], "ok": 15108189553653830878}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 31], "ok": 14132923262210740936}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 32], "ok": 8567479754116716033}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 33], "ok": 15089625209123943253}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 63], "ok": 13577447286743197880}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 64], "ok": 1731470602177469167}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 65], "ok": 2503978523384928175}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 127], "ok": 9161972271463209308}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 128], "ok": 13577447286743197880}
+{"fn": "wrap_rbtree_erase_all", "args": [3, -9223372036854775808], "ok": 13281255201395244855}
+{"fn": "wrap_rbtree_erase_all", "args": [3, 9223372036854775807], "ok": 199577090595474838}
+{"fn": "wrap_rbtree_erase_all", "args": [3, -1], "ok": 11309760399569485405}
+{"fn": "wrap_rbtree_erase_all", "args": [0, 64], "ok": 11957371122810255181}
+{"fn": "wrap_rbtree_erase_all", "args": [18446744073709551615, 64], "ok": 661723127054424039}
+{"fn": "wrap_rbtree_postorder", "args": [3, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [3, 1], "ok": 16924722343532999825}
+{"fn": "wrap_rbtree_postorder", "args": [3, 2], "ok": 16432191792508271501}
+{"fn": "wrap_rbtree_postorder", "args": [3, 31], "ok": 5952604353228785743}
+{"fn": "wrap_rbtree_postorder", "args": [3, 32], "ok": 13765445258292857939}
+{"fn": "wrap_rbtree_postorder", "args": [3, 33], "ok": 13287588686205911497}
+{"fn": "wrap_rbtree_postorder", "args": [3, 63], "ok": 3665595419654844901}
+{"fn": "wrap_rbtree_postorder", "args": [3, 64], "ok": 2105006517932057707}
+{"fn": "wrap_rbtree_postorder", "args": [3, 65], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_postorder", "args": [3, 127], "ok": 8508952243012418160}
+{"fn": "wrap_rbtree_postorder", "args": [3, 128], "ok": 3665595419654844901}
+{"fn": "wrap_rbtree_postorder", "args": [3, -9223372036854775808], "ok": 14358023108849568625}
+{"fn": "wrap_rbtree_postorder", "args": [3, 9223372036854775807], "ok": 4702625697974891615}
+{"fn": "wrap_rbtree_postorder", "args": [3, -1], "ok": 16924722343532999825}
+{"fn": "wrap_rbtree_postorder", "args": [0, 64], "ok": 12479658093528519386}
+{"fn": "wrap_rbtree_postorder", "args": [18446744073709551615, 64], "ok": 2879278537365111986}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 0], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 1], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 2], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 3], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 4], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 5], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 6], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 0, 7], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 0], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 1], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 2], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 3], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 4], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 5], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 6], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 1, 7], "ok": 947448480126751722}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 0], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 1], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 2], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 3], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 4], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 5], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 6], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 30, 7], "ok": 6291775932625112592}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 0], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 1], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 2], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 3], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 4], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 5], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 6], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 31, 7], "ok": 6021685625511059745}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 0], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 1], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 2], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 3], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 4], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 5], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 6], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, 32, 7], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 0], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 1], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 2], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 3], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 4], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 5], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 6], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_find", "args": [11, -9223372036854775808, 7], "ok": 1105257329597167832}
+{"fn": "wrap_rbtree_cached", "args": [5, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [5, 1], "ok": 9265249515309196155}
+{"fn": "wrap_rbtree_cached", "args": [5, 2], "ok": 1642882802713900386}
+{"fn": "wrap_rbtree_cached", "args": [5, 100], "ok": 7550701258779111007}
+{"fn": "wrap_rbtree_cached", "args": [5, 199], "ok": 2317307099490533479}
+{"fn": "wrap_rbtree_cached", "args": [5, 200], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [5, 400], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_cached", "args": [5, -9223372036854775808], "ok": 13591431919647026861}
+{"fn": "wrap_rbtree_cached", "args": [5, 9223372036854775807], "ok": 16099982034950797360}
+{"fn": "wrap_rbtree_cached", "args": [5, -1], "ok": 9265249515309196155}
+{"fn": "wrap_rbtree_linked", "args": [5, 0], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [5, 1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_linked", "args": [5, 2], "ok": 8429845990365435275}
+{"fn": "wrap_rbtree_linked", "args": [5, 100], "ok": 17777177419466825668}
+{"fn": "wrap_rbtree_linked", "args": [5, 199], "ok": 3645735996897986113}
+{"fn": "wrap_rbtree_linked", "args": [5, 200], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [5, 400], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_linked", "args": [5, -9223372036854775808], "ok": 4825797382432665797}
+{"fn": "wrap_rbtree_linked", "args": [5, 9223372036854775807], "ok": 10561417565647893166}
+{"fn": "wrap_rbtree_linked", "args": [5, -1], "ok": 6755698540482898700}
+{"fn": "wrap_rbtree_augmented", "args": [5, 0], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [5, 1], "ok": 617417022123529097}
+{"fn": "wrap_rbtree_augmented", "args": [5, 2], "ok": 457613606436645779}
+{"fn": "wrap_rbtree_augmented", "args": [5, 100], "ok": 5842354131613088230}
+{"fn": "wrap_rbtree_augmented", "args": [5, 199], "ok": 3935550019731055935}
+{"fn": "wrap_rbtree_augmented", "args": [5, 200], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [5, 400], "ok": 13227693507859947130}
+{"fn": "wrap_rbtree_augmented", "args": [5, -9223372036854775808], "ok": 4693573609567321111}
+{"fn": "wrap_rbtree_augmented", "args": [5, 9223372036854775807], "ok": 10202585083202099446}
+{"fn": "wrap_rbtree_augmented", "args": [5, -1], "ok": 617417022123529097}
+{"fn": "wrap_rb_replace", "args": [9, 0, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 0, 1], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 0, 7], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 0, 8], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 0, 15], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 0, -9223372036854775808], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 1, 0], "ok": 12966150187685950385}
+{"fn": "wrap_rb_replace", "args": [9, 1, 1], "ok": 3482638687998095875}
+{"fn": "wrap_rb_replace", "args": [9, 1, 7], "ok": 13375480808008289857}
+{"fn": "wrap_rb_replace", "args": [9, 1, 8], "ok": 12966150187685950385}
+{"fn": "wrap_rb_replace", "args": [9, 1, 15], "ok": 13375480808008289857}
+{"fn": "wrap_rb_replace", "args": [9, 1, -9223372036854775808], "ok": 12966150187685950385}
+{"fn": "wrap_rb_replace", "args": [9, 2, 0], "ok": 14100860196183825660}
+{"fn": "wrap_rb_replace", "args": [9, 2, 1], "ok": 13591248143694388949}
+{"fn": "wrap_rb_replace", "args": [9, 2, 7], "ok": 5561726998214260608}
+{"fn": "wrap_rb_replace", "args": [9, 2, 8], "ok": 14100860196183825660}
+{"fn": "wrap_rb_replace", "args": [9, 2, 15], "ok": 5561726998214260608}
+{"fn": "wrap_rb_replace", "args": [9, 2, -9223372036854775808], "ok": 14100860196183825660}
+{"fn": "wrap_rb_replace", "args": [9, 31, 0], "ok": 3898527272799486820}
+{"fn": "wrap_rb_replace", "args": [9, 31, 1], "ok": 12769497508931961056}
+{"fn": "wrap_rb_replace", "args": [9, 31, 7], "ok": 14629362084045307126}
+{"fn": "wrap_rb_replace", "args": [9, 31, 8], "ok": 3898527272799486820}
+{"fn": "wrap_rb_replace", "args": [9, 31, 15], "ok": 14629362084045307126}
+{"fn": "wrap_rb_replace", "args": [9, 31, -9223372036854775808], "ok": 3898527272799486820}
+{"fn": "wrap_rb_replace", "args": [9, 32, 0], "ok": 18241128530695776603}
+{"fn": "wrap_rb_replace", "args": [9, 32, 1], "ok": 6409711618857009933}
+{"fn": "wrap_rb_replace", "args": [9, 32, 7], "ok": 15635260650858631573}
+{"fn": "wrap_rb_replace", "args": [9, 32, 8], "ok": 18241128530695776603}
+{"fn": "wrap_rb_replace", "args": [9, 32, 15], "ok": 15635260650858631573}
+{"fn": "wrap_rb_replace", "args": [9, 32, -9223372036854775808], "ok": 18241128530695776603}
+{"fn": "wrap_rb_replace", "args": [9, 33, 0], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 33, 1], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 33, 7], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 33, 8], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 33, 15], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 33, -9223372036854775808], "ok": 2503978523384928175}
+{"fn": "wrap_rb_replace", "args": [9, 63, 0], "ok": 18104517774707867308}
+{"fn": "wrap_rb_replace", "args": [9, 63, 1], "ok": 9935790836368402458}
+{"fn": "wrap_rb_replace", "args": [9, 63, 7], "ok": 9158871810474547754}
+{"fn": "wrap_rb_replace", "args": [9, 63, 8], "ok": 18104517774707867308}
+{"fn": "wrap_rb_replace", "args": [9, 63, 15], "ok": 9158871810474547754}
+{"fn": "wrap_rb_replace", "args": [9, 63, -9223372036854775808], "ok": 18104517774707867308}
+{"fn": "wrap_rb_replace", "args": [9, 9223372036854775807, 0], "ok": 130284938775238114}
+{"fn": "wrap_rb_replace", "args": [9, 9223372036854775807, 1], "ok": 16248032344553544887}
+{"fn": "wrap_rb_replace", "args": [9, 9223372036854775807, 7], "ok": 12026206974230376600}
+{"fn": "wrap_rb_replace", "args": [9, 9223372036854775807, 8], "ok": 130284938775238114}
+{"fn": "wrap_rb_replace", "args": [9, 9223372036854775807, 15], "ok": 12026206974230376600}
+{"fn": "wrap_rb_replace", "args": [9, 9223372036854775807, -9223372036854775808], "ok": 130284938775238114}

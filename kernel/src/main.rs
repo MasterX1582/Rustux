@@ -170,6 +170,75 @@ fn main() -> Status {
         klib::bitmap::bitmap_weight(&bm, 128)
     );
 
+    {
+        use klib::rbtree::*;
+        const RT: usize = 8;
+        let mut nodes = [RbNode::new(); RT];
+        let rk = [5u64, 3, 8, 1, 4, 7, 9, 2];
+        let mut root = RbRoot::EMPTY;
+        for (i, &k) in rk.iter().enumerate() {
+            let mut link = Link::Root;
+            let mut parent = NIL;
+            let mut cur = root.rb_node;
+            while cur != NIL {
+                parent = cur;
+                if k < rk[cur] {
+                    link = Link::Left(cur);
+                    cur = nodes[cur].left;
+                } else {
+                    link = Link::Right(cur);
+                    cur = nodes[cur].right;
+                }
+            }
+            rb_link_node(&mut nodes, i, parent, link, &mut root);
+            rb_insert_color(&mut nodes, i, &mut root);
+        }
+        // in-order traversal should visit keys 1..9 sorted
+        let mut inorder = 0u64;
+        let mut i = rb_first(&nodes, &root);
+        while i != NIL {
+            inorder = inorder * 10 + rk[i];
+            i = rb_next(&nodes, i);
+        }
+        // erase the middle node and verify traversal still sorted
+        rb_erase(&mut nodes, 4, &mut root); // node index 4 has key 4
+        let mut inorder2 = 0u64;
+        let mut i = rb_first(&nodes, &root);
+        while i != NIL {
+            inorder2 = inorder2 * 10 + rk[i];
+            i = rb_next(&nodes, i);
+        }
+        // ascending inserts force __rb_insert's rotation cases
+        let mut n2 = [RbNode::new(); RT];
+        let mut root2 = RbRoot::EMPTY;
+        for i in 0..RT {
+            let mut link = Link::Root;
+            let mut parent = NIL;
+            let mut cur = root2.rb_node;
+            while cur != NIL {
+                parent = cur;
+                link = Link::Right(cur);
+                cur = n2[cur].right;
+            }
+            rb_link_node(&mut n2, i, parent, link, &mut root2);
+            rb_insert_color(&mut n2, i, &mut root2);
+        }
+        let mut h = 0usize;
+        let mut i = rb_first(&n2, &root2);
+        while i != NIL {
+            h += 1;
+            i = rb_next(&n2, i);
+        }
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::rbtree: insert(5,3,8,1,4,7,9,2) inorder={} erase(4)={} asc(1..8)->{}nodes (verified port of lib/rbtree.c)",
+            inorder, inorder2, h
+        );
+        assert_eq!(inorder, 12345789);
+        assert_eq!(inorder2, 1235789);
+        assert_eq!(h, 8);
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

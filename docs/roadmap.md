@@ -101,8 +101,20 @@ GENMASK/memcmp/single-word inlines, and `CONFIG_NUMA`'s `bitmap_onto`/
 lands with the allocator port (wave 1); `bitmap_parse*` belongs to
 `lib/bitmap-str.c`, a separate future unit.
 
-Next units (userspace-compilable today): `tools/lib/rbtree.c`,
-`tools/lib/string.c`,
+`lib/rbtree.c` + `include/linux/{rbtree,rbtree_types,rbtree_augmented}.h`
+done (1811/1811 differential cases + 40-seed RB-invariant selftest, gate
+passed): index-pool model where `RbNode::pc` packs parent|color exactly like
+`__rb_parent_color`; insertion, `__rb_erase_color` rebalancing, traversal,
+cached roots, linked nodes, postorder, `rb_find*`/`rb_find_add*`/`rb_add*`
+search helpers, and the full `rb_augment_callbacks` surface (subtree-max
+verified). Adopted as `klib::rbtree` over caller-owned `&mut [RbNode]` pools
+with `Link{Root,Left(i),Right(i)}` modeling C's `struct rb_node **` and
+`impl Fn` comparators capturing user payload. RCU variants alias the plain
+paths (no RCU semantics in klib yet). Remaining thin surface for a later
+pass: `rbtree_postorder_for_each_entry_safe`/`rb_entry_safe` macros,
+`RB_EMPTY_ROOT` inline (trivial), multi-field `RB_DECLARE_CALLBACKS`.
+
+Next units (userspace-compilable today): `tools/lib/string.c`,
 `crypto/sha256_generic.c`,
 `crypto/xxhash_generic.c`, `lib/siphash.c`, `lib/kfifo.c`.
 
