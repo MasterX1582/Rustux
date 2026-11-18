@@ -36,6 +36,31 @@ fn main() -> Status {
         "linux-rust: klib::math::int_sqrt(1<<40) = {} (verified port of lib/math/int_sqrt.c)",
         klib::math::int_sqrt(1 << 40)
     );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::gcd(1071,462) = {} (verified port of lib/math/gcd.c)",
+        klib::math::gcd(1071, 462)
+    );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::lcm(21,6) = {} (verified port of lib/math/lcm.c)",
+        klib::math::lcm(21, 6)
+    );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::int_pow(7,13) = {} (verified port of lib/math/int_pow.c)",
+        klib::math::int_pow(7, 13)
+    );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::intlog10(255) = {} (verified port of lib/math/int_log.c)",
+        klib::math::intlog10(255)
+    );
+    let _ = writeln!(
+        com1,
+        "linux-rust: klib::math::mul_u64_add_u64_div_u64(2^63,2^63,0,2^63) = {} (verified port of lib/math/div64.c)",
+        klib::math::mul_u64_add_u64_div_u64(1 << 63, 1 << 63, 0, 1 << 63)
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);

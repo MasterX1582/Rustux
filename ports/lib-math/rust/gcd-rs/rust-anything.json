@@ -1,0 +1,40 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-math",
+  "unit": "gcd.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "gcd-rs",
+  "exports": [
+    {
+      "name": "gcd",
+      "file": "gcd.c",
+      "line": 50,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned long",
+      "prototype": "unsigned long gcd(unsigned long a, unsigned long b)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

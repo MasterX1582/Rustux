@@ -2,3 +2,6 @@
 /esp
 /esp.img
 **/.rust-anything/
+
+__pycache__/
+*.pyc

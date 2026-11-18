@@ -1,0 +1,54 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-math",
+  "unit": "int_log.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "int-log-rs",
+  "exports": [
+    {
+      "name": "intlog2",
+      "file": "int_log.c",
+      "line": 51,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned int",
+      "prototype": "unsigned int intlog2(uint32_t value)"
+    },
+    {
+      "name": "intlog10",
+      "file": "int_log.c",
+      "line": 111,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint32_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "unsigned int",
+      "prototype": "unsigned int intlog10(uint32_t value)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}

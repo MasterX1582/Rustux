@@ -28,7 +28,22 @@ recorded behavior before adoption.
 rust-anything's record/diff works almost directly — the strongest possible
 verification. ~680 files, ~380k lines.
 
-First units (userspace-compilable today): `tools/lib/rbtree.c`,
+Done so far (adopted into `klib::math`, all gates passed):
+`int_sqrt` (17/17), `gcd` (154/154), `lcm`+`lcm_not_zero` (308/308),
+`int_pow` (154/154), `intlog2`+`intlog10` (34/34),
+`mul_u64_add_u64_div_u64` (232/232), `iter_div_u64_rem` (custom pointer-arg
+check `ports/lib-math/check-iter-div.py`, 72/72 — rust-anything's ctypes
+bridge can't take pointer args; document each such case or write a custom
+check like it).
+
+Harness notes learned along the way: kernel typedefs must be normalized to
+stdint names (`u64`→`uint64_t`) for the bridge's scalar map; functions inside
+`#if` regions are invisible to the export scanner (pre-resolve branches for
+the target config); `linux/types.h` carries a harness-wide LP64 `#error`
+guard; crash records count as "UB — anything passes" so trap-on-input cases
+are documented divergences, not verified behavior.
+
+Next units (userspace-compilable today): `tools/lib/rbtree.c`,
 `tools/lib/bitmap.c`, `tools/lib/string.c`, `tools/lib/find_bit.c`,
 `lib/sort.c`, `lib/list_sort.c`, `lib/crc*.c`, `crypto/sha256_generic.c`,
 `crypto/xxhash_generic.c`, `lib/siphash.c`, `lib/kfifo.c`.
