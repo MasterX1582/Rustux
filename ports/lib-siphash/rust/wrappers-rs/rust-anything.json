@@ -1,0 +1,740 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-siphash",
+  "unit": "wrappers.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "wrappers-rs",
+  "exports": [
+    {
+      "name": "wrap_siphash",
+      "file": "wrappers.c",
+      "line": 60,
+      "params": [
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "off",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "len",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash(uint64_t k0, uint64_t k1, int64_t off, uint64_t seed, int64_t len)"
+    },
+    {
+      "name": "wrap_siphash_ramp",
+      "file": "wrappers.c",
+      "line": 72,
+      "params": [
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "off",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "len",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_ramp(uint64_t k0, uint64_t k1, int64_t off, int64_t len)"
+    },
+    {
+      "name": "wrap_siphash_1u64",
+      "file": "wrappers.c",
+      "line": 81,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_1u64(uint64_t a, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_2u64",
+      "file": "wrappers.c",
+      "line": 87,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_2u64(uint64_t a, uint64_t b, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_3u64",
+      "file": "wrappers.c",
+      "line": 93,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "c",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_3u64(uint64_t a, uint64_t b, uint64_t c, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_4u64",
+      "file": "wrappers.c",
+      "line": 100,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "c",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_4u64(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_1u32",
+      "file": "wrappers.c",
+      "line": 107,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_1u32(uint64_t a, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_2u32",
+      "file": "wrappers.c",
+      "line": 113,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_2u32(uint64_t a, uint64_t b, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_3u32",
+      "file": "wrappers.c",
+      "line": 119,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "c",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_3u32(uint64_t a, uint64_t b, uint64_t c, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_siphash_4u32",
+      "file": "wrappers.c",
+      "line": 126,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "c",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_siphash_4u32(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_hsiphash",
+      "file": "wrappers.c",
+      "line": 135,
+      "params": [
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "off",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "len",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_hsiphash(uint64_t k0, uint64_t k1, int64_t off, uint64_t seed, int64_t len)"
+    },
+    {
+      "name": "wrap_hsiphash_ramp",
+      "file": "wrappers.c",
+      "line": 144,
+      "params": [
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "off",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "len",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_hsiphash_ramp(uint64_t k0, uint64_t k1, int64_t off, int64_t len)"
+    },
+    {
+      "name": "wrap_hsiphash_1u32",
+      "file": "wrappers.c",
+      "line": 153,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_hsiphash_1u32(uint64_t a, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_hsiphash_2u32",
+      "file": "wrappers.c",
+      "line": 159,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_hsiphash_2u32(uint64_t a, uint64_t b, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_hsiphash_3u32",
+      "file": "wrappers.c",
+      "line": 165,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "c",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_hsiphash_3u32(uint64_t a, uint64_t b, uint64_t c, uint64_t k0, uint64_t k1)"
+    },
+    {
+      "name": "wrap_hsiphash_4u32",
+      "file": "wrappers.c",
+      "line": 172,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "b",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "c",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "d",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k0",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "k1",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_hsiphash_4u32(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t k0, uint64_t k1)"
+    }
+  ],
+  "classes": [],
+  "js_only": []
+}
