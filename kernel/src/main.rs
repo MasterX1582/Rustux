@@ -390,6 +390,32 @@ fn main() -> Status {
         t.destroy();
     }
 
+    {
+        use klib::xarray::*;
+        let mut nodes = [const { Node::new() }; 32];
+        let mut xa = Xarray::new(&mut nodes, 0);
+        xa.xa_store(1, 0x1000);
+        xa.xa_store(100, 0x1010);
+        xa.xa_store(1 << 16, 0x1020);
+        let mut idx = 0;
+        let f0 = xa.xa_find(&mut idx, u64::MAX, XA_PRESENT);
+        let l100 = xa.xa_load(100);
+        let deep = xa.xa_load(1 << 16);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::xarray: find={} idx={} l100={} deep={} (verified port of lib/xarray.c)",
+            f0,
+            idx,
+            l100,
+            deep
+        );
+        assert_eq!(f0, 0x1000);
+        assert_eq!(idx, 1);
+        assert_eq!(l100, 0x1010);
+        assert_eq!(deep, 0x1020);
+        xa.xa_destroy();
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

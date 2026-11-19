@@ -166,7 +166,11 @@ with `lib/vsprintf.c`). Skipped: seq_buf_print_seq/path/bprintf
 `klib::rhashtable`: caller-owned `&mut [u64]` dense arena, canonical
 addresses via `idx()`, locks/RCU/workqueues sequential, rhltable
 chains, nested-table alloc fallback, walk API, `fail_nth` injection.
-In progress: `lib/xarray.c` port (wrap_xa_multi diffs outstanding).
+`lib/xarray.c`+`xarray.h` (983 cases) → `klib::xarray`: caller-owned
+`&mut [Node]` arena, canonical node addresses, sibling/multi-index
+entries, all three marks, order stores, alloc/cyclic, extract,
+find/find_after (bounded-256 retry like the harness), shadow-node
+list, `fail_mask` injection.
 
 ### Wave 2 — core services (custom shims needed)
 

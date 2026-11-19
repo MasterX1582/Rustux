@@ -27,3 +27,4 @@ pub mod seqbuf;
 pub mod sha;
 pub mod sort;
 pub mod string;
+pub mod xarray;
