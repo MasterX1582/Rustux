@@ -416,6 +416,125 @@ fn main() -> Status {
         xa.xa_destroy();
     }
 
+    {
+        use klib::radix_tree::*;
+        let mut nodes = [const { klib::xarray::Node::new() }; 32];
+        let mut rt = RadixTree::new(&mut nodes, GFP_KERNEL);
+        rt.radix_tree_insert(3, 0x1000);
+        rt.radix_tree_insert(1 << 14, 0x1010);
+        rt.radix_tree_tag_set(1 << 14, 1);
+        let l3 = rt.radix_tree_lookup(3);
+        let deep = rt.radix_tree_lookup(1 << 14);
+        let mut out = [0u64; 4];
+        let gang = rt.radix_tree_gang_lookup_tag(&mut out, 0, 1);
+        let del = rt.radix_tree_delete(3);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::radix_tree: l3={} deep={} gang={} del={} (verified port of lib/radix-tree.c)",
+            l3,
+            deep,
+            gang,
+            del
+        );
+        assert_eq!(l3, 0x1000);
+        assert_eq!(deep, 0x1010);
+        assert_eq!(gang, 1);
+        assert_eq!(out[0], 0x1010);
+        assert_eq!(del, 0x1000);
+    }
+
+    {
+        use klib::idr::*;
+        let mut nodes = [const { klib::xarray::Node::new() }; 32];
+        let mut idr = Idr::new(&mut nodes);
+        let a = idr.idr_alloc(0x2000, 0, 0, GFP_KERNEL);
+        let b = idr.idr_alloc(0x2010, 0, 0, GFP_KERNEL);
+        let f = idr.idr_find(b as u64);
+        idr.idr_remove(a as u64);
+        let c = idr.idr_alloc(0x2020, 0, 0, GFP_KERNEL);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::idr: a={} b={} f={} c={} (verified port of lib/idr.c)",
+            a,
+            b,
+            f,
+            c
+        );
+        assert_eq!(a, 0);
+        assert_eq!(b, 1);
+        assert_eq!(f, 0x2010);
+        assert_eq!(c, 0);
+    }
+
+    {
+        use klib::maple_tree::*;
+        let mut nodes = [const { Node::new() }; 64];
+        let mut sheafs = [const { Sheaf::new() }; 8];
+        let mut mt = MapleTree::new(&mut nodes, &mut sheafs, 0);
+        mt.mtree_store(MT_CANON, 5, 0x3000, GFP_KERNEL);
+        mt.mtree_store_range(MT_CANON, 100, 109, 0x3010, GFP_KERNEL);
+        mt.mtree_store(MT_CANON, 900, 0x3020, GFP_KERNEL);
+        let l5 = mt.mtree_load(MT_CANON, 5);
+        let l105 = mt.mtree_load(MT_CANON, 105);
+        let nxt = mt.mt_next(MT_CANON, 5, u64::MAX);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::maple_tree: l5={} l105={} next={} (verified port of lib/maple_tree.c)",
+            l5,
+            l105,
+            nxt
+        );
+        assert_eq!(l5, 0x3000);
+        assert_eq!(l105, 0x3010);
+        assert_eq!(nxt, 0x3010);
+    }
+
+    {
+        use klib::percpu_counter::PercpuCounter;
+        let mut lanes = [0i64; 4];
+        let mut c = PercpuCounter::new();
+        c.init(&mut lanes, 10);
+        c.cpu = 0;
+        c.add(3);
+        let sum = c.sum();
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::percpu_counter: sum={} (verified port of lib/percpu_counter.c)",
+            sum
+        );
+        assert_eq!(sum, 13);
+    }
+
+    {
+        use klib::prb::*;
+        let mut text = [0u8; 64];
+        let mut descs = [PrbDesc::default(); 4];
+        let mut infos = [PrintkInfo::default(); 4];
+        let mut prb = Prb::new(&mut text, 6, &mut descs, 2, &mut infos);
+        let mut e = PrbReservedEntry::default();
+        let mut r = PrintkRecord::wr(5);
+        let ok = prb.reserve(&mut e, &mut r);
+        if let Some(buf) = prb.text_buf_mut(&r) {
+            buf[..5].copy_from_slice(b"hello");
+        }
+        if let Some(info) = prb.info_mut(&r) {
+            info.text_len = 5;
+        }
+        prb.final_commit(&e);
+        let mut ri = PrintkInfo::default();
+        let mut rbuf = [0u8; 64];
+        let rd = prb.read_valid(0, Some(&mut ri), Some(&mut rbuf));
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::prb: reserve={} read={} len={} (verified port of kernel/printk/printk_ringbuffer.c)",
+            ok,
+            rd,
+            ri.text_len
+        );
+        assert!(ok && rd && ri.text_len == 5);
+        assert_eq!(&rbuf[..5], b"hello");
+    }
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }

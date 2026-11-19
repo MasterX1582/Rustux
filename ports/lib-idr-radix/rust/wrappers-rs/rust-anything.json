@@ -1,0 +1,206 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-idr-radix",
+  "unit": "wrappers.c",
+  "language": "c",
+  "kind": "c-abi",
+  "crate_name": "wrappers-rs",
+  "exports": [
+    {
+      "name": "xa_dump_index",
+      "file": "wrappers.c",
+      "line": 352,
+      "params": [
+        {
+          "name": "index",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned long"
+        },
+        {
+          "name": "shift",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "unsigned int"
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "void",
+      "prototype": "void xa_dump_index(unsigned long index, unsigned int shift)"
+    },
+    {
+      "name": "wrap_idr_seq",
+      "file": "wrappers.c",
+      "line": 715,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "seed2",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_idr_seq(uint64_t seed, int64_t nops_i, int64_t seed2)"
+    },
+    {
+      "name": "wrap_ida_seq",
+      "file": "wrappers.c",
+      "line": 866,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "seed2",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_ida_seq(uint64_t seed, int64_t nops_i, int64_t seed2)"
+    },
+    {
+      "name": "wrap_radix_seq",
+      "file": "wrappers.c",
+      "line": 1193,
+      "params": [
+        {
+          "name": "seed",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "uint64_t"
+        },
+        {
+          "name": "nops_i",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        },
+        {
+          "name": "seed2",
+          "ts_type": "int",
+          "optional": false,
+          "rest": false,
+          "native_type": "int64_t"
+        }
+      ],
+      "returns": "int",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false,
+      "native_return": "uint64_t",
+      "prototype": "uint64_t wrap_radix_seq(uint64_t seed, int64_t nops_i, int64_t seed2)"
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "kmem_cache_alloc_lru",
+      "file": "wrappers.c",
+      "line": 124,
+      "reason": "passes a pointer (`struct kmem_cache*`): ownership must be designed"
+    },
+    {
+      "name": "kmem_cache_alloc",
+      "file": "wrappers.c",
+      "line": 131,
+      "reason": "passes a pointer (`struct kmem_cache*`): ownership must be designed"
+    },
+    {
+      "name": "kmem_cache_free",
+      "file": "wrappers.c",
+      "line": 137,
+      "reason": "passes a pointer (`struct kmem_cache*`): ownership must be designed"
+    },
+    {
+      "name": "kmem_cache_create",
+      "file": "wrappers.c",
+      "line": 144,
+      "reason": "takes a function pointer"
+    },
+    {
+      "name": "kmem_cache_destroy",
+      "file": "wrappers.c",
+      "line": 152,
+      "reason": "passes a pointer (`struct kmem_cache*`): ownership must be designed"
+    },
+    {
+      "name": "kzalloc",
+      "file": "wrappers.c",
+      "line": 157,
+      "reason": "uses `gfp_t`, which is not a C scalar the bridge knows"
+    },
+    {
+      "name": "kmalloc",
+      "file": "wrappers.c",
+      "line": 173,
+      "reason": "uses `gfp_t`, which is not a C scalar the bridge knows"
+    },
+    {
+      "name": "kfree",
+      "file": "wrappers.c",
+      "line": 178,
+      "reason": "passes a pointer (`const void*`): ownership must be designed"
+    },
+    {
+      "name": "kshim_print",
+      "file": "wrappers.c",
+      "line": 342,
+      "reason": "is variadic"
+    },
+    {
+      "name": "xa_dump_node",
+      "file": "wrappers.c",
+      "line": 358,
+      "reason": "passes a pointer (`const struct xa_node*`): ownership must be designed"
+    }
+  ]
+}

@@ -171,6 +171,21 @@ chains, nested-table alloc fallback, walk API, `fail_nth` injection.
 entries, all three marks, order stores, alloc/cyclic, extract,
 find/find_after (bounded-256 retry like the harness), shadow-node
 list, `fail_mask` injection.
+Wave-1 tail: `lib/radix-tree.c`+`lib/idr.c` (879 cases) →
+`klib::radix_tree` + `klib::idr` (deprecated radix API + idr/ida
+veneers over a shared engine reusing the xarray `Node` arena),
+`lib/maple_tree.c` (666 cases) → `klib::maple_tree` (caller-owned
+node + sheaf arenas, canonical `NBASE` addressing, NULLN-scratch for
+wild pointers), `lib/percpu_counter.c` (included in 966) →
+`klib::percpu_counter`, `kernel/printk/printk_ringbuffer.c` (966
+cases) → `klib::prb` (caller-owned desc/info/text rings). All five
+boot-proofed under QEMU. Audit run-16: 14 findings, all fixed at
+generator-script level (extract_*.py assert their replace patterns;
+crafted caller-state degrades to scratch/warn/-errno, all
+pointer-chasing loops carry `MAS_ITER_LIMIT`-style caps).
+In flight (parallel port jobs): `lib/assoc_array.c`,
+`lib/generic-radix-tree.c`+`lib/interval_tree.c`, `lib/siphash.c`,
+`lib/kstrtox.c`+`lib/hexdump.c`+`lib/string_helpers.c`.
 
 ### Wave 2 — core services (custom shims needed)
 
