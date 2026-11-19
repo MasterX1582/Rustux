@@ -490,6 +490,94 @@ fn main() -> Status {
     }
 
     {
+        use klib::genradix::*;
+        let mut arena = [const { GNode::zeroed() }; 8];
+        let mut alloc = GAlloc::new(&mut arena);
+        let mut g = Genradix::new();
+        // obj_size 8: 64 objects per leaf page; idx 100 grows the tree to
+        // depth 1, idx 4096 to depth 2 (6 nodes total).
+        let s = genradix_ptr_alloc(&mut g, &mut alloc, 3, &mut None, 8).unwrap();
+        slot_u64_set(&mut alloc, s, 0x1111);
+        let s = genradix_ptr_alloc(&mut g, &mut alloc, 100, &mut None, 8).unwrap();
+        slot_u64_set(&mut alloc, s, 0x3333);
+        let s = genradix_ptr_alloc(&mut g, &mut alloc, 4096, &mut None, 8).unwrap();
+        slot_u64_set(&mut alloc, s, 0x2222);
+        let l3 = genradix_ptr(&g, &alloc, 3, 8)
+            .map(|s| slot_u64(&alloc, s))
+            .unwrap_or(0);
+        let ldeep = genradix_ptr(&g, &alloc, 4096, 8)
+            .map(|s| slot_u64(&alloc, s))
+            .unwrap_or(0);
+        let miss = genradix_ptr(&g, &alloc, 8192, 8).is_none();
+        // Iteration visits every object slot of every allocated leaf
+        // page: pages 0, 1 and 64 -> 3 * 64 positions.
+        let objs_per_page = GENRADIX_NODE_SIZE / 8;
+        let mut it = genradix_iter_init(0, 8);
+        let mut cnt = 0u64;
+        while genradix_iter_peek(&mut it, &g, &alloc, objs_per_page).is_some() {
+            cnt += 1;
+            genradix_iter_advance(&mut it, 8);
+        }
+        genradix_free(&mut g, &mut alloc);
+        let reused = alloc.alloc_node().is_some();
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::genradix: l3={:#x} deep={:#x} miss={} iter={} reuse={} (verified port of lib/generic-radix-tree.c)",
+            l3,
+            ldeep,
+            miss,
+            cnt,
+            reused
+        );
+        assert_eq!(l3, 0x1111);
+        assert_eq!(ldeep, 0x2222);
+        assert!(miss);
+        assert_eq!(cnt, 192);
+        assert!(reused);
+    }
+
+    {
+        use klib::interval_tree::*;
+        use klib::rbtree::{NIL, RbNode, RbRootCached};
+        let mut nodes = [RbNode::new(); 6];
+        let (mut start, mut last, mut sub) = ([0u64; 6], [0u64; 6], [0u64; 6]);
+        let mut ctx = ItData {
+            start: &mut start,
+            last: &mut last,
+            sub: &mut sub,
+        };
+        let mut root = RbRootCached::EMPTY;
+        let spans = [(5u64, 10u64), (15, 20), (7, 9), (0, 3), (12, 18)];
+        for (i, &(s, l)) in spans.iter().enumerate() {
+            ctx.start[i] = s;
+            ctx.last[i] = l;
+            interval_tree_insert(&mut nodes, &mut ctx, i, &mut root);
+        }
+        // Query [8,16] hits nodes 0,2,4,1 in non-decreasing start order.
+        let mut cnt = 0u64;
+        let mut i = interval_tree_iter_first(&nodes, &ctx, &root, 8, 16);
+        while i != NIL {
+            cnt += 1;
+            i = interval_tree_iter_next(&nodes, &ctx, i, 8, 16);
+        }
+        // Remove (5,10): [5,10]'s first remaining hit is (7,9) = node 2;
+        // the augmented root keeps subtree_last = max last = 20.
+        interval_tree_remove(&mut nodes, &mut ctx, 0, &mut root);
+        let first = interval_tree_iter_first(&nodes, &ctx, &root, 5, 10);
+        let subroot = ctx.sub[root.root.rb_node];
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::interval_tree: q[8,16]={}hits rm(0)->first={} subroot={} (verified port of lib/interval_tree.c)",
+            cnt,
+            first,
+            subroot
+        );
+        assert_eq!(cnt, 4);
+        assert_eq!(first, 2);
+        assert_eq!(subroot, 20);
+    }
+
+    {
         use klib::percpu_counter::PercpuCounter;
         let mut lanes = [0i64; 4];
         let mut c = PercpuCounter::new();
