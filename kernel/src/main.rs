@@ -26,6 +26,7 @@ mod logo_data;
 mod mm;
 mod pci;
 mod pio;
+mod rand;
 mod uart;
 
 /// printk-style console fan-out: every write goes to COM1 and, when the GOP
@@ -74,6 +75,11 @@ fn main() -> Status {
     log::set_console(&mut con);
     kprintln!(con, "rustux: Rust kernel alive under UEFI");
     kprintln!(con, "rustux: serial console up on COM1");
+    let rng_hw = rand::init();
+    kprintln!(con,
+        "rustux: rand: CSPRNG seeded ({})",
+        if rng_hw { "rdrand" } else { "rdtsc fallback, weak seed" }
+    );
     kprintln!(con,
         "rustux: klib::math::int_sqrt(1<<40) = {} (verified port of lib/math/int_sqrt.c)",
         klib::math::int_sqrt(1 << 40)

@@ -1045,7 +1045,8 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
 /// DHCP client proof (slirp only — skipped on the socket-demo MACs).
 /// Broadcast DISCOVER -> OFFER -> REQUEST -> ACK; a real lease.
 /// BOOTP fixed part is 236B + 4B magic cookie + TLV options.
-const DHCP_XID: u32 = 0x7278_0001;
+/// The XID is drawn from the CSPRNG per run — a constant XID makes
+/// reply-forging trivial on a hostile LAN.
 const DHCP_COOKIE: [u8; 4] = [99, 130, 83, 99];
 
 /// Build a DHCP DISCOVER (ty=1) or REQUEST (ty=3) payload.
@@ -1056,6 +1057,7 @@ fn build_dhcp(
     ty: u8,
     req_ip: Option<[u8; 4]>,
     srv: Option<[u8; 4]>,
+    xid: u32,
 ) -> usize {
     if p.len() < 300 {
         return 0;
@@ -1064,7 +1066,7 @@ fn build_dhcp(
     p[0] = 1; // op request
     p[1] = 1; // htype ethernet
     p[2] = 6; // hlen
-    p[4..8].copy_from_slice(&DHCP_XID.to_be_bytes());
+    p[4..8].copy_from_slice(&xid.to_be_bytes());
     p[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); // broadcast flag
     p[28..34].copy_from_slice(&mac); // chaddr
     p[236..240].copy_from_slice(&DHCP_COOKIE);
@@ -1106,11 +1108,11 @@ struct Lease {
 
 /// Hostile-input DHCP parse: BOOTP reply, our xid, cookie present,
 /// option walk fully bounded (tag 255 end, tag 0 pad, len-checked).
-fn parse_dhcp(p: &[u8]) -> Option<Lease> {
+fn parse_dhcp(p: &[u8], xid: u32) -> Option<Lease> {
     if p.len() < 241 || p[0] != 2 {
         return None;
     }
-    if p[4..8] != DHCP_XID.to_be_bytes() || p[236..240] != DHCP_COOKIE {
+    if p[4..8] != xid.to_be_bytes() || p[236..240] != DHCP_COOKIE {
         return None;
     }
     let mut l = Lease {
@@ -1156,6 +1158,7 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
     let Some((ring, bufs)) = rx_init(base) else {
         return false;
     };
+    let xid = crate::rand::next_u64() as u32;
     let mut p = [0u8; 300];
     let mut f = [0u8; 360];
     let mut phase = 0u8; // 0 = need OFFER, 1 = need ACK
@@ -1201,7 +1204,7 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
                                                     .len()],
                                         )))
                             {
-                                if let Some(l) = parse_dhcp(u.payload) {
+                                if let Some(l) = parse_dhcp(u.payload, xid) {
                                     if phase == 0 && l.ty == 2 {
                                         printk(format_args!(
                                             "rustux: dhcp: OFFER \
@@ -1216,6 +1219,7 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
                                         rounds = 0;
                                     } else if phase == 1 && l.ty == 5
                                         && l.ip == offer.ip
+                                        && l.srv == offer.srv
                                     {
                                         printk(format_args!(
                                             "rustux: dhcp: ACK \
@@ -1246,9 +1250,9 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
         rounds += 1;
         if rounds % 4_000_000 == 1 {
             let n = if phase == 0 {
-                build_dhcp(&mut p, mac, 1, None, None)
+                build_dhcp(&mut p, mac, 1, None, None, xid)
             } else {
-                build_dhcp(&mut p, mac, 3, Some(offer.ip), Some(offer.srv))
+                build_dhcp(&mut p, mac, 3, Some(offer.ip), Some(offer.srv), xid)
             };
             let flen = crate::net::build_udp4(
                 &mut f,
@@ -1287,14 +1291,14 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     let our_port: u16 = if role == 0x01 { 49152 } else { SRV_PORT };
     const MSG: &[u8] = b"rustux over tcp";
     // Linux secure_tcp_seq shape: SipHash of the 4-tuple + a
-    // per-boot timestamp under a boot-seeded key — unpredictable
-    // to an off-path observer, unlike a fixed or bare-rdtsc ISN.
+    // timestamp under the per-boot CSPRNG key — unpredictable to
+    // an off-path observer, stable across connections.
     let t = unsafe { core::arch::x86_64::_rdtsc() } as u32;
     let isn = klib::hash::siphash_3u32(
         u32::from_be_bytes(us_ip) ^ u32::from_be_bytes(peer_ip),
         ((our_port as u32) << 16) | SRV_PORT as u32,
         t,
-        ((t as u64) << 32, t.rotate_left(17) as u64),
+        crate::rand::isn_key(),
     ) as u32;
     let Some((ring, bufs)) = rx_init(base) else {
         return;

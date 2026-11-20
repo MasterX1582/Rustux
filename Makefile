@@ -47,6 +47,7 @@ $(ESP_IMG): $(KERNEL)
 run: build
 	$(QEMU) \
 		-machine q35 \
+		-cpu qemu64,+rdrand \
 		-bios $(OVMF) \
 		-drive file=$(ESP_IMG),format=raw,if=ide \
 		-snapshot \
