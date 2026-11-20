@@ -248,3 +248,34 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
   NV-53-1..2 (O(n) re-parse per call — fine at initrd scale;
   synthetic ino/off until a real inode table exists).
 - 4 tasks, zero-leak streak unbroken: frames 18346 -> 18346.
+
+## execve — image replacement + sysret redirect — run-54
+- `kernel/src/syscall.rs`: the user rip now round-trips through a
+  `SAVED_UIP` static — stored at entry, reloaded into rcx before
+  sysretq. A syscall can therefore REDIRECT where the user resumes,
+  which is exactly what exec needs. Canonicality holds because the
+  only writers are the stub (CPU-saved rip) and `exec_return`
+  (elf::parse-bounded entry) — the CVE-2006-0744 class stays dead.
+- `ZERO_CTX`: exec'd images get a fully zeroed GPR file + r11=0x202
+  — Linux ABI, and it keeps the caller's registers out of a fresh
+  image's hands.
+- `sys_execve`: shared getname path-copy, fs_lookup, then
+  elf::parse BEFORE the reset — ENOEXEC on a bad image leaves the
+  task alive (Linux semantics). Post-reset failure can only be
+  allocator exhaustion -> sys_exit(127) kills the task, run() reaps.
+- `kernel/src/user.rs`: `free_user_mappings` split out of `reap`
+  (also clears the PML4 user slots so the space can be reused);
+  `exec()` = free + load_inner + cr3 reload (flush stale user
+  translations — without it the TLB could name freed frames) +
+  exec_return. fds/OFDs survive exec, the Linux way.
+- `kernel/user/exectest.S`: ENOENT returns to the same image (-2),
+  ENOEXEC on motd.txt (-8), then execve("/init") — the boot log
+  shows `exectest: execing /init` immediately followed by the
+  exec'd image's own `hello from ring 3` and its exit(0).
+- cve.now: CVE-2022-49264 (argv==NULL) recorded for the future
+  stack-args rung — argv/envp are accepted but ignored today.
+- Audit run-54 (standard, privilege path): 0 confirmed; RC-54-1..5
+  rejected with reasons; NV-54-1..4 (SAVED_UIP canonicality for
+  future writers — supersedes NV-49-1's redirect surface, argv/
+  envp, cloexec sweep, per-image kernel-state invariant).
+- 5 tasks, zero-leak streak unbroken: frames 18359 -> 18359.
