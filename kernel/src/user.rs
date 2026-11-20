@@ -1101,6 +1101,51 @@ pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
     0
 }
 
+/// newfstatat(dirfd, path, statbuf, flags) -> Linux struct stat
+/// (144 bytes, x86_64 layout) at a user pointer. The cpio archive
+/// is the whole fs: ino is the entry's archive index, mode is
+/// synthesized (S_IFREG|0644, S_IFDIR|0755 for "."), sizes come
+/// from the member header. dirfd/flags are accepted for ABI shape —
+/// a flat archive has no symlinks or per-dirfd namespaces to honor.
+pub fn newfstatat(path: &[u8], statbuf: u64) -> u64 {
+    const STAT_LEN: u64 = 144;
+    if !range_ok_w(statbuf, STAT_LEN) {
+        return EFAULT;
+    }
+    let mut st = [0u64; 18];
+    if path.is_empty() || path == b"." {
+        // The archive root: every member lives directly under it.
+        st[2] = 2; // st_nlink
+        st[3] = 0o40755; // st_mode: S_IFDIR | 0755 (u64 slot holds u32)
+    } else {
+        let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
+            return ENOENT;
+        };
+        let Some((idx, (_, data))) = crate::cpio::entries(arc)
+            .enumerate()
+            .find(|(_, (n, _))| *n == path)
+        else {
+            return ENOENT;
+        };
+        st[1] = idx as u64 + 1; // st_ino
+        st[2] = 1; // st_nlink
+        st[3] = 0o100644; // st_mode: S_IFREG | 0644
+        st[6] = data.len() as u64; // st_size
+        st[8] = (data.len() as u64).div_ceil(512); // st_blocks
+    }
+    st[7] = 4096; // st_blksize
+    // SAFETY: range_ok_w proved statbuf is a writable user range;
+    // st is the 144-byte Linux x86_64 stat layout verbatim.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            st.as_ptr() as *const u8,
+            statbuf as *mut u8,
+            STAT_LEN as usize,
+        )
+    };
+    0
+}
+
 /// open(path, O_RDONLY): "" and "." name the archive root (a Dir
 /// OFD); anything else resolves through cpio::find. ENOENT when
 /// absent, EMFILE when either table is full — deterministic errnos,

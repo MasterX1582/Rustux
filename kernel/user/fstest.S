@@ -219,6 +219,65 @@ _start:
     je 19f
     inc %r15d
 19:
+    # newfstatat(-100, "/motd.txt", buf) -> 0; S_IFREG|0644, ino!=0, size>0
+    mov $-100, %rdi
+    lea path(%rip), %rsi
+    lea -512(%rsp), %rdx
+    xor %r10d, %r10d
+    mov $262, %eax
+    syscall
+    test %rax, %rax
+    je 20f
+    inc %r15d
+20:
+    cmpl $0100644, -512+24(%rsp)   # st_mode @ 24
+    je 21f
+    inc %r15d
+21:
+    cmpq $0, -512+8(%rsp)           # st_ino @ 8
+    jne 22f
+    inc %r15d
+22:
+    cmpq $0, -512+48(%rsp)          # st_size @ 48
+    jg 23f
+    inc %r15d
+23:
+    # newfstatat(-100, "/nope.txt", buf) -> -ENOENT
+    mov $-100, %rdi
+    lea badpath(%rip), %rsi
+    lea -512(%rsp), %rdx
+    xor %r10d, %r10d
+    mov $262, %eax
+    syscall
+    cmp $-2, %rax
+    je 24f
+    inc %r15d
+24:
+    # newfstatat on "." -> S_IFDIR; stat to unmapped buf -> -EFAULT
+    mov $-100, %rdi
+    lea dot(%rip), %rsi
+    lea -512(%rsp), %rdx
+    xor %r10d, %r10d
+    mov $262, %eax
+    syscall
+    test %rax, %rax
+    je 25f
+    inc %r15d
+25:
+    cmpl $040755, -512+24(%rsp)
+    je 26f
+    inc %r15d
+26:
+    mov $-100, %rdi
+    lea path(%rip), %rsi
+    mov $0xdead0000, %rdx           # unmapped -> EFAULT
+    xor %r10d, %r10d
+    mov $262, %eax
+    syscall
+    cmp $-14, %rax
+    je 27f
+    inc %r15d
+27:
     # report + exit(failures)
     mov $1, %eax
     mov $1, %edi
@@ -233,6 +292,8 @@ path:
     .ascii "/motd.txt\0"
 badpath:
     .ascii "/nope.txt\0"
+dot:
+    .ascii ".\0"
 msg:
     .ascii "fstest: fd + initrd-fs checks done\n"
 msg_end:

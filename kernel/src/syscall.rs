@@ -195,6 +195,7 @@ const NR_KILL: u64 = 62;
 const NR_GETPPID: u64 = 110;
 const NR_PIPE2: u64 = 293;
 const NR_GETDENTS: u64 = 217;
+const NR_NEWFSTATAT: u64 = 262;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -247,6 +248,9 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_KILL => user::kill(a1, a2),
         NR_GETPPID => user::getppid(),
         NR_GETDENTS => user::fd_getdents(a1, a2, a3),
+        // newfstatat(dirfd, path, buf, flags): the archive is flat —
+        // dirfd and flags are ABI-shape only.
+        NR_NEWFSTATAT => sys_newfstatat(a2, a3),
         NR_EXECVE => sys_execve(ctx, a1, a2, a3),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
@@ -278,6 +282,18 @@ fn copy_user_path(path: u64, name: &mut [u8; 257]) -> Result<usize, u64> {
         n += 1;
     }
     Ok(n)
+}
+
+/// newfstatat(dirfd, path, statbuf, flags): same getname discipline
+/// as open, then a fixed 144-byte stat write into user space.
+fn sys_newfstatat(path: u64, statbuf: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    user::newfstatat(name, statbuf)
 }
 
 /// open(path, flags, mode): O_RDONLY only, path is a NUL-terminated
