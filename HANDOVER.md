@@ -458,3 +458,33 @@ the task model now supports fork/clone/wait as the next rung.
   yet — needs fault-driven signal frames; reserved vectors still
   sentinel-halt, can't fire in practice; si_addr/cr2 not reported
   to userspace — UART line only; kernel faults halt unconditionally).
+
+
+## per-task FPU/SSE state (commit pending, audit run-60)
+
+- The scheduler's UCtx covered GPRs only: enabling SSE without
+  per-task fx state would leak xmm registers across tasks every
+  timeslice, and not enabling it made any SSE userspace die #NM.
+  Task now carries a 512-byte `FxState`; INIT_FX is captured once
+  after `fninit` at boot and copied into every spawn.
+- cpu::init sets CR0.MP+EM.clear/TS.clear and CR4.OSFXSR+OSXMMEXCPT
+  -- explicit enable rather than inheriting firmware defaults;
+  OSXSAVE/AVX left off (no XSAVE, plain FXSAVE only).
+- Eager switching everywhere: tick fxsave's the preempted task,
+  switch_to fxsave's the outgoing + fxrstor's the incoming,
+  launch/resume_ctx fxrstor the target. fork inherits the parent's
+  live image; exec resets to INIT_FX (matches exec-zeroes-FPU).
+- fputest proves isolation: parent/child hold different 16-byte
+  patterns in xmm0 across ~60k verify iterations each under
+  10ms preemption -- a missing save/restore would fail immediately.
+  parent exit(0), child exit(0), 12 tasks, zero leak.
+- cve.now check: CVE-2018-3665 LazyFP n/a by design (eager is the
+  mitigation); CVE-2006-1056 AMD FOP/FIP/FDP unrestored-after-
+  fxrstor residual -> NV (QEMU/Intel don't exhibit; real AMD would
+  need field scrubbing like Linux's eager-FPU hardening).
+- Audit run-60 (standard): 0 confirmed, 5 rejected, NV-60-1..3
+  (AVX/XSAVE unsupported so a CPUID-advertising guest could #UD on
+  xsave -- matches "no AVX" intent; FxState bytes are kernel-static
+  so hostile user data can never shape an fxrstor pointer;
+  CR4.OSXMMEXCPT enables #XM which fault_die already maps to
+  SIGFPE).
