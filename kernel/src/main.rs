@@ -1020,21 +1020,24 @@ fn main() -> Status {
     // build a process page table (kernel entries copied
     // supervisor-only), drop to ring 3 with user segments, and let the
     // image write+exit through the SYSCALL path — exit unwinds back.
-    let img = initrd
-        .and_then(|(a, l)| {
-            // SAFETY: a..a+l names LOADER_DATA pages we allocated
-            // pre-EBS; they are identity-mapped and still owned.
-            cpio::find(unsafe { core::slice::from_raw_parts(a as *const u8, l) }, b"init")
-        })
-        .map_or_else(
-            || {
-                kprintln!(con, "rustux: initrd: no init entry, using embedded ELF");
-                include_bytes!("../user/hello.elf") as &[u8]
-            },
-            |d| d,
-        );
+    // SAFETY: initrd names LOADER_DATA pages we allocated pre-EBS;
+    // they are identity-mapped and still owned.
+    let arc = initrd.map(|(a, l)| unsafe { core::slice::from_raw_parts(a as *const u8, l) });
+    let img = arc.and_then(|s| cpio::find(s, b"init")).map_or_else(
+        || {
+            kprintln!(con, "rustux: initrd: no init entry, using embedded ELF");
+            include_bytes!("../user/hello.elf") as &[u8]
+        },
+        |d| d,
+    );
     let user_ok = user::run(img);
     kprintln!(con, "rustux: user: ring-3 ELF run {}", if user_ok { "done" } else { "FAILED" });
+    // Second initrd entry: the syscall-boundary selftest — verifies
+    // EBADF/EFAULT/EINVAL/ENOSYS and register preservation from CPL3.
+    if let Some(t) = arc.and_then(|s| cpio::find(s, b"selftest")) {
+        let st_ok = user::run(t);
+        kprintln!(con, "rustux: user: selftest run {}", if st_ok { "done" } else { "FAILED" });
+    }
     kprintln!(
         con,
         "rustux: log: {} records through klib::prb ring, {} dropped",

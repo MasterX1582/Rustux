@@ -40,9 +40,21 @@ syscall_entry:
     mov qword ptr [rip + USER_RSP], rsp
     lea rsp, [rip + SYS_STACK]
     add rsp, 8192 - 8
+    // Linux ABI: syscall may clobber only rax (ret), rcx and r11 —
+    // every other user register must come back intact. The Rust
+    // handler runs under the Windows x64 convention, which lets it
+    // trash rdx/rsi/r8/r9/r10, so we save the full set it could
+    // touch. rbx/rbp/r12-r15 are callee-saved under Windows and the
+    // handler preserves them for free.
     push rcx
     push r11
     push rdi
+    push rsi
+    push rdx
+    push r8
+    push r9
+    push r10
+    sub rsp, 8                 // realign rsp to 16 for the call
     // Marshal the Linux syscall ABI (nr=rax, args rdi/rsi/rdx) into
     // the Windows x64 call this kernel uses: rcx,rdx,r8,r9.
     mov r9, rdx
@@ -50,6 +62,12 @@ syscall_entry:
     mov rdx, rdi
     mov rcx, rax
     call handle_syscall
+    add rsp, 8
+    pop r10
+    pop r9
+    pop r8
+    pop rdx
+    pop rsi
     pop rdi
     pop r11
     pop rcx
