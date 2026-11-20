@@ -566,7 +566,10 @@ pub struct Task {
 /// fds name the same descriptions — same offsets, same refs —
 /// exactly like Linux's files_struct sharing of struct file.
 static mut OFDS: [Option<OpenFile>; MAX_OFDS] = [const { None }; MAX_OFDS];
-const MAX_OFDS: usize = 64;
+/// The shared open-file-description table. 32 tasks hold 3 std OFDs
+/// each (96 worst case) before a single pipe/socket exists — 64 was
+/// a real transient-ENOMEM under scheduling-dependent occupancy.
+const MAX_OFDS: usize = 128;
 
 /// Process-id allocator — monotonically increasing, never reused.
 static mut NEXT_PID: u64 = 0;
