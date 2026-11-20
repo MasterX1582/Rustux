@@ -2,7 +2,7 @@
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:** `c98eb55 net: IPv4/ICMP wire layer + e1000 ping round-trip` — `kernel/src/net.rs` (csum16, validated IPv4/ICMP parsers, echo-request builder; fragments dropped by design) + ARP reply now seeds GW_MAC/GW_IP cache + `ping_selftest` (real `ping reply 10.0.2.2 seq=1` through our rings). Prior: `f6787a2` RX field validation + `docs/cve-matrix.md` retroactive cve.now sweep (all ported units), `cf49beb` MSI-X vec 0xf3. On top of Rustux rename (`d60118f`), kmalloc/slab heap (`8ab0e02`), LAPIC timer, GDT/IDT (`f26b2e4`), page tables + buddy (`e8946f8`/`4a48db4`). Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo: `https://github.com/MasterX1582/Rustux`.
+**Last commit:**  sched: preemptive round-robin — UCtx context switch via timer IRQ. Prior:  execve,  its docs.
 
 **Naming:** the project/repo brand is Rustux; on-disk directory names may still be `linux-rust` (Windows checkout `C:\Users\Davy\Documents\GitHub\linux-rust`, audit artifact dir `security-audit-skill/linux-rust` — rename at leisure; git does not care). The kernel's eventual runtime identity (`uname` etc.) is a separate Linux-compatibility decision, independent of the project name.
 
@@ -279,3 +279,40 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
   future writers — supersedes NV-49-1's redirect surface, argv/
   envp, cloexec sweep, per-image kernel-state invariant).
 - 5 tasks, zero-leak streak unbroken: frames 18359 -> 18359.
+
+## Milestone: preemptive round-robin scheduler (run-55)
+
+The biggest single architectural step since ring-3: tasks no longer
+run to completion — the LAPIC timer preempts them.
+
+- `UCtx` (15 GPRs + iret frame) is the unit of scheduling. The
+  `sched_dispatch` IRQ path for vector 0xf0 pushes the entire
+  register file, `user::tick` snapshots it into the current task's
+  ctx and round-robin picks the next Runnable task; `sched_iret`
+  (cr3 + rsp=ctx + pops + iretq) is the one resume for launches,
+  preemptions, and exits. Fresh tasks get a fabricated ctx
+  (`rip=entry`, cs=0x33, ss=0x2b, rflags=0x202).
+- `TASKS[16]` + `CUR_I` replace singleton `CUR`; `TaskState` is just
+  Runnable|Exited. `pick_next` reaps zombies (never the running
+  task — its kstack is underfoot) before scanning round-robin.
+- `sys_exit` now switches task-to-task directly (dead kstack
+  abandoned, reaped later); the last exit unwinds to the kernel
+  frame `sched_launch` saved — same contract as `user_terminate`.
+- Preemption discipline: `cs&3==0` frames only tick — syscall
+  context is non-preemptible (IF masked by SFMASK end-to-end) and
+  kernel context likewise — the CVE-2024-58090 rule by design.
+- `log::drain_task()` — main is parked inside `sched_launch` for
+  the entire task phase, so user output now flushes from syscall
+  context instead of being lost to ring wrap.
+- Boot proof: 7 concurrent tasks; log shows tick switches mid-run
+  (exectest preempted inside 'execing /init', resumed to print the
+  exec'd image), a `tick 6->0` round-robin wrap, ~160 spinA<->spinB
+  transitions interleaving 'a'/'b' output; all exit(0);
+  frames 18354 -> 18354 (zero leak).
+- Audit run-55 (standard): 0 confirmed, 6 rejected candidates,
+  NV-55-1..4 (FPU/SSE not in UCtx — required before real binaries;
+  per-syscall statics are transaction-local only while syscall ctx
+  is non-preemptible; CUR_KSTACK same; UART flood bound).
+
+This closes NV-50-2 (the singleton-statics scheduling blocker) —
+the task model now supports fork/clone/wait as the next rung.
