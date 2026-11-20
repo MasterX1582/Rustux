@@ -462,6 +462,19 @@ pub fn init() {
         // Load the task register so the IST mechanism is armed; #DF gates
         // reference IST1 below.
         core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nostack, preserves_flags));
+
+        // FPU/SSE on: CR0 clear EM|TS (no emulation, no task-switch
+        // traps), set MP; CR4.OSFXSR|OSXMMEXCPT so fxsave/SSE insn
+        // work at CPL3. The UEFI firmware usually has these set —
+        // set them explicitly instead of trusting that.
+        let mut cr0: u64;
+        core::arch::asm!("mov {}, cr0", out(reg) cr0);
+        cr0 = (cr0 & !0xc) | 0x2;
+        core::arch::asm!("mov cr0, {}", in(reg) cr0);
+        let mut cr4: u64;
+        core::arch::asm!("mov {}, cr4", out(reg) cr4);
+        cr4 |= 0x600;
+        core::arch::asm!("mov cr4, {}", in(reg) cr4);
     }
 
     let gates: [(usize, u64, u8); 26] = [

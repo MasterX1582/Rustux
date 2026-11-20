@@ -1028,6 +1028,9 @@ fn main() -> Status {
     let arc = initrd.map(|(a, l)| unsafe { core::slice::from_raw_parts(a as *const u8, l) });
     let before = kalloc::free_frames();
     let mut queued = 0u32;
+    // Capture the fninit FPU image tasks start from — must run
+    // before the first spawn copies INIT_FX into its Task.
+    user::fpu_init();
     if let Some(arc) = arc {
         // The archive doubles as the read-only root filesystem — fd
         // ops resolve paths against it for the kernel's lifetime.

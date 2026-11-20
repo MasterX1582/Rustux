@@ -169,6 +169,43 @@ struct Pipe {
 
 static mut PIPES: [Option<Pipe>; MAX_PIPES] = [const { None }; MAX_PIPES];
 
+/// The 512-byte fxsave64 image — per-task FPU/SSE state. 16-aligned
+/// per the instruction's contract. Every context switch does
+/// fxsave(old)/fxrstor(new) so SSE registers stay per-task: without
+/// this, one task's xmm writes leak into the next task (NV-55-1).
+#[repr(align(16))]
+#[derive(Clone, Copy)]
+struct FxState([u8; 512]);
+
+/// The architectural fninit+fxsave capture taken once at boot —
+/// every fresh task and every exec'd image starts from it.
+static mut INIT_FX: FxState = FxState([0; 512]);
+
+/// Capture INIT_FX and arm SSE. Called once before the first task
+/// spawns; cpu::init already set CR0.MP + CR4.OSFXSR/OSXMMEXCPT.
+pub fn fpu_init() {
+    unsafe {
+        core::arch::asm!("fninit");
+        core::arch::asm!(
+            "fxsave64 [{}]",
+            in(reg) (*core::ptr::addr_of_mut!(INIT_FX)).0.as_mut_ptr()
+        );
+    }
+}
+
+/// Save the live FPU/SSE registers into the task's buffer.
+fn fxsave(t: &mut Task) {
+    // SAFETY: t.fx is 16-aligned, 512 bytes — the fxsave64 contract.
+    unsafe { core::arch::asm!("fxsave64 [{}]", in(reg) t.fx.0.as_mut_ptr()) }
+}
+
+/// Restore a task's FPU/SSE registers — done on every resume so the
+/// task sees only its own state.
+fn fxrstor(fx: &FxState) {
+    // SAFETY: fx is a valid 16-aligned 512-byte fxsave image.
+    unsafe { core::arch::asm!("fxrstor64 [{}]", in(reg) fx.0.as_ptr()) }
+}
+
 // ---- signals ----
 
 const SIG_DFL: u64 = 0;
@@ -444,6 +481,9 @@ pub struct Task {
     /// Per-signal disposition: 0=SIG_DFL, 1=SIG_IGN, else a user VA
     /// handler. SIGKILL/SIGSTOP can't be overridden (EINVAL).
     handlers: [u64; 31],
+    /// Per-task FPU/SSE state -- fxsave'd on every way out,
+    /// fxrstor'd on every resume so xmm state never crosses tasks.
+    fx: FxState,
 }
 
 /// Max open file descriptions system-wide — a hard bound so fd
@@ -722,6 +762,8 @@ fn load(img: &[u8]) -> Option<Task> {
         wait_len: 0,
         pending: 0,
         handlers: [0; 31],
+        // SAFETY: read of the init-time capture.
+        fx: unsafe { *core::ptr::addr_of!(INIT_FX) },
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
     // global OFD, like separate opens of /dev/console.
@@ -1408,6 +1450,8 @@ pub fn exec(img: &[u8], ctx: &mut UCtx) -> bool {
             *h = SIG_DFL;
         }
     }
+    // SAFETY: read of the init-time capture -- exec resets FPU too.
+    t.fx = unsafe { *core::ptr::addr_of!(INIT_FX) };
     *ctx = UCtx::launch(t.entry, t.stack_top);
     true
 }
@@ -1487,6 +1531,7 @@ pub fn launch() {
     cpu::init_syscall(syscall::entry_addr());
     let (ctx, pml4, kst) = {
         let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
+        fxrstor(&t.fx);
         (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
     };
     syscall::set_kstack(kst);
@@ -1496,9 +1541,16 @@ pub fn launch() {
 /// Resume the chosen task: set its kstack for syscalls and iret
 /// into its saved ctx. Never returns to the caller's context.
 fn switch_to(n: usize) -> ! {
+    // The outgoing task's FPU state is live in the registers --
+    // save it before restoring n's (a dead task's save is harmless).
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if let Some(t) = unsafe { (*core::ptr::addr_of_mut!(TASKS))[cur].as_mut() } {
+        fxsave(t);
+    }
     unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
     let (ctx, pml4, kst) = {
         let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
+        fxrstor(&t.fx);
         (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
     };
     syscall::set_kstack(kst);
@@ -1656,9 +1708,11 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
     if cur == usize::MAX {
         return img;
     }
-    // Snapshot the preempted task for a later resume.
+    // Snapshot the preempted task for a later resume -- GPRs into
+    // ctx, the live FPU/SSE registers into its fx buffer.
     if let Some(t) = unsafe { (*core::ptr::addr_of_mut!(TASKS))[cur].as_mut() } {
         t.ctx = *img;
+        fxsave(t);
     }
     deliver_for(cur);
     let Some(n) = pick_ready() else {
@@ -1806,6 +1860,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         // the pending set does not.
         pending: 0,
         handlers: p.handlers,
+        fx: p.fx,
     };
     // Either failure frees the (possibly partial) user page-table
     // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs
