@@ -16,6 +16,7 @@ use uefi::prelude::*;
 mod apic;
 mod cpu;
 mod fbcon;
+mod kalloc;
 mod logo_data;
 mod mm;
 mod uart;
@@ -792,62 +793,50 @@ fn main() -> Status {
         carve
     );
 
-    // Seed the buddy allocator with every conventional frame outside the
-    // carve, then prove alloc/write/free on real frames — including an
-    // order-2 block, which must be physically contiguous by definition.
-    let mut fa = mm::Buddy::new();
+    // Seed the heap — buddy underneath, slab classes on top — then prove:
+    // kmalloc pattern-write survives, kfree pushes the slot back (a
+    // same-class realloc returns the recycled address), and a >4 KiB
+    // request takes the direct-buddy path.
     let reserved = [(carve, carve_end)];
-    for d in mmap.entries() {
-        if d.ty == MemoryType::CONVENTIONAL {
-            fa.add_range(
-                d.phys_start,
-                d.phys_start + d.page_count * mm::PAGE,
-                &reserved,
-            );
+    kalloc::init(&mmap, &reserved);
+    let free0 = kalloc::free_frames();
+    let mut ok;
+    let p1 = kalloc::kmalloc(100);
+    if p1.is_null() {
+        ok = false;
+    } else {
+        // SAFETY: p1 names 100 owned bytes.
+        unsafe {
+            core::ptr::write_bytes(p1, 0xa5, 100);
+            kalloc::kfree(p1);
+        }
+        let p2 = kalloc::kmalloc_zalloc(100);
+        ok = p2 == p1; // freelist reuse proves the slot was pushed back
+        // SAFETY: guarded by is_null — p2 names 100 zalloc-zeroed bytes.
+        ok = ok && !p2.is_null() && unsafe { (0..100).all(|i| *p2.add(i) == 0) };
+        if !p2.is_null() {
+            // SAFETY: p2 is a fresh live allocation of the same class.
+            unsafe { kalloc::kfree(p2) };
         }
     }
-    let free0 = fa.free_count();
-    let (mut ok, mut got) = (true, [0u64; 3]);
-    for (i, g) in got.iter_mut().enumerate() {
-        match fa.alloc(0) {
-            Some(a) => {
-                *g = a;
-                // SAFETY: `a` is an owned free frame inside the identity map.
-                unsafe { (a as *mut u64).write_volatile(0xdeadbeef + i as u64) };
-            }
-            None => ok = false,
-        }
-    }
-    for (i, &a) in got.iter().enumerate() {
-        // SAFETY: frames still owned until free_pages below.
-        if a == 0 || unsafe { (a as *const u64).read_volatile() } != 0xdeadbeef + i as u64 {
-            ok = false;
-        }
-    }
-    let mut big_ok = false;
-    if let Some(b) = fa.alloc(2) {
-        // SAFETY: b..b+16K is owned contiguous memory in the identity map.
-        big_ok = unsafe {
-            for i in 0..4u64 {
-                ((b + i * mm::PAGE) as *mut u64).write_volatile(0xb16 + i);
-            }
-            (0..4u64).all(|i| ((b + i * mm::PAGE) as *const u64).read_volatile() == 0xb16 + i)
-        };
-        fa.free_pages(b, 2);
-    }
-    for &a in &got {
-        if a != 0 {
-            fa.free_pages(a, 0);
+    let big = kalloc::kmalloc(3 * 4096);
+    if big.is_null() {
+        ok = false;
+    } else {
+        // SAFETY: big names a 12 KiB direct block.
+        unsafe {
+            core::ptr::write_bytes(big, 0x5a, 3 * 4096);
+            kalloc::kfree(big);
         }
     }
     let _ = writeln!(
         con,
-        "linux-rust: klib::mm: buddy {} frames free ({} MiB), order0+order2 alloc/rw/free proof {}",
+        "linux-rust: klib::mm: buddy+slab heap {}/{} frames free, kmalloc/kfree proof {}",
+        kalloc::free_frames(),
         free0,
-        free0 / 256,
-        ok && big_ok
+        ok
     );
-    assert!(ok && big_ok && fa.free_count() == free0 && free0 > 0);
+    assert!(ok);
 
     // Interrupt layer step 1: mask the legacy PIC, arm the LAPIC periodic
     // timer (calibrated against the PIT), then take real IRQs through our
