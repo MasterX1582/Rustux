@@ -311,3 +311,28 @@ submitted, so those semantics must not be claimed or invented. Gate:
 any future IPv8 work re-checks the draft revision + cve.now first.
 IPv6 remains the compatibility-relevant roadmap item; IPv8 is a
 reference implementation, not a Linux-parity feature.
+
+## Tribler "IPv8" — different protocol, watch list (userspace item)
+
+Name collision to keep straight: Tribler's IPv8 (py-ipv8,
+ipv8-rust-tunnels, kotlin-ipv8 on GitHub) is a P2P *overlay*
+library — DiscoveryCommunity peer discovery, TunnelCommunity
+multi-hop onion circuits (Tribler's anonymity layer), TrustChain
+bandwidth accounting. It runs over ordinary UDP/IPv4 in userspace
+and shares nothing but the name with draft-thain-ipv8 (our L3
+EtherType-0x8080 implementation).
+
+Value: a censorship-resistant overlay is a plausible Rustux
+differentiator *in userspace* — the kernel needs no special support
+beyond a UDP socket API. Path: once userspace + sockets exist, run
+the reference implementations as apps (GPL-3.0 userspace on a
+GPL-2.0 kernel is fine — the syscall boundary separates licenses).
+A kernel-native tunnel data-plane could come later if profiling
+justifies it; the control plane (circuits, onion crypto, rendezvous)
+stays in userspace regardless.
+
+License caution: ipv8-rust-tunnels is GPL-3.0 and py-ipv8 is
+LGPL-3.0 — do NOT port or transliterate their code into this tree;
+GPL-3.0 is incompatible with our GPL-2.0-only project. A native
+implementation, if ever wanted, must be written from the protocol
+spec, not from their sources.
