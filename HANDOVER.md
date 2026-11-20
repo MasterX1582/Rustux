@@ -316,3 +316,37 @@ run to completion — the LAPIC timer preempts them.
 
 This closes NV-50-2 (the singleton-statics scheduling blocker) —
 the task model now supports fork/clone/wait as the next rung.
+
+## fork + wait4 + getpid (commit pending, audit run-56)
+
+- The syscall entry stub now builds a COMPLETE `UCtx` on the kernel
+  stack (15 GPRs + iret frame) and calls `handle_syscall(&mut UCtx)`;
+  the return value goes back through `ctx.rax`. This retires
+  `SAVED_UIP`/`ZERO_CTX` and the partial-save scheme — every syscall
+  that redirects a task now does it by rewriting one struct:
+  exec (`*ctx = UCtx::launch`), fork (copy + `rax=0`), wait4 (block,
+  `rax=pid` on wake).
+- `fork()`: new task slot, fresh page-table tree with a verbatim
+  deep copy of the parent's user half (kernel slots shared by
+  reference), `fds` copied but pointing at the SAME global OFDs —
+  `OFDS[64]` replaces the per-task OFD table so offsets/refs are
+  shared exactly like Linux `struct file`. Failure paths free the
+  partial tree without touching OFD refs.
+- `wait4(pid, status, flags)`: collects a zombie (status =
+  `exit_code<<8` via the pre-validated user pointer), ECHILD when no
+  matching children exist, otherwise `Blocked` — the exiting child's
+  `task_exit` writes the status through `translate()` into the
+  parent's (inactive) tables, sets the parent's `ctx.rax = pid`,
+  and marks it Runnable. Orphans get ppid=0 and reap immediately.
+- `TaskState` gains `Blocked`; `pick_next` reaps only zombies whose
+  parent can't collect them; `block_switch` idles on `sti;hlt;cli`
+  when nothing is runnable.
+- Boot proof: forktest child prints, exits 42; parent collects
+  `status=0x2a00`, shared-offset read returns 'T' (child's read
+  advanced the joint OFD), second wait4 -> ECHILD, exit(0).
+  8 tasks, frames before == after (zero leak).
+- Audit run-56 (standard): 0 confirmed, 7 rejected, NV-56-1..6
+  (eager copy has no COW; clone flags + WNOHANG + O_CLOEXEC
+  unimplemented; hlt-idle instead of wait queues; unbounded pid
+  counter; FPU ctx still absent — carried; all-blocked deadlock
+  possible without signals).
