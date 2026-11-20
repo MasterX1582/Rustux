@@ -350,3 +350,30 @@ the task model now supports fork/clone/wait as the next rung.
   unimplemented; hlt-idle instead of wait queues; unbounded pid
   counter; FPU ctx still absent — carried; all-blocked deadlock
   possible without signals).
+
+## pipes (commit pending, audit run-57)
+
+- `FdKind::Pipe{id,write}` + `PIPES[8]`: each pipe is one kernel
+  frame as a monotonic head/tail ring. `pipe(22)`/`pipe2(293)`
+  mint two OFDs — the ends are dup'able/fork-sharable like files,
+  with endpoint counts tracked per-OFD (dup shares, fork bumps).
+- **Blocking io generalizes the wait4 mechanism**: `wait_on`
+  (WaitOn enum — Child/PipeRead/PipeWrite) + `wait_ptr/len` hold
+  the sleeping syscall's user buffer; the WAKER does per-byte
+  `translate()` through the sleeper's page tables — data crosses
+  between address spaces while only the waker's is mapped — and
+  deposits the count in `ctx.rax`. `pipe_wake` settles both
+  directions monotonically.
+- Endpoint semantics: writer count 0 -> blocked readers wake EOF(0);
+  reader count 0 -> blocked writers and new writes get EPIPE(-32);
+  <=PIPE_BUF writes are atomic (block until the whole len fits).
+- `fd_read`/`fd_write` take the syscall ctx now; `sys_write`
+  delegates non-console fds. `ofd_release` owns endpoint teardown
+  for all ref drops (close/reap/dup2).
+- Boot proof: `pipetest` — pipe2 EINVAL flags; parent BLOCKS on
+  read, child writes "hello" through its own address space into the
+  parent's (child exit(7) visible first in the log), wait4 0x700,
+  EOF after writer close, EPIPE with no readers; exit(0), zero leak.
+- Audit run-57 (standard): 0 confirmed, 9 rejected, NV-57-1..5
+  (O_NONBLOCK/O_CLOEXEC unimplemented, >4KiB writes, SIGPIPE,
+  per-byte translate perf, no readiness API).
