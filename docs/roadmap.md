@@ -262,10 +262,17 @@ wire parser):
 - **Bounds-check against the actual slice**, then read via `get()` —
   never raw-pointer offset math on untrusted data. The e1000 RX path
   already follows this (`len >= 42` gate before ARP field reads).
-- **Check CVE history per ported unit.** When a `ports/<unit>` target
-  has known upstream fixes (integer-overflow bounds checks, UAF,
-  refcount bugs), the port must adopt the *fixed* semantics and the
-  audit must note the divergence-from-C as intentional.
+- **Check CVE history per ported unit — via cve.now, every time.**
+  Before a `ports/<unit>` port or a kernel feature lands, look up its
+  upstream source file/subsystem on https://cve.now (search the CVE
+  list for the Linux component, e.g. `?q=Linux+kernel+ceph` or the
+  file's subsystem name; follow links to the kernel.org fix commits).
+  If the unit has known fixes (integer-overflow bounds checks, UAF,
+  refcount bugs, missing validation), the port must adopt the *fixed*
+  semantics — never the vulnerable upstream revision — and the scoped
+  audit report must note the divergence-from-C as intentional, citing
+  the CVE id. If cve.now is unreachable, record the lookup as
+  `needs_validation` in the audit rather than skipping it.
 - **unsafe blocks are the blind spot.** The compiler can't help inside
   them; DMA/MMU-facing code gets the standard audit profile, not quick.
 - **Rust buys us the memory-safety half of the CVE landscape for free;
