@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 source ~/.cargo/env
-cd /mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-crc
+cd ""/usr/bin"
 ./check-sources.sh
 for d in crc4-rs wrappers-rs; do
   echo "== $d =="

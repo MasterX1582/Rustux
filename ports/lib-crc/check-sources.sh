@@ -2,7 +2,7 @@
 # Verify the harness copies are byte-identical to the Linux reference tree.
 set -u
 fail=0
-L=/mnt/c/Users/dev/Documents/GitHub/linux
+L=${LINUX_REF:-$HOME/linux-ref}
 cd "$(dirname "$0")"
 for f in crc-ccitt.c crc-itu-t.c crc16.c crc32-main.c crc4.c crc64-main.c \
          crc7.c crc8.c crc-t10dif-main.c; do

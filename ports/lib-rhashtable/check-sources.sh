@@ -2,7 +2,7 @@
 # Verify the harness copies are byte-identical to the Linux reference tree.
 set -u
 fail=0
-L=/mnt/c/Users/dev/Documents/GitHub/linux
+L=${LINUX_REF:-$HOME/linux-ref}
 cd "$(dirname "$0")"
 for pair in "rhashtable.c:lib/rhashtable.c" \
             "bucket_locks.c:lib/bucket_locks.c" \

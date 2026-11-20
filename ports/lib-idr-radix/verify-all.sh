@@ -7,7 +7,7 @@
 #   4. the rust-anything gate is green
 set -euo pipefail
 source ~/.cargo/env
-cd /mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-idr-radix
+cd ""/usr/bin"
 ./check-sources.sh
 gcc -O2 -w -I. -o /tmp/selftest-idr selftest.c wrappers.c xarray.c radix-tree.c
 /tmp/selftest-idr | tail -1

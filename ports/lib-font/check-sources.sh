@@ -1,6 +1,6 @@
 #!/bin/bash
 # verify C copies are byte-identical to the reference tree
-L=/mnt/c/Users/dev/Documents/GitHub/linux
+L=${LINUX_REF:-$HOME/linux-ref}
 D=$(dirname "$0")
 fail=0
 for f in lib/fonts/font_8x16.c lib/fonts/font.h; do

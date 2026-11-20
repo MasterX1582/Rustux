@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-KUNIT = "/mnt/c/Users/dev/Documents/GitHub/linux/lib/crypto/tests/siphash_kunit.c"
+KUNIT = os.path.join(os.environ.get("LINUX_REF", os.path.expanduser("~/linux-ref")), "lib/crypto/tests/siphash_kunit.c")
 K0, K1 = 0x0706050403020100, 0x0F0E0D0C0B0A0908
 
 

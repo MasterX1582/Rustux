@@ -2,18 +2,18 @@
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:** `0149328 ports/lib-siphash: source-faithful port, gate green` on top of `bf56d6d` (wave-1 tail: idr/radix/maple/percpu/prb). Suite: **265 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only.
+**Last commit:** `ea5cfcf kernel: ExitBootServices + UEFI memory map` — GOP framebuffer console + ExitBootServices landed on top of all four wave-2 port adoptions. Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only.
 
 ## Environments
 
 | host | path | role |
 |------|------|------|
-| Windows/WSL | `C:\Users\dev\Documents\GitHub\linux-rust` (`/mnt/c/...` in WSL) | primary repo, port jobs run here via `wsl bash -lc` |
-| Windows/WSL | `/mnt/c/Users/dev/Documents/GitHub/linux` | full Linux reference tree (torvalds clone) |
-| Zorin VM (10.0.0.115, MCP `LinuxMCP-VM-3`) | `/home/dev/linux-rust` | git checkout — sync via `git bundle`/fetch; native build+test+boot host |
-| Zorin VM | `/home/dev/linux-ref` | scoped ref tree (lib/, include/, arch/x86/include/, Kbuild/Kconfig/Makefile); symlinked at `/mnt/c/Users/dev/Documents/GitHub/linux` so `check-sources.sh` works unmodified |
-| Zorin VM | `/home/dev/recv/recv.py` | HTTP PUT server on `:9876` — `curl -T file http://10.0.0.115:9876/name` |
-| Zorin VM | `~/linux-rust/test/zorin/fixtures/` | Zorin 18.1 ISO fixtures: vmlinuz 6.17, initrd (4-layer: AMD ucode → Intel ucode → modules/firmware cpio → gzip'd casper userspace), grub.cfg; dissection docs in `test/zorin/README.md` |
+| Primary host | `$REPO` (this checkout) | primary repo, port jobs run here |
+| Primary host | `$LINUX_REF` | Linux reference tree (torvalds clone or scoped subset); `check-sources.sh` reads `${LINUX_REF:-$HOME/linux-ref}` |
+| Linux dev VM | `~/linux-rust` | git checkout — sync via `git bundle`/fetch; native build+test+boot host |
+| Linux dev VM | `~/linux-ref` | scoped ref tree (lib/, include/, arch/x86/include/, Kbuild/Kconfig/Makefile) — the `$LINUX_REF` default |
+| Linux dev VM | `~/recv/recv.py` | HTTP PUT receiver on `:9876` — `curl -T file http://<VM_IP>:9876/name` |
+| Linux dev VM | `~/linux-rust/test/zorin/fixtures/` | Zorin 18.1 ISO fixtures: vmlinuz 6.17, initrd (4-layer: AMD ucode → Intel ucode → modules/firmware cpio → gzip'd casper userspace), grub.cfg; dissection docs in `test/zorin/README.md` |
 
 VM toolchain: gcc 13.3, clang 18.1, QEMU 8.2.2+OVMF, mtools, cargo 1.100 (`~/.cargo/bin`), rust-anything 2.0.0, passwordless sudo. Verify on VM: `cargo test -p klib` and `make run` (boot → exit 33 = PASS). NOTE: cargo/rustup need `export PATH=$HOME/.cargo/bin:$PATH`.
 
@@ -39,7 +39,7 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 
 - **Generators are authoritative.** `extract_*.py` at repo root regenerate `klib/src/*.rs` — hardening fixes go in the extractor, never edit generated files directly. `.replace()` calls are assert-guarded (drift can't silently no-op).
 - **Adversarial hardening patterns** (apply to new ports): `wrapping_*` where C wraps; arena-index routing to scratch nodes (`nat`/`nmat`, `nidx`/`spare`) for crafted pointers; iteration caps (`MAS_ITER_LIMIT`-style `__lim`) on pointer-chasing/retry loops; clamp table/slot/mark/type indexes; bounds on copy/zero helpers; widen-then-multiply for `batch*ncpu`-style arithmetic.
-- **Security mandate (standing rule):** every executable-code change → scoped `security-audit` run (quick profile; standard for crypto/auth/etc.), artifacts to `C:\Users\dev\security-audit-skill\linux-rust\run-N\` (next free N; run-22 closed — runs 18-22 covered the wave-2 adoptions, fbcon, and ExitBootServices). Fix confirmed findings or record as needs_validation before commit.
+- **Security mandate (standing rule):** every executable-code change → scoped `security-audit` run (quick profile; standard for crypto/auth/etc.), artifacts to `<AUDIT_DIR>/linux-rust/run-N\` (outside the target repo) (next free N; run-22 closed — runs 18-22 covered the wave-2 adoptions, fbcon, and ExitBootServices). Fix confirmed findings or record as needs_validation before commit.
 - **Commits:** signed `Generated with [Devin]` + co-author trailer. One commit per adoption wave.
 - **Delegation model:** port jobs run as parallel background subagents, one `ports/` dir each, no shared-file edits. Adoption/wiring/boot/audit/commit stay serial. Rate limits killed 3 of 4 jobs this round — resume by re-dispatching with the resume-step above; their on-disk progress survives.
 

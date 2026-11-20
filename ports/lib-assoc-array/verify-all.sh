@@ -7,7 +7,7 @@
 #   4. the rust-anything gate is green
 set -euo pipefail
 source ~/.cargo/env
-cd /mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-assoc-array
+cd ""/usr/bin"
 ./check-sources.sh
 gcc -O2 -w -I. -o /tmp/selftest-assoc-array selftest.c wrappers.c assoc_array.c
 /tmp/selftest-assoc-array | tail -1

@@ -2,7 +2,7 @@
 # Verify the harness copies are byte-identical to the Linux reference tree.
 set -u
 fail=0
-L=/mnt/c/Users/dev/Documents/GitHub/linux
+L=${LINUX_REF:-$HOME/linux-ref}
 cd "$(dirname "$0")"
 for f in generic-radix-tree.c interval_tree.c rbtree.c; do
   if diff -q "$f" "$L/lib/$f" > /dev/null; then

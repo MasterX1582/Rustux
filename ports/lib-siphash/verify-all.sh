@@ -7,7 +7,7 @@
 #   4. the rust-anything gate is green
 set -euo pipefail
 source ~/.cargo/env
-cd /mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-siphash
+cd ""/usr/bin"
 ./check-sources.sh
 gcc -O2 -w -I. -o /tmp/selftest-siphash selftest.c siphash.c
 /tmp/selftest-siphash | tail -1

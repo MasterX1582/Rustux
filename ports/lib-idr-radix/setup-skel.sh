@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
-cd /mnt/c/Users/dev/Documents/GitHub/linux-rust/ports
+cd "$(dirname "$0")/.."
 mkdir -p lib-idr-radix/linux/sched lib-idr-radix/rust
-L=/mnt/c/Users/dev/Documents/GitHub/linux
+L=${LINUX_REF:-$HOME/linux-ref}
 cp "$L/lib/idr.c" lib-idr-radix/idr.c
 cp "$L/lib/radix-tree.c" lib-idr-radix/radix-tree.c
 cp "$L/lib/radix-tree.h" lib-idr-radix/radix-tree.h

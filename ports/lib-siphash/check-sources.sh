@@ -4,7 +4,7 @@
 # there (lib/siphash.c does not exist).
 set -u
 fail=0
-L=/mnt/c/Users/dev/Documents/GitHub/linux
+L=${LINUX_REF:-$HOME/linux-ref}
 cd "$(dirname "$0")"
 check() {
   if diff -q "$1" "$L/$2" > /dev/null 2>&1; then

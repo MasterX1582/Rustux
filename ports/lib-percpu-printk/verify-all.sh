@@ -3,7 +3,7 @@
 # differential replay and the rust-anything gate.
 set -u
 source ~/.cargo/env
-cd /mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-percpu-printk
+cd ""/usr/bin"
 fail=0
 
 echo "=== 1/5 source identity ==="

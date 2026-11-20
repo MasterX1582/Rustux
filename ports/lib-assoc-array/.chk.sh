@@ -1,7 +1,7 @@
 #!/bin/bash
 # scratch coverage check (not part of the package)
 cd /tmp
-P=/mnt/c/Users/dev/Documents/GitHub/linux-rust/ports/lib-assoc-array
+P="$(cd "$(dirname "$0")" && pwd)"
 for s in 42 1 3 1000 deadbeef; do
   cat > aat_$s.c <<EOC
 #include <stdio.h>

@@ -1,4 +1,4 @@
-$dst = 'C:\Users\dev\Documents\GitHub\linux-rust\test\zorin\fixtures'
+$dst = Join-Path $PSScriptRoot 'fixtures'
 New-Item -ItemType Directory -Force -Path $dst | Out-Null
 Copy-Item 'E:\casper\vmlinuz' "$dst\vmlinuz"
 Copy-Item 'E:\casper\initrd.zstd' "$dst\initrd.zstd"

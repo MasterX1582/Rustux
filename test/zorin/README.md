@@ -12,7 +12,7 @@ a real distribution instead of synthetic harnesses.
 | `fixtures/initrd.zstd` | Ubuntu-style initramfs — early microcode cpio (`070701`) prefix + compressed initramfs (the real payload starts after the first archive) | ISO `casper/initrd.zstd` |
 | `fixtures/grub.cfg` | The real boot entry — kernel cmdline (`maybe-ubiquity quiet splash`) and paths | ISO `boot/grub/grub.cfg` |
 
-The ISO itself (`D:\Downloads\ZorinOS\Zorin OS 18.1 Pro.iso`, 7.9 GB) stays on
+The ISO itself (`Zorin OS 18.1 Pro.iso`, 7.9 GB) stays on
 the host; only the boot assets are checked out here (fixtures are gitignored
 — they're ~99 MB of redistributable distro files).
 
@@ -21,7 +21,7 @@ demand at later milestones.
 
 ## Zorin dev VM
 
-`LinuxMCP-VM-3` (10.0.0.115) is a live Zorin OS 18.1 install — kernel
+The dev VM is a live Zorin OS 18.1 install — kernel
 `7.0.0-43-generic` after updates — and doubles as:
 
 - a development/test host for `klib` + `kernel/` (cargo, qemu via
