@@ -28,6 +28,12 @@ const TDBAH: usize = 0x3804;
 const TDLEN: usize = 0x3808;
 const TDH: usize = 0x3810;
 const TDT: usize = 0x3818;
+const RCTL: usize = 0x0100;
+const RDBAL: usize = 0x2800;
+const RDBAH: usize = 0x2804;
+const RDLEN: usize = 0x2808;
+const RDH: usize = 0x2810;
+const RDT: usize = 0x2818;
 
 const CTRL_SLU: u32 = 1 << 6; // set link up
 const CTRL_RST: u32 = 1 << 26; // device reset (self-clearing)
@@ -42,6 +48,27 @@ const TXD_EOP: u8 = 0x01;
 const TXD_IFCS: u8 = 0x02;
 const TXD_RS: u8 = 0x08;
 const TXD_STA_DD: u8 = 0x01;
+
+const N_RX: usize = 8;
+const RX_BUF: usize = 2048; // per-descriptor packet buffer
+const RCTL_EN: u32 = 1 << 1;
+const RCTL_UPE: u32 = 1 << 3; // unicast promiscuous
+const RCTL_MPE: u32 = 1 << 4; // multicast promiscuous
+const RCTL_BAM: u32 = 1 << 15; // broadcast accept
+const RXD_STA_DD: u8 = 0x01;
+const RXD_STA_EOP: u8 = 0x02;
+
+/// Legacy RX descriptor (16 bytes). The NIC writes len/sta back when a
+/// frame lands in the buffer we posted.
+#[repr(C)]
+struct RxDesc {
+    addr: u64,
+    len: u16,
+    cksum: u16,
+    sta: u8,
+    err: u8,
+    special: u16,
+}
 
 /// Legacy TX descriptor (16 bytes), 8254x/82574 layout.
 #[repr(C)]
@@ -234,4 +261,109 @@ pub fn tx_selftest(base: usize, mac: [u8; 6]) -> bool {
     frame[13] = 0xb5;
     frame[14..20].copy_from_slice(b"rustux");
     tx_once(base, &frame[..60])
+}
+
+/// Bring up the RX ring: 8 descriptors, each pointing at its own 2 KiB
+/// buffer. Returns (ring, buffers) — both buddy pages, kept for the
+/// device lifetime. Hardware owns descriptors 0..N_RX-2 (RDT points one
+/// past the last usable, the full/empty ambiguity keeps one free).
+fn rx_init(base: usize) -> Option<(*mut RxDesc, *mut u8)> {
+    let ring = kalloc::kmalloc(4096) as *mut RxDesc;
+    let bufs = kalloc::kmalloc(N_RX * RX_BUF);
+    if ring.is_null() || bufs.is_null() {
+        printk(format_args!("rustux: e1000: rx ring/buf alloc failed"));
+        return None;
+    }
+    // SAFETY: ring names a page (8*16 desc bytes fit); bufs names
+    // N_RX*RX_BUF contiguous bytes — each descriptor gets its slice.
+    unsafe {
+        core::ptr::write_bytes(ring, 0, N_RX);
+        for i in 0..N_RX {
+            (*ring.add(i)).addr = bufs.add(i * RX_BUF) as u64;
+        }
+        wr(base, RDBAL, ring as u32);
+        wr(base, RDBAH, ((ring as usize) >> 32) as u32);
+        wr(base, RDLEN, (N_RX * 16) as u32);
+        wr(base, RDH, 0);
+        wr(base, RDT, 0);
+        // Accept everything for the proof: promiscuous + broadcast.
+        wr(base, RCTL, RCTL_EN | RCTL_UPE | RCTL_MPE | RCTL_BAM);
+        wr(base, RDT, (N_RX - 1) as u32);
+    }
+    Some((ring, bufs))
+}
+
+/// Round-trip proof: broadcast an ARP who-has for QEMU's slirp gateway
+/// (10.0.2.2), then poll the RX ring for the unicast reply. This is a
+/// real frame leaving and a real frame arriving through our own rings.
+pub fn arp_selftest(base: usize, mac: [u8; 6]) -> bool {
+    let Some((ring, bufs)) = rx_init(base) else {
+        return false;
+    };
+    printk(format_args!("rustux: e1000: rx ring up ({N_RX} descs x {RX_BUF}B)"));
+
+    // Ethernet + ARP request, padded to the 60-byte TX minimum.
+    let mut f = [0u8; 60];
+    f[..6].copy_from_slice(&[0xff; 6]); // dst: broadcast
+    f[6..12].copy_from_slice(&mac); // src: us
+    f[12] = 0x08;
+    f[13] = 0x06; // ethertype ARP
+    f[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 1]); // ht/pt/hl/pl/req
+    f[22..28].copy_from_slice(&mac); // sender hw
+    f[28..32].copy_from_slice(&[10, 0, 2, 15]); // sender proto (slirp guest)
+    // target hw = zeros (that's the question), target proto:
+    f[38..42].copy_from_slice(&[10, 0, 2, 2]); // slirp gateway
+    if !tx_once(base, &f) {
+        return false;
+    }
+
+    // Poll every posted descriptor for DD; report whatever arrives.
+    let mut i = 0u32;
+    loop {
+        for d in 0..N_RX {
+            // SAFETY: the NIC writes sta/len into our ring; the packet
+            // lands in the buffer we posted for this descriptor.
+            let (sta, len) = unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+            if sta & RXD_STA_DD == 0 {
+                continue;
+            }
+            let p = unsafe { bufs.add(d * RX_BUF) };
+            let et = unsafe { u16::from_be_bytes([*p.add(12), *p.add(13)]) };
+            if et == 0x0806 && len >= 42 {
+                // ARP reply: oper at eth+20, sender hw/proto at +22/+28.
+                let (op, sha, spa) = unsafe {
+                    (
+                        u16::from_be_bytes([*p.add(20), *p.add(21)]),
+                        core::slice::from_raw_parts(p.add(22), 6),
+                        core::slice::from_raw_parts(p.add(28), 4),
+                    )
+                };
+                printk(format_args!(
+                    "rustux: e1000: rx ARP op{op} from {}.{}.{}.{} \
+                     mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ({len}B desc{d})",
+                    spa[0], spa[1], spa[2], spa[3],
+                    sha[0], sha[1], sha[2], sha[3], sha[4], sha[5]
+                ));
+                return op == 2;
+            }
+            printk(format_args!(
+                "rustux: e1000: rx {len}B frame et{et:#06x} desc{d} \
+                 sta{sta:#04x}{}",
+                if sta & RXD_STA_EOP != 0 { " eop" } else { "" }
+            ));
+            // Not our ARP — recycle the descriptor so more can arrive.
+            // RDT is one-past-last-posted (next_to_use): reposting d
+            // makes it the tail again at d+1.
+            // SAFETY: reposting a consumed descriptor.
+            unsafe {
+                (*ring.add(d)).sta = 0;
+                wr(base, RDT, ((d + 1) % N_RX) as u32);
+            }
+        }
+        i += 1;
+        if i == 20_000_000 {
+            printk(format_args!("rustux: e1000: rx poll timed out"));
+            return false;
+        }
+    }
 }
