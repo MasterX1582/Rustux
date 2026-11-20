@@ -130,6 +130,21 @@ pub fn kmalloc(size: usize) -> *mut u8 {
     obj as *mut u8
 }
 
+/// One zeroed 4KiB frame as an identity-mapped physical address —
+/// page-table and user-page allocator.
+pub fn alloc_frame() -> Option<u64> {
+    let f = irq_save();
+    let alloc = unsafe { &mut *core::ptr::addr_of_mut!(ALLOC) };
+    let b = alloc.buddy.alloc(0);
+    // SAFETY: f was produced by the matching irq_save above.
+    unsafe { irq_restore(f) };
+    if let Some(p) = b {
+        // SAFETY: p is an owned frame inside the identity map.
+        unsafe { core::ptr::write_bytes(p as *mut u8, 0, 4096) };
+    }
+    b
+}
+
 /// kmalloc + zero-fill (Linux kzalloc).
 pub fn kmalloc_zalloc(size: usize) -> *mut u8 {
     let p = kmalloc(size);

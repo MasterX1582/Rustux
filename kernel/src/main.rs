@@ -17,6 +17,7 @@ mod acpi;
 mod apic;
 mod cpu;
 mod e1000;
+mod elf;
 mod net;
 mod fbcon;
 mod kalloc;
@@ -27,7 +28,9 @@ mod mm;
 mod pci;
 mod pio;
 mod rand;
+mod syscall;
 mod uart;
+mod user;
 
 /// printk-style console fan-out: every write goes to COM1 and, when the GOP
 /// framebuffer is available, to the emulated display as text.
@@ -1000,6 +1003,13 @@ fn main() -> Status {
     // SAFETY: ud2 always raises #UD; our handler makes it survivable.
     unsafe { core::arch::asm!("ud2", options(nomem, nostack)) };
     kprintln!(con, "rustux: cpu: IDT caught #UD and resumed");
+
+    // Userspace milestone: parse the embedded ELF64, build a process
+    // page table (kernel entries copied supervisor-only), drop to
+    // ring 3 with user segments, and let the image write+exit through
+    // the SYSCALL path — exit unwinds back here.
+    let user_ok = user::run(include_bytes!("../user/hello.elf"));
+    kprintln!(con, "rustux: user: ring-3 ELF run {}", if user_ok { "done" } else { "FAILED" });
     kprintln!(
         con,
         "rustux: log: {} records through klib::prb ring, {} dropped",

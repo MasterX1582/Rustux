@@ -34,7 +34,14 @@ demo: $(ESP_IMG)
 
 FORCE:
 
-$(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml FORCE
+# Ring-3 milestone image: a static ELF64 loaded by kernel/src/elf.rs.
+USER_ELF := kernel/user/hello.elf
+
+$(USER_ELF): kernel/user/hello.S
+	as -o kernel/user/hello.o $<
+	ld -nostdlib -e _start -Ttext 0x555500000000 -o $@ kernel/user/hello.o
+
+$(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml $(USER_ELF) FORCE
 	cargo build --release --target $(TARGET) -p kernel
 
 $(ESP_IMG): $(KERNEL)

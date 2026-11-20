@@ -21,10 +21,28 @@ const KDATA: u16 = 0x10;
 /// is 16 bytes wide).
 const TSS_SEL: u16 = 0x18;
 
+/// User segments at GDT slots 5-6 (after the 16-byte TSS). SYSRET
+/// derives ss=(STAR base+8)|3, cs=(STAR base+16)|3, so with a STAR
+/// sysret base of 0x20 the CPU lands on 0x2b/0x33 — the literals the
+/// asm stub pushes for its iretq/sysretq frames.
+#[allow(dead_code)]
+pub const UDATA_SEL: u16 = 0x28 | 3;
+#[allow(dead_code)]
+pub const UCODE_SEL: u16 = 0x30 | 3;
+
 // Flat 64-bit segments: base/limit ignored by the CPU in long mode.
 // code: P|DPL0|S|Exec|Read|L   data: P|DPL0|S|Write
+// User variants are the same shapes with DPL=3 (access 0xf2/0xfa).
 // Slots 3-4 hold the TSS descriptor, filled at init (needs the runtime base).
-static mut GDT: [u64; 5] = [0, 0x00af_9a00_0000_ffff, 0x00af_9200_0000_ffff, 0, 0];
+static mut GDT: [u64; 7] = [
+    0,
+    0x00af_9a00_0000_ffff, // 0x08 kernel code
+    0x00af_9200_0000_ffff, // 0x10 kernel data
+    0,
+    0,                     // 0x18-0x1f TSS (filled at init)
+    0x00af_f200_0000_ffff, // 0x28 user data (DPL3)
+    0x00af_fa00_0000_ffff, // 0x30 user code (DPL3)
+];
 
 /// x86_64 task state segment. Only the IST entries matter today: no
 /// privilege transitions exist yet, so the rsp fields stay zeroed. iopb
@@ -57,6 +75,7 @@ static mut TSS: Tss = Tss {
 };
 
 static mut DF_STACK: DfStack = DfStack([0; 8192]);
+static mut INTR_STACK: DfStack = DfStack([0; 8192]);
 
 /// Build the 16-byte system descriptor for a 64-bit available TSS.
 fn tss_descriptor(base: u64, limit: u64) -> (u64, u64) {
@@ -290,6 +309,9 @@ pub fn init() {
         let tss = core::ptr::addr_of_mut!(TSS);
         (*tss).iopb = core::mem::size_of::<Tss>() as u16;
         (*tss).ist[0] = core::ptr::addr_of!(DF_STACK) as u64 + 8192;
+        // CPL3->CPL0 interrupt entries (e.g. the LAPIC timer firing
+        // while user code runs) get a dedicated kernel stack.
+        (*tss)._rsp[0] = core::ptr::addr_of!(INTR_STACK) as u64 + 8192;
         let (lo, hi) =
             tss_descriptor(tss as u64, core::mem::size_of::<Tss>() as u64 - 1);
         let gdt = core::ptr::addr_of_mut!(GDT);
@@ -298,7 +320,7 @@ pub fn init() {
     }
 
     let gdtr = TablePtr {
-        limit: (5 * 8 - 1) as u16,
+        limit: (7 * 8 - 1) as u16,
         base: core::ptr::addr_of!(GDT) as u64,
     };
     // SAFETY: gdtr points at our valid flat GDT; CS reload uses a far return
@@ -366,5 +388,74 @@ pub fn init() {
     unsafe {
         core::arch::asm!("cli", options(nomem, nostack));
         core::arch::asm!("lidt [{}]", in(reg) &idtr, options(readonly, nostack));
+    }
+}
+
+/// Write a model-specific register.
+///
+/// # Safety
+/// `msr` must be a valid MSR for this CPU and `val` a legal encoding.
+pub unsafe fn wrmsr(msr: u32, val: u64) {
+    // SAFETY: caller contract — privileged MSR write in ring 0.
+    unsafe {
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") val as u32,
+            in("edx") (val >> 32) as u32,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+/// Read a model-specific register.
+///
+/// # Safety
+/// `msr` must be a valid MSR for this CPU.
+pub unsafe fn rdmsr(msr: u32) -> u64 {
+    let lo: u32;
+    let hi: u32;
+    // SAFETY: caller contract — privileged MSR read in ring 0.
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") lo,
+            out("edx") hi,
+            options(nostack, preserves_flags, nomem)
+        );
+    }
+    ((hi as u64) << 32) | lo as u64
+}
+
+/// Current CR3 (PML4 physical base, flags in low 12 bits).
+pub fn read_cr3() -> u64 {
+    let v: u64;
+    // SAFETY: reading CR3 is privileged; we are ring 0.
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) v, options(nostack, nomem));
+    }
+    v
+}
+
+const MSR_EFER: u32 = 0xc000_0080;
+const MSR_STAR: u32 = 0xc000_0081;
+const MSR_LSTAR: u32 = 0xc000_0082;
+const MSR_SFMASK: u32 = 0xc000_0084;
+
+/// Enable the SYSCALL/SYSRET path: STAR segment bases, LSTAR entry
+/// point, SFMASK (clear TF/IF/DF on entry), EFER SCE|NXE.
+///
+/// STAR layout (AMD/Intel): [47:32] = kernel CS for SYSCALL (SS =
+/// that +8), [63:48] = sysret base (SS = base+8|3, CS = base+16|3).
+/// With GDT kcode@0x08/kdata@0x10/udata@0x28/ucode@0x30:
+/// syscall field = 0x08, sysret field = 0x20.
+pub fn init_syscall(lstar: u64) {
+    unsafe {
+        let efer = rdmsr(MSR_EFER);
+        wrmsr(MSR_EFER, efer | 0x801); // SCE + NXE
+        wrmsr(MSR_STAR, (0x20u64 << 48) | (0x08u64 << 32));
+        wrmsr(MSR_LSTAR, lstar);
+        wrmsr(MSR_SFMASK, 0x700); // TF|IF|DF cleared on syscall entry
     }
 }
