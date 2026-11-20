@@ -739,7 +739,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 }
             }
             rounds += 1;
-            if rounds % 64_000_000 == 0 {
+            if rounds.is_multiple_of(64_000_000) {
                 crate::log::printk(format_args!(
                     "rustux: ipv8: ini hb r={rounds} seen={seen}"
                 ));
@@ -749,7 +749,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 printk(format_args!("rustux: ipv8: no reply (peer down?)"));
                 return;
             }
-            if !sent || rounds % 4_000_000 == 0 {
+            if !sent || rounds.is_multiple_of(4_000_000) {
                 let _ = tx_once(base, &f[..flen.max(60)]);
                 sent = true;
             }
@@ -824,7 +824,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
             }
         }
         i += 1;
-        if i % 64_000_000 == 0 {
+        if i.is_multiple_of(64_000_000) {
             crate::log::printk(format_args!(
                 "rustux: ipv8: resp hb iters={i} frames={seen}"
             ));
@@ -906,7 +906,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                         crate::log::printk(format_args!(
                             "rustux: ipv6: dbg nx={} hop={} pl={} ck={c:#x}                              fld={fld:#x} tgtlw={tw:#x} ty={} len={len}",
                             ip.next, ip.hop, ip.payload.len(),
-                            if ip.payload.len() >= 1 { ip.payload[0] } else { 0 }));
+                            if !ip.payload.is_empty() { ip.payload[0] } else { 0 }));
                         crate::log::drain(con);
                     } else {
                         crate::log::printk(format_args!(
@@ -930,8 +930,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                                     && m.rest[4..20] == us
                                     && ip.src != [0u8; 16]
                                 {
-                                    let them: [u8; 16] =
-                                        ip.src.try_into().unwrap();
+                                    let them: [u8; 16] = ip.src;
                                     let n = crate::net::build_na(
                                         &mut f, src_mac, mac, &us, &them,
                                     );
@@ -942,7 +941,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                                              sent NA (peer resolved us)"
                                         ));
                                     }
-                                } else if m.ty == 128 && ip.dst == us {
+                                } else if m.ty == 128 && m.code == 0 && ip.dst == us {
                                     let id = u16::from_be_bytes(
                                         [m.rest[0], m.rest[1]]);
                                     let seq = u16::from_be_bytes(
@@ -975,7 +974,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                                     "rustux: ipv6: NA received, \
                                      peer resolved"
                                 ));
-                            } else if m.ty == 129 && phase == 1
+                            } else if m.ty == 129 && m.code == 0 && phase == 1
                                 && ip.src == peer
                                 && ip.dst == us
                                 && m.rest.len() >= 4
@@ -1003,7 +1002,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
         i += 1;
         if role == 0x01 {
             rounds += 1;
-            if rounds % 64_000_000 == 0 {
+            if rounds.is_multiple_of(64_000_000) {
                 crate::log::printk(format_args!(
                     "rustux: ipv6: ini hb r={rounds} ph={phase} seen={seen}"
                 ));
@@ -1013,7 +1012,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 printk(format_args!("rustux: ipv6: no reply (peer down?)"));
                 return;
             }
-            if !sent || rounds % 4_000_000 == 0 {
+            if !sent || rounds.is_multiple_of(4_000_000) {
                 let n = if phase == 0 {
                     crate::net::build_ns(&mut f, mac, &us, &peer)
                 } else {
@@ -1028,7 +1027,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 sent = true;
             }
         } else {
-            if i % 64_000_000 == 0 {
+            if i.is_multiple_of(64_000_000) {
                 crate::log::printk(format_args!(
                     "rustux: ipv6: resp hb iters={i} frames={seen}"
                 ));
@@ -1037,6 +1036,235 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
             if i == u32::MAX {
                 i = 0;
             }
+        }
+    }
+}
+
+/// DHCP client proof (slirp only — skipped on the socket-demo MACs).
+/// Broadcast DISCOVER -> OFFER -> REQUEST -> ACK; a real lease.
+/// BOOTP fixed part is 236B + 4B magic cookie + TLV options.
+const DHCP_XID: u32 = 0x7278_0001;
+const DHCP_COOKIE: [u8; 4] = [99, 130, 83, 99];
+
+/// Build a DHCP DISCOVER (ty=1) or REQUEST (ty=3) payload.
+/// `req_ip`/`srv` are Some only for REQUEST.
+fn build_dhcp(
+    p: &mut [u8],
+    mac: [u8; 6],
+    ty: u8,
+    req_ip: Option<[u8; 4]>,
+    srv: Option<[u8; 4]>,
+) -> usize {
+    if p.len() < 300 {
+        return 0;
+    }
+    p[..240].fill(0);
+    p[0] = 1; // op request
+    p[1] = 1; // htype ethernet
+    p[2] = 6; // hlen
+    p[4..8].copy_from_slice(&DHCP_XID.to_be_bytes());
+    p[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); // broadcast flag
+    p[28..34].copy_from_slice(&mac); // chaddr
+    p[236..240].copy_from_slice(&DHCP_COOKIE);
+    let mut o = 240;
+    p[o] = 53;
+    p[o + 1] = 1;
+    p[o + 2] = ty;
+    o += 3;
+    // parameter request list: subnet, router, lease, server-id
+    p[o] = 55;
+    p[o + 1] = 4;
+    p[o + 2..o + 6].copy_from_slice(&[1, 3, 51, 54]);
+    o += 6;
+    if let Some(ip) = req_ip {
+        p[o] = 50;
+        p[o + 1] = 4;
+        p[o + 2..o + 6].copy_from_slice(&ip);
+        o += 6;
+    }
+    if let Some(s) = srv {
+        p[o] = 54;
+        p[o + 1] = 4;
+        p[o + 2..o + 6].copy_from_slice(&s);
+        o += 6;
+    }
+    p[o] = 255;
+    o + 1
+}
+
+/// Parsed DHCP reply fields we care about.
+struct Lease {
+    ty: u8,
+    ip: [u8; 4],
+    srv: [u8; 4],
+    router: [u8; 4],
+    mask: [u8; 4],
+    secs: u32,
+}
+
+/// Hostile-input DHCP parse: BOOTP reply, our xid, cookie present,
+/// option walk fully bounded (tag 255 end, tag 0 pad, len-checked).
+fn parse_dhcp(p: &[u8]) -> Option<Lease> {
+    if p.len() < 241 || p[0] != 2 {
+        return None;
+    }
+    if p[4..8] != DHCP_XID.to_be_bytes() || p[236..240] != DHCP_COOKIE {
+        return None;
+    }
+    let mut l = Lease {
+        ty: 0,
+        ip: p[16..20].try_into().unwrap(),
+        srv: [0; 4],
+        router: [0; 4],
+        mask: [0; 4],
+        secs: 0,
+    };
+    let mut o = 240;
+    while o < p.len() && p[o] != 255 {
+        if p[o] == 0 {
+            o += 1;
+            continue;
+        }
+        if o + 2 > p.len() || o + 2 + p[o + 1] as usize > p.len() {
+            break;
+        }
+        let (tag, n) = (p[o], p[o + 1] as usize);
+        let v = &p[o + 2..o + 2 + n];
+        match tag {
+            53 if n >= 1 => l.ty = v[0],
+            54 if n >= 4 => l.srv.copy_from_slice(&v[..4]),
+            3 if n >= 4 => l.router.copy_from_slice(&v[..4]),
+            51 if n >= 4 => {
+                l.secs = u32::from_be_bytes(v[..4].try_into().unwrap())
+            }
+            1 if n >= 4 => l.mask.copy_from_slice(&v[..4]),
+            _ => {}
+        }
+        o += 2 + n;
+    }
+    Some(l)
+}
+
+/// DISCOVER -> OFFER -> REQUEST -> ACK over slirp. Returns true on
+/// a valid lease; the assigned address is logged.
+pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
+    if mac[5] == 0x01 || mac[5] == 0x02 {
+        return false; // socket-demo MACs: no DHCP server exists there
+    }
+    let Some((ring, bufs)) = rx_init(base) else {
+        return false;
+    };
+    let mut p = [0u8; 300];
+    let mut f = [0u8; 360];
+    let mut phase = 0u8; // 0 = need OFFER, 1 = need ACK
+    let mut offer = Lease {
+        ty: 0,
+        ip: [0; 4],
+        srv: [0; 4],
+        router: [0; 4],
+        mask: [0; 4],
+        secs: 0,
+    };
+    let mut rounds = 0u32;
+    loop {
+        for d in 0..N_RX {
+            // SAFETY: same contract as arp_selftest.
+            let (sta, len) =
+                unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+            if sta & RXD_STA_DD == 0 {
+                continue;
+            }
+            if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, d as u32);
+                }
+                continue;
+            }
+            let buf = unsafe {
+                core::slice::from_raw_parts(bufs.add(d * RX_BUF), len as usize)
+            };
+            if u16::from_be_bytes([buf[12], buf[13]]) == 0x0800 {
+                if let Some(ip) = crate::net::parse_ipv4(&buf[14..]) {
+                    if ip.proto == crate::net::NH_UDP {
+                        if let Some(u) = crate::net::parse_udp(ip.payload) {
+                            if u.dport == 68 && u.sport == 67
+                                && (u.cksum_field == 0
+                                    || crate::net::csum6_ok(
+                                        crate::net::csum4(
+                                            ip.src, ip.dst,
+                                            crate::net::NH_UDP,
+                                            &ip.payload
+                                                [..8 + u.payload
+                                                    .len()],
+                                        )))
+                            {
+                                if let Some(l) = parse_dhcp(u.payload) {
+                                    if phase == 0 && l.ty == 2 {
+                                        printk(format_args!(
+                                            "rustux: dhcp: OFFER \
+                                             {}.{}.{}.{} srv \
+                                             {}.{}.{}.{}",
+                                            l.ip[0], l.ip[1], l.ip[2],
+                                            l.ip[3], l.srv[0], l.srv[1],
+                                            l.srv[2], l.srv[3]
+                                        ));
+                                        offer = l;
+                                        phase = 1;
+                                        rounds = 0;
+                                    } else if phase == 1 && l.ty == 5
+                                        && l.ip == offer.ip
+                                    {
+                                        printk(format_args!(
+                                            "rustux: dhcp: ACK \
+                                             {}.{}.{}.{} mask \
+                                             {}.{}.{}.{} gw \
+                                             {}.{}.{}.{} lease {}s",
+                                            l.ip[0], l.ip[1], l.ip[2],
+                                            l.ip[3], l.mask[0],
+                                            l.mask[1], l.mask[2],
+                                            l.mask[3], l.router[0],
+                                            l.router[1], l.router[2],
+                                            l.router[3], l.secs
+                                        ));
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // SAFETY: reposting a consumed descriptor.
+            unsafe {
+                (*ring.add(d)).sta = 0;
+                wr(base, RDT, d as u32);
+            }
+        }
+        rounds += 1;
+        if rounds % 4_000_000 == 1 {
+            let n = if phase == 0 {
+                build_dhcp(&mut p, mac, 1, None, None)
+            } else {
+                build_dhcp(&mut p, mac, 3, Some(offer.ip), Some(offer.srv))
+            };
+            let flen = crate::net::build_udp4(
+                &mut f,
+                [0xff; 6],
+                mac,
+                [0, 0, 0, 0],
+                [255, 255, 255, 255],
+                68,
+                67,
+                &p[..n],
+            );
+            if flen != 0 {
+                let _ = tx_once(base, &f[..flen.max(60)]);
+            }
+        }
+        if rounds == 60_000_000 {
+            printk(format_args!("rustux: dhcp: timed out phase {phase}"));
+            return false;
         }
     }
 }

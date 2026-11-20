@@ -913,6 +913,8 @@ fn main() -> Status {
             if rx_ok {
                 let ping_ok = e1000::ping_selftest(e_base, e_mac);
                 kprintln!(con, "rustux: e1000: IPv4/ICMP ping {ping_ok}");
+                let dhcp_ok = e1000::dhcp_selftest(e_base, e_mac);
+                kprintln!(con, "rustux: e1000: DHCP lease {dhcp_ok}");
             }
             e1000::ipv8_demo(e_base, e_mac, &mut con);
             e1000::ipv6_selftest(e_base, e_mac, &mut con);

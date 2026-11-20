@@ -176,6 +176,7 @@ pub struct Addr8 {
 
 /// Build Ethernet + IPv8 + ICMP echo message into `f`
 /// (`ty` = 8 request, 0 reply). Returns frame length, 0 if `f` is too small.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ipv8_echo(
     f: &mut [u8],
     ty: u8,
@@ -462,6 +463,7 @@ pub fn build_na(
 }
 
 /// Ethernet + IPv6 + ICMPv6 echo (ty 128 request / 129 reply, hop 64).
+#[allow(clippy::too_many_arguments)]
 pub fn build_echo6(
     f: &mut [u8],
     ty: u8,
@@ -488,4 +490,99 @@ pub fn build_echo6(
     f[ic + 8..ic + 8 + payload.len()].copy_from_slice(payload);
     finish_icmp6(f, us, dst, ic, plen);
     14 + 40 + plen
+}
+
+// ---- UDP over IPv4 ----
+
+pub const NH_UDP: u8 = 17;
+
+/// A validated UDP datagram. `cksum_field` is the wire value —
+/// in IPv4 a zero field legally means "no checksum"; when nonzero
+/// the caller has verified it via csum4 + csum6_ok semantics.
+pub struct Udp<'a> {
+    pub sport: u16,
+    pub dport: u16,
+    pub cksum_field: u16,
+    pub payload: &'a [u8],
+}
+
+/// Parse a UDP datagram: header len >= 8, len field consistent,
+/// payload bounded by the UDP length (never past `buf`).
+pub fn parse_udp(buf: &[u8]) -> Option<Udp<'_>> {
+    if buf.len() < 8 {
+        return None;
+    }
+    let ulen = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    if ulen < 8 || ulen > buf.len() {
+        return None;
+    }
+    Some(Udp {
+        sport: u16::from_be_bytes([buf[0], buf[1]]),
+        dport: u16::from_be_bytes([buf[2], buf[3]]),
+        cksum_field: u16::from_be_bytes([buf[6], buf[7]]),
+        payload: &buf[8..ulen],
+    })
+}
+
+/// UDP-over-IPv4 checksum: pseudo-header (src,dst,zero,proto,len)
+/// plus the datagram. Same negative-zero residual caveat as csum6
+/// — validate with csum6_ok, or accept field == 0 (v4 legal).
+pub fn csum4(src: [u8; 4], dst: [u8; 4], proto: u8, udp: &[u8]) -> u16 {
+    let mut tail = [0u8; 4];
+    tail[1] = proto;
+    tail[2..4].copy_from_slice(&(udp.len() as u16).to_be_bytes());
+    let s = csum16(&src) as u32
+        + csum16(&dst) as u32
+        + csum16(&tail) as u32
+        + csum16(udp) as u32;
+    let s = (s & 0xffff) + (s >> 16);
+    ((s + (s >> 16)) & 0xffff) as u16
+}
+
+/// Ethernet + IPv4 + UDP datagram into `f`; returns frame length.
+/// UDP checksum is computed (not the RFC-768 zero form).
+#[allow(clippy::too_many_arguments)]
+pub fn build_udp4(
+    f: &mut [u8],
+    dst_mac: [u8; 6],
+    src_mac: [u8; 6],
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    sport: u16,
+    dport: u16,
+    payload: &[u8],
+) -> usize {
+    let ulen = 8 + payload.len();
+    let total = 20 + ulen;
+    if f.len() < 14 + total {
+        return 0;
+    }
+    f[..6].copy_from_slice(&dst_mac);
+    f[6..12].copy_from_slice(&src_mac);
+    f[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+
+    let ip = 14;
+    f[ip] = 0x45;
+    f[ip + 1] = 0;
+    f[ip + 2..ip + 4].copy_from_slice(&(total as u16).to_be_bytes());
+    f[ip + 4..ip + 6].copy_from_slice(&2u16.to_be_bytes());
+    f[ip + 6..ip + 8].copy_from_slice(&[0, 0]);
+    f[ip + 8] = 64;
+    f[ip + 9] = NH_UDP;
+    f[ip + 10..ip + 12].copy_from_slice(&[0, 0]);
+    f[ip + 12..ip + 16].copy_from_slice(&src_ip);
+    f[ip + 16..ip + 20].copy_from_slice(&dst_ip);
+    let ck = csum16(&f[ip..ip + 20]);
+    f[ip + 10..ip + 12].copy_from_slice(&ck.to_be_bytes());
+
+    let u = ip + 20;
+    f[u..u + 2].copy_from_slice(&sport.to_be_bytes());
+    f[u + 2..u + 4].copy_from_slice(&dport.to_be_bytes());
+    f[u + 4..u + 6].copy_from_slice(&(ulen as u16).to_be_bytes());
+    f[u + 6..u + 8].copy_from_slice(&[0, 0]);
+    f[u + 8..u + 8 + payload.len()].copy_from_slice(payload);
+    let ck = csum4(src_ip, dst_ip, NH_UDP, &f[u..u + ulen]);
+    f[u + 6..u + 8].copy_from_slice(&ck.to_be_bytes());
+
+    14 + total
 }
