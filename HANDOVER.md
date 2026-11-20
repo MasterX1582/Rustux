@@ -2,7 +2,7 @@
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:** `<SHA> kernel: IST #DF stack + buddy page allocator` — the LAPIC timer now delivers real async IRQs through our IDT (timer 0xf0, spurious 0xff) on top of GDT/IDT (`f26b2e4`), page tables + FrameAlloc (`e8946f8`), and the boot logo (`2159f67`). Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo is public: `https://github.com/MasterX1582/Linux-Rust` (history rewritten/anonymized — force-pushed baseline `ef6f55f`).
+**Last commit:** `4a48db4 kernel: IST #DF stack + buddy page allocator` — the LAPIC timer now delivers real async IRQs through our IDT (timer 0xf0, spurious 0xff) on top of GDT/IDT (`f26b2e4`), page tables + FrameAlloc (`e8946f8`), and the boot logo (`2159f67`). Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo is public: `https://github.com/MasterX1582/Linux-Rust` (history rewritten/anonymized — force-pushed baseline `ef6f55f`).
 
 ## Environments
 
