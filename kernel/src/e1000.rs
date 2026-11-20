@@ -813,7 +813,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
             }
         }
         i += 1;
-        if i == 200_000_000 {
+        if i == 2_000_000_000 {
             printk(format_args!("rustux: ipv8: listen timed out"));
             return;
         }
