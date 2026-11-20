@@ -586,3 +586,114 @@ pub fn build_udp4(
 
     14 + total
 }
+
+// ---- TCP over IPv4 (minimal: no retransmit, no out-of-order queue) ----
+
+pub const NH_TCP: u8 = 6;
+
+pub const TCP_FIN: u8 = 0x01;
+pub const TCP_SYN: u8 = 0x02;
+pub const TCP_RST: u8 = 0x04;
+pub const TCP_PSH: u8 = 0x08;
+pub const TCP_ACK: u8 = 0x10;
+
+/// A parsed TCP segment. `options` is the bounded region between the
+/// fixed header and the payload (per the data-offset field); callers
+/// walk it tag-by-tag or ignore it — it can never overrun the segment.
+pub struct Tcp<'a> {
+    pub sport: u16,
+    pub dport: u16,
+    pub seq: u32,
+    pub ack: u32,
+    pub flags: u8,
+    pub wnd: u16,
+    pub options: &'a [u8],
+    pub payload: &'a [u8],
+}
+
+/// Parse a TCP segment: fixed header >= 20, data offset >= 5 words and
+/// within the segment. Checksum is NOT verified here — callers validate
+/// via `csum6_ok(csum4(src, dst, NH_TCP, segment))` like UDP.
+pub fn parse_tcp(buf: &[u8]) -> Option<Tcp<'_>> {
+    if buf.len() < 20 {
+        return None;
+    }
+    let doff = ((buf[12] >> 4) as usize) * 4;
+    if !(20..=buf.len()).contains(&doff) {
+        return None;
+    }
+    Some(Tcp {
+        sport: u16::from_be_bytes([buf[0], buf[1]]),
+        dport: u16::from_be_bytes([buf[2], buf[3]]),
+        seq: u32::from_be_bytes(buf[4..8].try_into().unwrap()),
+        ack: u32::from_be_bytes(buf[8..12].try_into().unwrap()),
+        flags: buf[13],
+        wnd: u16::from_be_bytes([buf[14], buf[15]]),
+        options: &buf[20..doff],
+        payload: &buf[doff..],
+    })
+}
+
+/// Ethernet + IPv4 + TCP segment into `f`; returns frame length.
+/// `options` bytes are emitted verbatim after the fixed header and must
+/// be a multiple of 4 in length (callers pad). Checksum field zeroed
+/// before csum4 — same CVE-2025-38432 discipline as UDP.
+#[allow(clippy::too_many_arguments)]
+pub fn build_tcp4(
+    f: &mut [u8],
+    dst_mac: [u8; 6],
+    src_mac: [u8; 6],
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    sport: u16,
+    dport: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    options: &[u8],
+    payload: &[u8],
+) -> usize {
+    if options.len() % 4 != 0 || options.len() > 40 {
+        return 0;
+    }
+    let hlen = 20 + options.len();
+    let tlen = hlen + payload.len();
+    let total = 20 + tlen;
+    if f.len() < 14 + total {
+        return 0;
+    }
+    f[..6].copy_from_slice(&dst_mac);
+    f[6..12].copy_from_slice(&src_mac);
+    f[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+
+    let ip = 14;
+    f[ip] = 0x45;
+    f[ip + 1] = 0;
+    f[ip + 2..ip + 4].copy_from_slice(&(total as u16).to_be_bytes());
+    f[ip + 4..ip + 6].copy_from_slice(&2u16.to_be_bytes());
+    f[ip + 6..ip + 8].copy_from_slice(&[0, 0]);
+    f[ip + 8] = 64;
+    f[ip + 9] = NH_TCP;
+    f[ip + 10..ip + 12].copy_from_slice(&[0, 0]);
+    f[ip + 12..ip + 16].copy_from_slice(&src_ip);
+    f[ip + 16..ip + 20].copy_from_slice(&dst_ip);
+    let ck = csum16(&f[ip..ip + 20]);
+    f[ip + 10..ip + 12].copy_from_slice(&ck.to_be_bytes());
+
+    let t = ip + 20;
+    f[t..t + 2].copy_from_slice(&sport.to_be_bytes());
+    f[t + 2..t + 4].copy_from_slice(&dport.to_be_bytes());
+    f[t + 4..t + 8].copy_from_slice(&seq.to_be_bytes());
+    f[t + 8..t + 12].copy_from_slice(&ack.to_be_bytes());
+    f[t + 12] = ((hlen / 4) as u8) << 4;
+    f[t + 13] = flags;
+    f[t + 14..t + 16].copy_from_slice(&1460u16.to_be_bytes()); // window
+    f[t + 16..t + 18].copy_from_slice(&[0, 0]); // checksum: zero first
+    f[t + 18..t + 20].copy_from_slice(&[0, 0]); // urg ptr
+    f[t + 20..t + hlen].copy_from_slice(options);
+    f[t + hlen..t + tlen].copy_from_slice(payload);
+    let ck = csum4(src_ip, dst_ip, NH_TCP, &f[t..t + tlen]);
+    f[t + 16..t + 18].copy_from_slice(&ck.to_be_bytes());
+
+    14 + total
+}

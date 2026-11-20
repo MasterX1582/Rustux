@@ -1268,3 +1268,461 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
         }
     }
 }
+
+/// TCP over IPv4 proof (socket-demo MACs only, like ipv8/ipv6).
+/// Role :01 = active opener, :02 = passive listener on port 7.
+/// Full handshake + one data segment each way + FIN teardown; every
+/// segment's checksum, seq and ack are validated before acting.
+pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
+    let role = mac[5];
+    if role != 0x01 && role != 0x02 {
+        return;
+    }
+    let us_ip: [u8; 4] = [10, 0, 0, role];
+    let peer_ip: [u8; 4] = [10, 0, 0, if role == 0x01 { 2 } else { 1 }];
+    const SRV_PORT: u16 = 7;
+    let our_port: u16 = if role == 0x01 { 49152 } else { SRV_PORT };
+    const MSG: &[u8] = b"rustux over tcp";
+    // ISN with some entropy rather than a constant (seq-prediction
+    // hygiene) — demo-grade, production needs a real hash ISN.
+    let isn =
+        (unsafe { core::arch::x86_64::_rdtsc() } as u32) ^ 0x9e37_79b9;
+    let Some((ring, bufs)) = rx_init(base) else {
+        return;
+    };
+    let mut f = [0u8; 160];
+
+    let mut peer_mac = [0u8; 6];
+    let mut snd_nxt = isn.wrapping_add(1); // after SYN
+    let mut rcv_nxt = 0u32; // peer's expected seq once known
+    let mut phase = 0u8;
+    let mut rounds = 0u32;
+    let mut seen = 0u32;
+    let mut i = 0u32;
+
+    printk(format_args!(
+        "rustux: tcp: {} up (isn {isn:#x})",
+        if role == 0x01 { "initiator" } else { "listener" }
+    ));
+    crate::log::drain(con);
+    loop {
+        for d in 0..N_RX {
+            // SAFETY: same contract as arp_selftest.
+            let (sta, len) =
+                unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+            if sta & RXD_STA_DD == 0 {
+                continue;
+            }
+            if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF
+            {
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, d as u32);
+                }
+                continue;
+            }
+            let buf = unsafe {
+                core::slice::from_raw_parts(
+                    bufs.add(d * RX_BUF),
+                    len as usize,
+                )
+            };
+            let et = u16::from_be_bytes([buf[12], buf[13]]);
+            if et == 0x0800 && buf.len() >= 34 {
+                seen += 1;
+                let frm_mac: [u8; 6] = buf[6..12].try_into().unwrap();
+                let to_us = buf[..6] == mac;
+                if let Some(ip) = crate::net::parse_ipv4(&buf[14..]) {
+                    if ip.proto == crate::net::NH_TCP
+                        && crate::net::csum6_ok(crate::net::csum4(
+                            ip.src,
+                            ip.dst,
+                            crate::net::NH_TCP,
+                            ip.payload,
+                        ))
+                    {
+                        if let Some(t) = crate::net::parse_tcp(ip.payload)
+                        {
+                            if t.flags & crate::net::TCP_RST != 0 {
+                                printk(format_args!(
+                                    "rustux: tcp: RST seq={:#x} -> abort",
+                                    t.seq
+                                ));
+                                crate::log::drain(con);
+                                return;
+                            }
+                            if role == 0x02 {
+                                // listener: 0 wait SYN, 1 wait ACK,
+                                // 2 wait data, 3 wait FIN, 4 last ACK
+                                if phase == 0
+                                    && t.dport == SRV_PORT
+                                    && t.flags == crate::net::TCP_SYN
+                                {
+                                    // bounded option walk: EOL/NOP
+                                    // skips, length-guarded TLVs,
+                                    // unknown kinds ignored — no
+                                    // wscale shifts (CVE-2026-31495).
+                                    let mut mss = 0u16;
+                                    let mut o = 0usize;
+                                    while o < t.options.len() {
+                                        match t.options[o] {
+                                            0 => break,
+                                            1 => o += 1,
+                                            k => {
+                                                if o + 2
+                                                    > t.options.len()
+                                                {
+                                                    break;
+                                                }
+                                                let l = t.options
+                                                    [o + 1]
+                                                    as usize;
+                                                if l < 2
+                                                    || o + l
+                                                        > t.options
+                                                            .len()
+                                                {
+                                                    break;
+                                                }
+                                                if k == 2 && l == 4 {
+                                                    mss = u16
+                                                        ::from_be_bytes(
+                                                        [
+                                                            t.options
+                                                                [o + 2],
+                                                            t.options
+                                                                [o + 3],
+                                                        ],
+                                                    );
+                                                }
+                                                o += l;
+                                            }
+                                        }
+                                    }
+                                    peer_mac = frm_mac;
+                                    rcv_nxt = t.seq.wrapping_add(1);
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        ip.src, SRV_PORT, t.sport, isn,
+                                        rcv_nxt,
+                                        crate::net::TCP_SYN
+                                            | crate::net::TCP_ACK,
+                                        &[2, 4, 5, 180], &[],
+                                    );
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                        phase = 1;
+                                        printk(format_args!(
+                                            "rustux: tcp: SYN dport7 \
+                                             mss={mss} -> SYN|ACK"
+                                        ));
+                                        crate::log::drain(con);
+                                    }
+                                } else if phase == 1
+                                    && to_us && ip.src == peer_ip
+                                    && frm_mac == peer_mac
+                                    && t.flags == crate::net::TCP_ACK
+                                    && t.seq == rcv_nxt
+                                    && t.ack == snd_nxt
+                                {
+                                    phase = 2;
+                                    printk(format_args!(
+                                        "rustux: tcp: established"
+                                    ));
+                                    crate::log::drain(con);
+                                } else if phase == 2
+                                    && to_us && ip.src == peer_ip
+                                    && frm_mac == peer_mac
+                                    && t.flags
+                                        & (crate::net::TCP_PSH
+                                            | crate::net::TCP_ACK)
+                                        == crate::net::TCP_PSH
+                                            | crate::net::TCP_ACK
+                                    && t.seq == rcv_nxt
+                                    && t.ack == snd_nxt
+                                {
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        peer_ip, SRV_PORT, t.sport,
+                                        snd_nxt,
+                                        rcv_nxt.wrapping_add(
+                                            t.payload.len() as u32,
+                                        ),
+                                        crate::net::TCP_PSH
+                                            | crate::net::TCP_ACK,
+                                        &[], t.payload,
+                                    );
+                                    rcv_nxt = rcv_nxt.wrapping_add(
+                                        t.payload.len() as u32,
+                                    );
+                                    snd_nxt = snd_nxt.wrapping_add(
+                                        t.payload.len() as u32,
+                                    );
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                        phase = 3;
+                                        printk(format_args!(
+                                            "rustux: tcp: {}B data \
+                                             -> echoed",
+                                            t.payload.len()
+                                        ));
+                                        crate::log::drain(con);
+                                    }
+                                } else if phase == 3
+                                    && to_us && ip.src == peer_ip
+                                    && frm_mac == peer_mac
+                                    && t.flags
+                                        & (crate::net::TCP_FIN
+                                            | crate::net::TCP_ACK)
+                                        == crate::net::TCP_FIN
+                                            | crate::net::TCP_ACK
+                                    && t.seq == rcv_nxt
+                                {
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        peer_ip, SRV_PORT, t.sport,
+                                        snd_nxt, rcv_nxt.wrapping_add(1),
+                                        crate::net::TCP_FIN
+                                            | crate::net::TCP_ACK,
+                                        &[], &[],
+                                    );
+                                    rcv_nxt = rcv_nxt.wrapping_add(1);
+                                    snd_nxt = snd_nxt.wrapping_add(1);
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                        phase = 4;
+                                        printk(format_args!(
+                                            "rustux: tcp: FIN -> FIN|ACK"
+                                        ));
+                                        crate::log::drain(con);
+                                    }
+                                } else if phase == 4
+                                    && to_us && ip.src == peer_ip
+                                    && frm_mac == peer_mac
+                                    && t.flags == crate::net::TCP_ACK
+                                    && t.seq == rcv_nxt
+                                    && t.ack == snd_nxt
+                                {
+                                    printk(format_args!(
+                                        "rustux: tcp: closed clean"
+                                    ));
+                                    crate::log::drain(con);
+                                    return;
+                                }
+                            } else {
+                                // initiator: 0 wait SYN|ACK,
+                                // 1 wait echo, 2 wait FIN|ACK
+                                if phase == 0 && to_us
+                                    && ip.src == peer_ip
+                                    && ip.dst == us_ip
+                                    && t.sport == SRV_PORT
+                                    && t.dport == our_port
+                                    && t.flags
+                                        & (crate::net::TCP_SYN
+                                            | crate::net::TCP_ACK)
+                                        == crate::net::TCP_SYN
+                                            | crate::net::TCP_ACK
+                                    && t.ack == snd_nxt
+                                    && t.wnd != 0
+                                {
+                                    peer_mac = frm_mac;
+                                    rcv_nxt = t.seq.wrapping_add(1);
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        peer_ip, our_port, SRV_PORT,
+                                        snd_nxt, rcv_nxt,
+                                        crate::net::TCP_ACK, &[], &[],
+                                    );
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                    }
+                                    printk(format_args!(
+                                        "rustux: tcp: SYN|ACK -> \
+                                         established"
+                                    ));
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        peer_ip, our_port, SRV_PORT,
+                                        snd_nxt, rcv_nxt,
+                                        crate::net::TCP_PSH
+                                            | crate::net::TCP_ACK,
+                                        &[], MSG,
+                                    );
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                        snd_nxt = snd_nxt.wrapping_add(
+                                            MSG.len() as u32,
+                                        );
+                                        phase = 1;
+                                    }
+                                } else if phase == 1
+                                    && to_us && ip.src == peer_ip
+                                    && frm_mac == peer_mac
+                                    && t.sport == SRV_PORT
+                                    && t.dport == our_port
+                                    && t.flags
+                                        & (crate::net::TCP_PSH
+                                            | crate::net::TCP_ACK)
+                                        == crate::net::TCP_PSH
+                                            | crate::net::TCP_ACK
+                                    && t.seq == rcv_nxt
+                                    && t.ack == snd_nxt
+                                    && t.payload == MSG
+                                {
+                                    rcv_nxt = rcv_nxt.wrapping_add(
+                                        t.payload.len() as u32,
+                                    );
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        peer_ip, our_port, SRV_PORT,
+                                        snd_nxt, rcv_nxt,
+                                        crate::net::TCP_FIN
+                                            | crate::net::TCP_ACK,
+                                        &[], &[],
+                                    );
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                        snd_nxt =
+                                            snd_nxt.wrapping_add(1);
+                                        phase = 2;
+                                        printk(format_args!(
+                                            "rustux: tcp: echo \
+                                             verified -> FIN"
+                                        ));
+                                        crate::log::drain(con);
+                                    }
+                                } else if phase == 2
+                                    && to_us && ip.src == peer_ip
+                                    && frm_mac == peer_mac
+                                    && t.flags
+                                        & (crate::net::TCP_FIN
+                                            | crate::net::TCP_ACK)
+                                        == crate::net::TCP_FIN
+                                            | crate::net::TCP_ACK
+                                    && t.seq == rcv_nxt
+                                    && t.ack == snd_nxt
+                                {
+                                    let n = crate::net::build_tcp4(
+                                        &mut f, peer_mac, mac, us_ip,
+                                        peer_ip, our_port, SRV_PORT,
+                                        snd_nxt,
+                                        rcv_nxt.wrapping_add(1),
+                                        crate::net::TCP_ACK, &[], &[],
+                                    );
+                                    if n != 0 {
+                                        let _ = tx_once(
+                                            base, &f[..n.max(60)],
+                                        );
+                                    }
+                                    printk(format_args!(
+                                        "rustux: tcp: closed clean"
+                                    ));
+                                    crate::log::drain(con);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // SAFETY: reposting a consumed descriptor.
+            unsafe {
+                (*ring.add(d)).sta = 0;
+                wr(base, RDT, d as u32);
+            }
+        }
+        i = i.wrapping_add(1);
+        if role == 0x01 {
+            rounds += 1;
+            if rounds.is_multiple_of(64_000_000) {
+                crate::log::printk(format_args!(
+                    "rustux: tcp: ini hb r={rounds} ph={phase} seen={seen}"
+                ));
+                crate::log::drain(con);
+            }
+            if rounds == u32::MAX {
+                printk(format_args!("rustux: tcp: no peer (down?)"));
+                crate::log::drain(con);
+                return;
+            }
+            // retransmit the outstanding segment for this phase
+            if rounds.is_multiple_of(4_000_000)
+                || (phase == 0 && rounds == 1)
+            {
+                let n = match phase {
+                    0 => crate::net::build_tcp4(
+                        &mut f, [0xff; 6], mac, us_ip, peer_ip,
+                        our_port, SRV_PORT, isn, 0, crate::net::TCP_SYN,
+                        &[2, 4, 5, 180], &[],
+                    ),
+                    1 => crate::net::build_tcp4(
+                        &mut f, peer_mac, mac, us_ip, peer_ip,
+                        our_port, SRV_PORT,
+                        snd_nxt.wrapping_sub(MSG.len() as u32), rcv_nxt,
+                        crate::net::TCP_PSH | crate::net::TCP_ACK,
+                        &[], MSG,
+                    ),
+                    2 => crate::net::build_tcp4(
+                        &mut f, peer_mac, mac, us_ip, peer_ip,
+                        our_port, SRV_PORT, snd_nxt.wrapping_sub(1),
+                        rcv_nxt,
+                        crate::net::TCP_FIN | crate::net::TCP_ACK,
+                        &[], &[],
+                    ),
+                    _ => 0,
+                };
+                if n != 0 {
+                    let _ = tx_once(base, &f[..n.max(60)]);
+                }
+            }
+        } else {
+            if i.is_multiple_of(64_000_000) {
+                crate::log::printk(format_args!(
+                    "rustux: tcp: lis hb iters={i} ph={phase} \
+                     frames={seen}"
+                ));
+                crate::log::drain(con);
+            }
+            // retransmit our outstanding reply while awaiting progress
+            if i.is_multiple_of(4_000_000) && peer_mac != [0; 6] {
+                let n = match phase {
+                    1 => crate::net::build_tcp4(
+                        &mut f, peer_mac, mac, us_ip, peer_ip,
+                        SRV_PORT, 49152, isn, rcv_nxt,
+                        crate::net::TCP_SYN | crate::net::TCP_ACK,
+                        &[2, 4, 5, 180], &[],
+                    ),
+                    3 => crate::net::build_tcp4(
+                        &mut f, peer_mac, mac, us_ip, peer_ip,
+                        SRV_PORT, 49152,
+                        snd_nxt.wrapping_sub(MSG.len() as u32), rcv_nxt,
+                        crate::net::TCP_PSH | crate::net::TCP_ACK,
+                        &[], MSG,
+                    ),
+                    4 => crate::net::build_tcp4(
+                        &mut f, peer_mac, mac, us_ip, peer_ip,
+                        SRV_PORT, 49152, snd_nxt.wrapping_sub(1), rcv_nxt,
+                        crate::net::TCP_FIN | crate::net::TCP_ACK,
+                        &[], &[],
+                    ),
+                    _ => 0,
+                };
+                if n != 0 {
+                    let _ = tx_once(base, &f[..n.max(60)]);
+                }
+            }
+        }
+    }
+}
