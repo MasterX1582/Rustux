@@ -198,9 +198,13 @@ const NR_GETDENTS: u64 = 217;
 const NR_NEWFSTATAT: u64 = 262;
 const NR_POLL: u64 = 7;
 const NR_SOCKET: u64 = 41;
+const NR_CONNECT: u64 = 42;
+const NR_ACCEPT: u64 = 43;
 const NR_SENDTO: u64 = 44;
 const NR_RECVFROM: u64 = 45;
+const NR_SHUTDOWN: u64 = 48;
 const NR_BIND: u64 = 49;
+const NR_LISTEN: u64 = 50;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -243,7 +247,11 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_PIPE2 => user::fd_pipe(a1, a2),
         NR_POLL => user::fd_poll(ctx, a1, a2, a3 as i64),
         NR_SOCKET => user::fd_socket(a1, a2, a3),
+        NR_CONNECT => user::fd_connect(ctx, a1, a2, a3),
+        NR_ACCEPT => user::fd_accept(ctx, a1, a2, a3),
         NR_BIND => user::fd_bind(a1, a2, a3),
+        NR_LISTEN => user::fd_listen(a1, a2),
+        NR_SHUTDOWN => user::fd_shutdown(a1, a2),
         NR_SENDTO => user::fd_sendto(a1, a2, a3, a4, a5, a6),
         NR_RECVFROM => user::fd_recvfrom(ctx, a1, a2, a3, a4, a5, a6),
         NR_OPEN => sys_open(a1, a2, a3),

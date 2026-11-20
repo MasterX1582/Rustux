@@ -136,7 +136,6 @@ pub fn init() -> bool {
 }
 
 /// Per-boot secret key for keyed-hash uses (TCP ISN, future cookies).
-#[cfg(demo_net)]
 pub fn isn_key() -> (u64, u64) {
     (
         ISN_KEY0.load(Ordering::Relaxed),

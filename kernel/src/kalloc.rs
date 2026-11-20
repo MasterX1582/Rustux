@@ -187,7 +187,14 @@ pub unsafe fn kfree(p: *mut u8) {
         alloc.cache[kind as usize] = hdr;
     }
     // kind outside the valid range means a corrupt/foreign pointer —
-    // leak it rather than poison a freelist.
+    // leak it rather than poison a freelist. Scream, though: the only
+    // way a kmalloc header reads as garbage is an overrun somewhere.
+    if kind != KIND_DIRECT && (kind as usize) >= N_CLASSES {
+        crate::log::printk(format_args!(
+            "rustux: kfree: corrupt header kind={kind:#x} p={:#x}",
+            p as u64
+        ));
+    }
     unsafe { irq_restore(f) };
 }
 

@@ -1949,30 +1949,15 @@ fn drain_desc(d: usize) -> Option<([u8; 4], [u8; 6])> {
                 out = Some((ip, m));
             }
         } else if et == 0x0800 {
+            let src_mac = unsafe {
+                core::slice::from_raw_parts(p.add(6), 6)
+            };
+            let mut m = [0u8; 6];
+            m.copy_from_slice(src_mac);
             let buf = unsafe {
                 core::slice::from_raw_parts(p.add(14), len as usize - 14)
             };
-            if let Some(ip) = crate::net::parse_ipv4(buf) {
-                let our = our_ip();
-                if ip.proto == crate::net::NH_UDP
-                    && for_us(ip.dst, our, our_mask())
-                {
-                    if let Some(u) = crate::net::parse_udp(ip.payload) {
-                        if u.cksum_field == 0
-                            || crate::net::csum6_ok(crate::net::csum4(
-                                ip.src,
-                                ip.dst,
-                                crate::net::NH_UDP,
-                                &ip.payload[..8 + u.payload.len()],
-                            ))
-                        {
-                            crate::user::udp_rx(
-                                ip.src, u.sport, u.dport, u.payload,
-                            );
-                        }
-                    }
-                }
-            }
+            ip_demux(buf, m);
         }
     }
     // Repost: the consumed slot becomes the new one-descriptor gap.
@@ -1994,6 +1979,171 @@ pub fn rx_drain() {
     for d in 0..N_RX {
         drain_desc(d);
     }
+    lo_drain();
+}
+
+/// IPv4 demux shared by the live ring and the loopback injector:
+/// `pkt` is the IP packet (eth already stripped), `src_mac` the
+/// sender's link address — replies and accepted children keep it
+/// as their peer MAC.
+fn ip_demux(pkt: &[u8], src_mac: [u8; 6]) {
+    let Some(ip) = crate::net::parse_ipv4(pkt) else { return };
+    let our = our_ip();
+    if ip.proto == crate::net::NH_UDP && for_us(ip.dst, our, our_mask()) {
+        if let Some(u) = crate::net::parse_udp(ip.payload) {
+            if u.cksum_field == 0
+                || crate::net::csum6_ok(crate::net::csum4(
+                    ip.src,
+                    ip.dst,
+                    crate::net::NH_UDP,
+                    &ip.payload[..8 + u.payload.len()],
+                ))
+            {
+                crate::user::udp_rx(ip.src, u.sport, u.dport, u.payload);
+            }
+        }
+    } else if ip.proto == crate::net::NH_TCP
+        && (ip.dst == our || ip.dst[0] == 127)
+    {
+        // Unicast only — broadcast TCP is never a thing. Checksum
+        // covers the whole segment before the parser sees it.
+        if crate::net::csum6_ok(crate::net::csum4(
+            ip.src,
+            ip.dst,
+            crate::net::NH_TCP,
+            ip.payload,
+        )) {
+            if let Some(t) = crate::net::parse_tcp(ip.payload) {
+                crate::user::tcp_rx(
+                    ip.src, src_mac, t.sport, t.dport, t.seq, t.ack,
+                    t.flags, t.payload,
+                );
+            }
+        }
+    }
+}
+
+/// Queued loopback frames (built eth+IP, dst self/127.x): drained
+/// iteratively because nested demux->tx->demux recursion would
+/// overflow the 8KiB syscall stacks — Linux's lo defers through
+/// softirq the same way.
+static mut LO_Q: [([u8; 1600], u16); 4] = [([0; 1600], 0); 4];
+static mut LO_N: usize = 0;
+static mut LO_DRAIN: bool = false;
+/// Shared build/pop buffers — dead once the frame is queued or
+/// demuxed; keeping 3.2KB off the task stack is what lets the
+/// loopback chain live inside an 8-16KiB kstack.
+static mut TX_F: [u8; 1600] = [0; 1600];
+static mut DRAIN_F: [u8; 1600] = [0; 1600];
+
+/// Pop the oldest queued loopback frame into a caller buffer.
+fn lo_pop(out: &mut [u8]) -> Option<u16> {
+    unsafe {
+        let n = *core::ptr::addr_of!(LO_N);
+        if n == 0 {
+            return None;
+        }
+        let q = &mut *core::ptr::addr_of_mut!(LO_Q);
+        let len = q[0].1;
+        out[..1600].copy_from_slice(&q[0].0);
+        for i in 1..n {
+            q[i - 1] = q[i];
+        }
+        *core::ptr::addr_of_mut!(LO_N) = n - 1;
+        Some(len)
+    }
+}
+
+/// Drain queued loopback frames through the normal IP demux —
+/// reentrant calls (a demuxed frame whose handler transmits) just
+/// enqueue and let the outermost drain finish.
+fn lo_drain() {
+    unsafe {
+        if *core::ptr::addr_of!(LO_DRAIN) {
+            return;
+        }
+        *core::ptr::addr_of_mut!(LO_DRAIN) = true;
+    }
+    let fr = unsafe { &mut *core::ptr::addr_of_mut!(DRAIN_F) };
+    while let Some(l) = lo_pop(fr) {
+        let l = l as usize;
+        if l >= 14 {
+            let mut m = [0u8; 6];
+            m.copy_from_slice(&fr[6..12]);
+            ip_demux(&fr[14..l], m);
+        }
+    }
+    unsafe { *core::ptr::addr_of_mut!(LO_DRAIN) = false };
+}
+
+/// Transmit one TCP segment — or queue it for the loopback drain
+/// when the destination is this host (our IP or 127/8).
+#[allow(clippy::too_many_arguments)]
+pub fn tcp_tx(
+    dst_mac: [u8; 6],
+    dst_ip: [u8; 4],
+    sport: u16,
+    dport: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    payload: &[u8],
+) -> bool {
+    let base = LIVE_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return false;
+    }
+    let mac = OUR_MAC.load(Ordering::Relaxed).to_be_bytes();
+    let mut m = [0u8; 6];
+    m.copy_from_slice(&mac[2..8]);
+    // Build into the shared frame buffer, not the task stack: the
+    // buffer is dead the moment the frame is pushed/copied, and a
+    // re-entrant call (a demuxed frame's handler transmitting) only
+    // touches it after the outer caller is done with it.
+    let f = unsafe { &mut *core::ptr::addr_of_mut!(TX_F) };
+    let n = crate::net::build_tcp4(
+        f, dst_mac, m, our_ip(), dst_ip, sport, dport, seq, ack,
+        flags, &[], payload,
+    );
+    if n == 0 {
+        return false;
+    }
+    let our = our_ip();
+    if dst_ip == our || dst_ip[0] == 127 {
+        unsafe {
+            let q = &mut *core::ptr::addr_of_mut!(LO_Q);
+            let len = *core::ptr::addr_of!(LO_N);
+            if len < q.len() {
+                q[len].0[..n].copy_from_slice(&f[..n]);
+                q[len].1 = n as u16;
+                *core::ptr::addr_of_mut!(LO_N) = len + 1;
+            }
+        }
+        lo_drain();
+        return true;
+    }
+    tx_once(base, &f[..n.max(60)])
+}
+
+/// Route a destination IPv4 to a link-layer MAC: self/loopback and
+/// broadcast are static answers, on-link resolves via ARP, the rest
+/// falls back to the cached gateway.
+pub fn route_mac(dip: [u8; 4]) -> Option<[u8; 6]> {
+    let our = our_ip();
+    if dip == our || dip[0] == 127 {
+        let m = OUR_MAC.load(Ordering::Relaxed).to_be_bytes();
+        return Some(m[2..8].try_into().unwrap());
+    }
+    if dip == [0xff; 4] {
+        return Some([0xff; 6]);
+    }
+    let mask = our_mask();
+    if (0..4).all(|i| dip[i] & mask[i] == our[i] & mask[i]) {
+        if let Some(m) = arp_resolve(dip) {
+            return Some(m);
+        }
+    }
+    gw_mac()
 }
 
 /// Resolve an on-link IPv4 to a MAC: gateway is cached from boot;

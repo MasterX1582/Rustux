@@ -34,7 +34,7 @@ const USTACK_PAGES: u64 = 16;
 
 /// Per-task kernel stack for SYSCALL entries — replaces the shared
 /// static stack so a task's kernel state can't bleed into the next.
-const KSTACK_SIZE: usize = 8192;
+const KSTACK_SIZE: usize = 16384;
 
 /// Maximum distinct user VA ranges recorded for syscall validation.
 const MAX_RANGES: usize = 8;
@@ -126,6 +126,13 @@ enum WaitOn {
     /// recvfrom() on an empty UDP socket: `wait_ptr` is the user
     /// buffer, `wait_len` its cap, `wait_ptr2` the sockaddr out ptr.
     UdpRecv(usize),
+    /// connect() awaiting SYN-ACK; wait_deadline bounds it.
+    TcpConn(usize),
+    /// accept() awaiting an established child on the listener.
+    TcpAccept(usize),
+    /// recv/read on an empty TCP stream: `wait_ptr/len` the buffer,
+    /// `wait_ptr2` the optional peer sockaddr out ptr.
+    TcpRecv(usize),
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -153,6 +160,9 @@ enum FdKind {
     /// An AF_INET/SOCK_DGRAM socket — the state lives in UDPSOCKS[id],
     /// dup'd/fork'd fds share the one endpoint like pipe ends.
     Udp(usize),
+    /// An AF_INET/SOCK_STREAM endpoint — listener or connection —
+    /// the state machine lives in TCPSOCKS[id].
+    Tcp(usize),
 }
 
 /// Max concurrent pipes — a hard bound on kernel frame pressure,
@@ -916,6 +926,7 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
         FdKind::Console => EBADF,
         FdKind::Dir => EISDIR,
         FdKind::Udp(i) => udp_recv_or_block(ctx, *i, buf, len, 0),
+        FdKind::Tcp(i) => tcp_recv_or_block(ctx, *i, buf, len, 0),
         FdKind::File(data) => {
             // pos may sit past EOF after lseek — saturating, not panicking.
             let avail = data.len().saturating_sub(o.pos);
@@ -997,6 +1008,9 @@ pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     const EPIPE: u64 = (-32i64) as u64;
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
+    if let FdKind::Tcp(i) = &o.kind {
+        return tcp_send(*i, buf, len);
+    }
     let FdKind::Pipe { id, write } = &o.kind else {
         return EBADF;
     };
@@ -1314,6 +1328,9 @@ fn ofd_release(oi: usize) {
         // the blocker's own fd pins the endpoint alive.
         unsafe { (*core::ptr::addr_of_mut!(UDPSOCKS))[i] = None };
     }
+    if let FdKind::Tcp(i) = kind {
+        tcp_sock_close(i);
+    }
 }
 
 /// The last fd naming one pipe end went away. Decrement the endpoint
@@ -1529,6 +1546,34 @@ fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
             }
             r
         }
+        // TCP: listener readable when a child waits; a connection
+        // readable on data/EOF, writable once established, ERR on
+        // RST, HUP once fully closed.
+        FdKind::Tcp(i) => {
+            let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+            match socks.get(*i).and_then(|s| s.as_ref()) {
+                None => POLLNVAL,
+                Some(k) if k.state == TcpState::Listen => {
+                    if k.blen > 0 { POLLIN } else { 0 }
+                }
+                Some(k) => {
+                    let mut r = 0;
+                    if k.dead {
+                        r |= POLLERR;
+                    }
+                    if k.rxl > 0 || k.fin_rx || k.state == TcpState::Closed {
+                        r |= POLLIN;
+                    }
+                    if matches!(k.state, TcpState::Estab | TcpState::CloseWait) {
+                        r |= POLLOUT;
+                    }
+                    if k.state == TcpState::Closed {
+                        r |= POLLHUP;
+                    }
+                    r
+                }
+            }
+        }
         FdKind::Pipe { id, write } => {
             match pipes.get(*id).and_then(|s| s.as_ref()) {
                 None => POLLERR, // peer's frame freed — torn down
@@ -1613,14 +1658,27 @@ fn poll_expire() {
     for s in tasks.iter_mut() {
         let Some(t) = s.as_mut() else { continue };
         if t.state == TaskState::Blocked
-            && t.wait_on == WaitOn::Poll
             && t.wait_deadline != 0
             && now >= t.wait_deadline
         {
-            for i in 0..t.wait_len {
-                write_task_u16(t.pml4, t.wait_ptr + i * 8 + 6, 0);
+            match t.wait_on {
+                WaitOn::Poll => {
+                    for i in 0..t.wait_len {
+                        write_task_u16(t.pml4, t.wait_ptr + i * 8 + 6, 0);
+                    }
+                    t.ctx.rax = 0;
+                }
+                WaitOn::TcpConn(si) => {
+                    // connect() timed out: ETIMEDOUT, the socket
+                    // marked dead so further io fails fast.
+                    t.ctx.rax = (-110i64) as u64;
+                    if let Some(k) = tcp_socks()[si].as_mut() {
+                        k.dead = true;
+                        k.state = TcpState::Closed;
+                    }
+                }
+                _ => continue,
             }
-            t.ctx.rax = 0;
             t.wait_on = WaitOn::None;
             t.wait_deadline = 0;
             t.state = TaskState::Runnable;
@@ -1840,19 +1898,16 @@ fn udp_recv_or_block(
     block_switch()
 }
 
-/// socket(AF_INET, SOCK_DGRAM): a kernel UDP endpoint behind an OFD,
-/// so it dups/fork-shares like every other fd.
+/// socket(AF_INET, type): a kernel endpoint behind an OFD, so it
+/// dups/fork-shares like every other fd. SOCK_DGRAM -> UDPSOCKS,
+/// SOCK_STREAM -> TCPSOCKS in the Init state.
 pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
     const EAFNOSUPPORT: u64 = (-97i64) as u64;
     const ENFILE_: u64 = (-23i64) as u64;
-    if domain != 2 || ty != 2 {
+    if domain != 2 || !(ty == 1 || ty == 2) {
         return EAFNOSUPPORT;
     }
     let Some(t) = cur_mut() else { return EBADF };
-    let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
-    let Some(si) = socks.iter().position(Option::is_none) else {
-        return ENFILE_;
-    };
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     let (Some(oi), Some(fi)) = (
         ofds.iter().position(Option::is_none),
@@ -1860,12 +1915,39 @@ pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
     ) else {
         return EMFILE;
     };
-    socks[si] = Some(UdpSock { port: 0, q: None });
-    ofds[oi] = Some(OpenFile {
-        kind: FdKind::Udp(si),
-        pos: 0,
-        refs: 1,
-    });
+    let kind = if ty == 2 {
+        let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+        let Some(si) = socks.iter().position(Option::is_none) else {
+            return ENFILE_;
+        };
+        socks[si] = Some(UdpSock { port: 0, q: None });
+        FdKind::Udp(si)
+    } else {
+        let socks = tcp_socks();
+        let Some(si) = socks.iter().position(Option::is_none) else {
+            return ENFILE_;
+        };
+        socks[si] = Some(TcpSock {
+            port: 0,
+            peer_ip: [0; 4],
+            peer_port: 0,
+            peer_mac: [0; 6],
+            state: TcpState::Init,
+            snd_nxt: 0,
+            rcv_nxt: 0,
+            fin_acked: false,
+            fin_rx: false,
+            backlog: [usize::MAX; TCP_BACKLOG],
+            blen: 0,
+            parent: usize::MAX,
+            orphan: false,
+            dead: false,
+            rxb: [0; TCP_RX_CAP],
+            rxl: 0,
+        });
+        FdKind::Tcp(si)
+    };
+    ofds[oi] = Some(OpenFile { kind, pos: 0, refs: 1 });
     t.fds[fi] = Some(oi as u8);
     fi as u64
 }
@@ -1883,8 +1965,13 @@ pub fn fd_bind(fd: u64, sa: u64, len: u64) -> u64 {
     if !range_ok(sa, 8) {
         return EFAULT;
     }
-    let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
-        Some(FdKind::Udp(i)) => Some(*i),
+    enum SockId {
+        U(usize),
+        T(usize),
+    }
+    let Some(sid) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Udp(i)) => Some(SockId::U(*i)),
+        Some(FdKind::Tcp(i)) => Some(SockId::T(*i)),
         _ => None,
     }) else {
         return EBADF;
@@ -1892,25 +1979,49 @@ pub fn fd_bind(fd: u64, sa: u64, len: u64) -> u64 {
     let Some((port, _ip)) = parse_sockaddr(t.pml4, sa) else {
         return EAFNOSUPPORT;
     };
-    let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
-    if socks[si].as_ref().is_none_or(|k| k.port != 0) {
-        // None can't happen (the OFD pins the slot); a nonzero port
-        // is a re-bind, which Linux refuses with EINVAL.
-        return EINVAL;
-    }
-    let p = if port == 0 {
-        let Some(e) = ephemeral_port() else {
-            return EADDRNOTAVAIL;
-        };
-        e
-    } else {
-        if socks.iter().flatten().any(|s| s.port == port) {
-            return EADDRINUSE;
+    match sid {
+        SockId::U(si) => {
+            let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+            if socks[si].as_ref().is_none_or(|k| k.port != 0) {
+                // None can't happen (the OFD pins the slot); a
+                // nonzero port is a re-bind — EINVAL like Linux.
+                return EINVAL;
+            }
+            let p = if port == 0 {
+                let Some(e) = ephemeral_port() else {
+                    return EADDRNOTAVAIL;
+                };
+                e
+            } else {
+                if socks.iter().flatten().any(|s| s.port == port) {
+                    return EADDRINUSE;
+                }
+                port
+            };
+            if let Some(k) = socks[si].as_mut() {
+                k.port = p;
+            }
         }
-        port
-    };
-    if let Some(k) = socks[si].as_mut() {
-        k.port = p;
+        SockId::T(si) => {
+            let socks = tcp_socks();
+            if socks[si].as_ref().is_none_or(|k| k.port != 0) {
+                return EINVAL;
+            }
+            let p = if port == 0 {
+                let Some(e) = tcp_ephemeral() else {
+                    return EADDRNOTAVAIL;
+                };
+                e
+            } else {
+                if socks.iter().flatten().any(|s| s.port == port) {
+                    return EADDRINUSE;
+                }
+                port
+            };
+            if let Some(k) = socks[si].as_mut() {
+                k.port = p;
+            }
+        }
     }
     0
 }
@@ -1930,6 +2041,16 @@ pub fn fd_sendto(
     const EADDRNOTAVAIL: u64 = (-99i64) as u64;
     const EMSGSIZE: u64 = (-90i64) as u64;
     let Some(t) = cur_mut() else { return EBADF };
+    // sendto on a stream socket is a plain send; a non-null
+    // destination on a connected socket is EISCONN like Linux.
+    match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Tcp(i)) => {
+            const EISCONN: u64 = (-106i64) as u64;
+            return if sa == 0 { tcp_send(*i, buf, len) } else { EISCONN };
+        }
+        Some(FdKind::Udp(_)) => {}
+        _ => return EBADF,
+    }
     let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
         Some(FdKind::Udp(i)) => Some(*i),
         _ => None,
@@ -2018,13 +2139,899 @@ pub fn fd_recvfrom(
     _alen: u64,
 ) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
+    match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Udp(i)) => udp_recv_or_block(ctx, *i, buf, len, sa),
+        Some(FdKind::Tcp(i)) => tcp_recv_or_block(ctx, *i, buf, len, sa),
+        _ => EBADF,
+    }
+}
+
+// ---- TCP sockets (SOCK_STREAM) ----
+//
+// Minimal in-order stack: no retransmit, no out-of-order queue —
+// out-of-window segments drop and that's honest loss. States are
+// the textbook ones. Accepted children are first-class TCPSOCKS
+// slots; the listener's backlog holds only indices, so nothing is
+// cloned and there is no association to inherit (CVE-2026-99116's
+// accept-clone UAF class is absent by design). Listener state is
+// never carried across calls either — no stale-error accepts
+// (CVE-2026-90138 class). ISNs come from the same SipHash-
+// keyed construction as the wire selftest.
+
+/// Bounds: endpoints, per-conn stream buffer, accept backlog.
+const MAX_TCPS: usize = 8;
+const TCP_RX_CAP: usize = 2048;
+const TCP_BACKLOG: usize = 4;
+/// connect() timeout, ~10s at 100Hz ticks.
+const TCP_CONN_TICKS: u64 = 1000;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TcpState {
+    /// Fresh socket — bound or not, never connected.
+    Init,
+    Listen,
+    /// connect() sent SYN, awaiting SYN-ACK.
+    SynSent,
+    /// Listener child: SYN seen, SYN-ACK sent, awaiting the ACK.
+    SynRecv,
+    Estab,
+    /// Peer's FIN arrived — our send side still open.
+    CloseWait,
+    /// We sent FIN; awaiting its ACK and/or the peer's FIN.
+    FinWait,
+    /// FINs crossed: ours ACKs the peer's, awaiting ours.
+    LastAck,
+    Closed,
+}
+
+struct TcpSock {
+    port: u16,
+    peer_ip: [u8; 4],
+    peer_port: u16,
+    peer_mac: [u8; 6],
+    state: TcpState,
+    snd_nxt: u32,
+    rcv_nxt: u32,
+    /// Our FIN was ACKed (FinWait/LastAck bookkeeping).
+    fin_acked: bool,
+    /// Peer FIN'd — reads hit EOF once the buffer drains.
+    fin_rx: bool,
+    /// Listener: established children not yet accept()ed.
+    backlog: [usize; TCP_BACKLOG],
+    blen: usize,
+    /// SynRecv child: the listener slot that spawned us.
+    parent: usize,
+    /// All fds gone — teardown completes asynchronously.
+    orphan: bool,
+    /// RST seen — reads fail ECONNRESET, writes EPIPE.
+    dead: bool,
+    rxb: [u8; TCP_RX_CAP],
+    rxl: usize,
+}
+
+static mut TCPSOCKS: [Option<TcpSock>; MAX_TCPS] = [const { None }; MAX_TCPS];
+
+fn tcp_socks() -> &'static mut [Option<TcpSock>; MAX_TCPS] {
+    unsafe { &mut *core::ptr::addr_of_mut!(TCPSOCKS) }
+}
+
+/// Predictable-ISN rejection: SipHash of the 4-tuple + a timestamp
+/// under the per-boot key — same construction as tcp_selftest.
+fn tcp_isn(dip: [u8; 4], sport: u16, dport: u16) -> u32 {
+    let our = crate::e1000::our_ip();
+    let t = unsafe { core::arch::x86_64::_rdtsc() } as u32;
+    klib::hash::siphash_3u32(
+        u32::from_be_bytes(our) ^ u32::from_be_bytes(dip),
+        ((sport as u32) << 16) | dport as u32,
+        t,
+        crate::rand::isn_key(),
+    ) as u32
+}
+
+/// Lowest unbound local TCP port >= EPHEM_BASE (separate namespace
+/// from UDP, like Linux).
+fn tcp_ephemeral() -> Option<u16> {
+    let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+    (EPHEM_BASE..=u16::MAX)
+        .find(|&p| !socks.iter().flatten().any(|s| s.port == p))
+}
+
+/// Emit one segment for a connection slot.
+fn tcp_seg(
+    k: &TcpSock,
+    flags: u8,
+    payload: &[u8],
+) -> bool {
+    crate::e1000::tcp_tx(
+        k.peer_mac, k.peer_ip, k.port, k.peer_port, k.snd_nxt,
+        k.rcv_nxt, flags, payload,
+    )
+}
+
+/// RST answering a segment nobody owns — never RST an RST.
+#[allow(clippy::too_many_arguments)]
+fn tcp_rst(
+    src_ip: [u8; 4],
+    src_mac: [u8; 6],
+    sport: u16,
+    dport: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    plen: usize,
+) {
+    if flags & crate::net::TCP_RST != 0 {
+        return;
+    }
+    let (s, a, fl) = if flags & crate::net::TCP_ACK != 0 {
+        (ack, 0, crate::net::TCP_RST)
+    } else {
+        let used = plen as u32
+            + (flags & crate::net::TCP_SYN != 0) as u32
+            + (flags & crate::net::TCP_FIN != 0) as u32;
+        (0, seq.wrapping_add(used), crate::net::TCP_RST | crate::net::TCP_ACK)
+    };
+    let _ = crate::e1000::tcp_tx(
+        src_mac, src_ip, dport, sport, s, a, fl, &[],
+    );
+}
+
+/// Drop the first runnable task sleeping on `on`, hand it `ret`
+/// and mark it Runnable — the generic non-data wake.
+fn wake_waiter(on: WaitOn, ret: u64) {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state == TaskState::Blocked && t.wait_on == on {
+            t.ctx.rax = ret;
+            t.wait_on = WaitOn::None;
+            t.wait_deadline = 0;
+            t.state = TaskState::Runnable;
+            return;
+        }
+    }
+}
+
+/// Mint a Tcp OFD+fd inside task `t` for connection `ci`.
+/// Returns the fd, or EMFILE/ENFILE without consuming `ci`.
+fn tcp_mint_fd(t: &mut Task, ci: usize) -> Result<u64, u64> {
+    const ENFILE_: u64 = (-23i64) as u64;
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    let Some(oi) = ofds.iter().position(Option::is_none) else {
+        return Err(ENFILE_);
+    };
+    let Some(fi) = t.fds.iter().position(Option::is_none) else {
+        return Err(EMFILE);
+    };
+    ofds[oi] = Some(OpenFile {
+        kind: FdKind::Tcp(ci),
+        pos: 0,
+        refs: 1,
+    });
+    t.fds[fi] = Some(oi as u8);
+    Ok(fi as u64)
+}
+
+/// A connection reached Estab or died — wake a blocked accept() on
+/// listener `li` by minting its fd inside the sleeper's table.
+fn wake_accept(li: usize) {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state == TaskState::Blocked && t.wait_on == WaitOn::TcpAccept(li) {
+            let socks = tcp_socks();
+            let Some(k) = socks[li].as_mut() else { return };
+            if k.blen == 0 {
+                continue;
+            }
+            let ci = k.backlog[0];
+            for j in 1..k.blen {
+                k.backlog[j - 1] = k.backlog[j];
+            }
+            k.blen -= 1;
+            match tcp_mint_fd(t, ci) {
+                Ok(fd) => t.ctx.rax = fd,
+                Err(e) => {
+                    k.backlog[k.blen] = ci;
+                    k.blen += 1;
+                    t.ctx.rax = e;
+                }
+            }
+            if t.wait_ptr2 != 0 {
+                // sockaddr_out requested — the peer's address.
+                let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+                if let Some(c) = socks[ci].as_ref() {
+                    let _ = write_task_bytes(
+                        t.pml4,
+                        t.wait_ptr2,
+                        &sockaddr_in(c.peer_port, c.peer_ip),
+                    );
+                }
+                t.wait_ptr2 = 0;
+            }
+            t.wait_on = WaitOn::None;
+            t.state = TaskState::Runnable;
+            return;
+        }
+    }
+}
+
+/// Feed a blocked TcpRecv sleeper straight from the connection's
+/// stream buffer through ITS page tables — or EOF/error without
+/// data, matching what a re-run recv() would return.
+fn wake_tcp_recv(ci: usize) {
+    const ECONNRESET: u64 = (-104i64) as u64;
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state == TaskState::Blocked && t.wait_on == WaitOn::TcpRecv(ci) {
+            let socks = tcp_socks();
+            let Some(k) = socks[ci].as_mut() else { return };
+            if k.dead {
+                t.ctx.rax = ECONNRESET;
+            } else if k.rxl > 0 {
+                let n = core::cmp::min(k.rxl, t.wait_len as usize);
+                if !write_task_bytes(t.pml4, t.wait_ptr, &k.rxb[..n]) {
+                    return; // sleeper's pages vanished — leave it
+                }
+                k.rxb.copy_within(n..k.rxl, 0);
+                k.rxl -= n;
+                t.ctx.rax = n as u64;
+            } else if k.fin_rx {
+                t.ctx.rax = 0;
+            } else {
+                return;
+            }
+            if t.wait_ptr2 != 0 {
+                // recvfrom asked for the peer's sockaddr.
+                let _ = write_task_bytes(
+                    t.pml4,
+                    t.wait_ptr2,
+                    &sockaddr_in(k.peer_port, k.peer_ip),
+                );
+                t.wait_ptr2 = 0;
+            }
+            t.wait_on = WaitOn::None;
+            t.wait_deadline = 0;
+            t.state = TaskState::Runnable;
+            return;
+        }
+    }
+}
+
+/// Free a connection slot, unlinking it from a listener backlog.
+fn tcp_free(ci: usize) {
+    let socks = tcp_socks();
+    let parent = socks[ci].as_ref().map_or(usize::MAX, |k| k.parent);
+    socks[ci] = None;
+    if parent != usize::MAX {
+        if let Some(l) = socks[parent].as_mut() {
+            if let Some(j) = l.backlog[..l.blen].iter().position(|&c| c == ci)
+            {
+                for x in j + 1..l.blen {
+                    l.backlog[x - 1] = l.backlog[x];
+                }
+                l.blen -= 1;
+            }
+        }
+    }
+}
+
+/// Per-connection segment handling — the state machine proper.
+/// `src_mac` is the sender's link address, kept as peer_mac so
+/// replies track the freshest ARP truth.
+#[allow(clippy::too_many_arguments)]
+fn tcp_rx_conn(
+    ci: usize,
+    _src_ip: [u8; 4],
+    src_mac: [u8; 6],
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    payload: &[u8],
+) {
+    let socks = tcp_socks();
+    let Some(k) = socks[ci].as_mut() else { return };
+    k.peer_mac = src_mac;
+    if flags & crate::net::TCP_RST != 0 {
+        let was = k.state;
+        k.dead = true;
+        k.state = TcpState::Closed;
+        if k.orphan || matches!(was, TcpState::SynRecv) {
+            tcp_free(ci); // nothing else references it
+            return;
+        }
+        wake_waiter(WaitOn::TcpConn(ci), (-111i64) as u64); // ECONNREFUSED
+        wake_tcp_recv(ci);
+        wake_pollers();
+        return;
+    }
+    match k.state {
+        TcpState::SynSent => {
+            if flags & crate::net::TCP_SYN != 0
+                && flags & crate::net::TCP_ACK != 0
+                && ack == k.snd_nxt
+            {
+                k.rcv_nxt = seq.wrapping_add(1);
+                k.state = TcpState::Estab;
+                let _ = tcp_seg(k, crate::net::TCP_ACK, &[]);
+                wake_waiter(WaitOn::TcpConn(ci), 0);
+                wake_pollers();
+            }
+        }
+        TcpState::SynRecv => {
+            if flags & crate::net::TCP_ACK != 0 && ack == k.snd_nxt {
+                let li = k.parent;
+                let ok = {
+                    let l = socks[li].as_mut();
+                    l.is_some_and(|l| {
+                        if l.state == TcpState::Listen && l.blen < TCP_BACKLOG {
+                            l.backlog[l.blen] = ci;
+                            l.blen += 1;
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                };
+                if ok {
+                    socks[ci].as_mut().unwrap().state = TcpState::Estab;
+                    wake_accept(li);
+                    wake_pollers();
+                } else {
+                    // Listener gone or backlog full — RST the child.
+                    let (pm, pi, sp, dp, sn) = {
+                        let k = socks[ci].as_ref().unwrap();
+                        (k.peer_mac, k.peer_ip, k.port, k.peer_port,
+                         k.snd_nxt)
+                    };
+                    let _ = crate::e1000::tcp_tx(
+                        pm, pi, sp, dp, sn, 0, crate::net::TCP_RST, &[],
+                    );
+                    tcp_free(ci);
+                }
+            }
+        }
+        TcpState::Estab | TcpState::CloseWait | TcpState::FinWait => {
+            // ACK bookkeeping for our FIN before data handling.
+            if ack == k.snd_nxt && k.state == TcpState::FinWait {
+                k.fin_acked = true;
+            }
+            let mut close_me = false;
+            if seq == k.rcv_nxt {
+                let mut adv = 0u32;
+                if !payload.is_empty()
+                    && k.rxl + payload.len() <= TCP_RX_CAP
+                {
+                    k.rxb[k.rxl..k.rxl + payload.len()]
+                        .copy_from_slice(payload);
+                    k.rxl += payload.len();
+                    adv += payload.len() as u32;
+                }
+                if flags & crate::net::TCP_FIN != 0 {
+                    // FIN only counts once preceding bytes are ours.
+                    if adv as usize == payload.len() {
+                        adv += 1;
+                        k.fin_rx = true;
+                    }
+                }
+                if adv > 0 {
+                    k.rcv_nxt = k.rcv_nxt.wrapping_add(adv);
+                    let _ = tcp_seg(k, crate::net::TCP_ACK, &[]);
+                }
+                if k.fin_rx && k.state == TcpState::Estab {
+                    k.state = TcpState::CloseWait;
+                } else if k.fin_rx
+                    && k.state == TcpState::FinWait
+                    && k.fin_acked
+                {
+                    k.state = TcpState::Closed;
+                    close_me = k.orphan;
+                }
+                wake_tcp_recv(ci);
+                wake_pollers();
+            }
+            if close_me {
+                tcp_free(ci);
+            }
+        }
+        TcpState::LastAck if ack == k.snd_nxt => {
+            let orphan = k.orphan;
+            k.state = TcpState::Closed;
+            if orphan {
+                tcp_free(ci);
+            } else {
+                wake_tcp_recv(ci);
+                wake_pollers();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// TCP demux entry — wire path via e1000::ip_demux, loopback via
+/// the same demux on injected frames. First match wins: an
+/// established-ish 4-tuple connection, else a listener takes SYNs,
+/// else we answer RST like a closed port should.
+#[allow(clippy::too_many_arguments)]
+pub fn tcp_rx(
+    src_ip: [u8; 4],
+    src_mac: [u8; 6],
+    sport: u16,
+    dport: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    payload: &[u8],
+) {
+    let socks = tcp_socks();
+    if let Some(ci) = socks.iter().position(|s| {
+        s.as_ref().is_some_and(|k| {
+            !matches!(k.state, TcpState::Listen | TcpState::Init)
+                && k.port == dport
+                && k.peer_port == sport
+                && k.peer_ip == src_ip
+        })
+    }) {
+        tcp_rx_conn(ci, src_ip, src_mac, seq, ack, flags, payload);
+        return;
+    }
+    if flags & crate::net::TCP_SYN != 0 && flags & crate::net::TCP_ACK == 0 {
+        let Some(li) = socks.iter().position(|s| {
+            s.as_ref().is_some_and(|k| {
+                k.state == TcpState::Listen && k.port == dport
+            })
+        }) else {
+            // SYN to a closed port — refuse, so connect() sees it.
+            tcp_rst(src_ip, src_mac, sport, dport, seq, ack, flags,
+                    payload.len());
+            return;
+        };
+        // Bound half-open + accepted children per listener.
+        let kids = socks.iter().flatten()
+            .filter(|k| k.parent == li).count();
+        let Some(ci) = socks.iter().position(Option::is_none) else {
+            return; // no slots — drop
+        };
+        if kids >= TCP_BACKLOG {
+            return; // backlog bound — honest drop
+        }
+        let isn = tcp_isn(src_ip, dport, sport);
+        socks[ci] = Some(TcpSock {
+            port: dport,
+            peer_ip: src_ip,
+            peer_port: sport,
+            peer_mac: src_mac,
+            state: TcpState::SynRecv,
+            snd_nxt: isn.wrapping_add(1),
+            rcv_nxt: seq.wrapping_add(1),
+            fin_acked: false,
+            fin_rx: false,
+            backlog: [usize::MAX; TCP_BACKLOG],
+            blen: 0,
+            parent: li,
+            orphan: false,
+            dead: false,
+            rxb: [0; TCP_RX_CAP],
+            rxl: 0,
+        });
+        // SYN-ACK from the child: seq=isn, ack=their seq+1.
+        let _ = crate::e1000::tcp_tx(
+            src_mac, src_ip, dport, sport, isn,
+            seq.wrapping_add(1),
+            crate::net::TCP_SYN | crate::net::TCP_ACK, &[],
+        );
+        // If the peer vanishes the child reaps when the listener
+        // closes; the ACK completing it moves it to the backlog.
+        return;
+    }
+    // Nothing to catch it — closed-port RST.
+    tcp_rst(src_ip, src_mac, sport, dport, seq, ack, flags,
+            payload.len());
+}
+
+/// Initiate a connection: SYN out, then block (with a ~10s
+/// deadline) for the SYN-ACK — unless loopback completed it inline.
+pub fn fd_connect(ctx: &mut UCtx, fd: u64, sa: u64, len: u64) -> u64 {
+    const EAFNOSUPPORT: u64 = (-97i64) as u64;
+    const EADDRNOTAVAIL: u64 = (-99i64) as u64;
+    const ECONNREFUSED: u64 = (-111i64) as u64;
+    const EHOSTUNREACH: u64 = (-113i64) as u64;
+    const EISCONN: u64 = (-106i64) as u64;
+    const EINTR_: u64 = (-4i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    if len < 8 || !range_ok(sa, 8) {
+        return EFAULT;
+    }
     let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
-        Some(FdKind::Udp(i)) => Some(*i),
+        Some(FdKind::Tcp(i)) => Some(*i),
         _ => None,
     }) else {
         return EBADF;
     };
-    udp_recv_or_block(ctx, si, buf, len, sa)
+    let Some((dport, dip)) = parse_sockaddr(t.pml4, sa) else {
+        return EAFNOSUPPORT;
+    };
+    if !crate::e1000::net_up() {
+        return EHOSTUNREACH;
+    }
+    let Some(mac) = crate::e1000::route_mac(dip) else {
+        return EHOSTUNREACH;
+    };
+    // Loopback peers canonicalize to our own address — replies on
+    // the injected path carry our IP as their source, so the
+    // 4-tuple match stays exact.
+    let peer = if dip[0] == 127 { crate::e1000::our_ip() } else { dip };
+    {
+        let socks = tcp_socks();
+        let Some(k) = socks[si].as_mut() else { return EBADF };
+        if k.state != TcpState::Init {
+            return EISCONN; // already connected/connecting
+        }
+        if k.port == 0 {
+            let Some(e) = tcp_ephemeral() else {
+                return EADDRNOTAVAIL;
+            };
+            k.port = e;
+        }
+        k.peer_ip = peer;
+        k.peer_port = dport;
+        k.peer_mac = mac;
+        k.snd_nxt = tcp_isn(peer, k.port, dport).wrapping_add(1);
+        k.state = TcpState::SynSent;
+        let isn = k.snd_nxt.wrapping_sub(1);
+        let _ = crate::e1000::tcp_tx(
+            mac, dip, k.port, dport, isn, 0, crate::net::TCP_SYN, &[],
+        );
+        // Loopback may have completed the handshake inside the tx.
+        match k.state {
+            TcpState::Estab => return 0,
+            _ if k.dead => return ECONNREFUSED,
+            _ => {}
+        }
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    if t.pending != 0 {
+        return EINTR_;
+    }
+    t.wait_on = WaitOn::TcpConn(si);
+    t.wait_deadline = crate::apic::TICKS
+        .load(core::sync::atomic::Ordering::Relaxed)
+        + TCP_CONN_TICKS;
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// listen(fd, backlog): a bound Init socket becomes passive.
+/// backlog is capped at our queue depth, like Linux clamps it.
+pub fn fd_listen(fd: u64, backlog: u64) -> u64 {
+    const EADDRNOTAVAIL: u64 = (-99i64) as u64;
+    const EOPNOTSUPP: u64 = (-95i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Tcp(i)) => Some(*i),
+        _ => None,
+    }) else {
+        return EOPNOTSUPP; // non-TCP or bad fd
+    };
+    let socks = tcp_socks();
+    let Some(k) = socks[si].as_mut() else { return EOPNOTSUPP };
+    match k.state {
+        TcpState::Listen => {
+            k.blen = k.blen.min(TCP_BACKLOG.min(backlog as usize));
+            return 0; // re-listen just shrinks the queue
+        }
+        TcpState::Init => {}
+        _ => return EINVAL, // listened after connecting — EINVAL
+    }
+    if k.port == 0 {
+        let Some(e) = tcp_ephemeral() else {
+            return EADDRNOTAVAIL;
+        };
+        k.port = e;
+    }
+    k.blen = 0;
+    k.state = TcpState::Listen;
+    0
+}
+
+/// accept(fd, sockaddr_out, alen): the oldest established child
+/// becomes a fresh fd; empty backlog blocks until one completes.
+pub fn fd_accept(ctx: &mut UCtx, fd: u64, sa: u64, _alen: u64) -> u64 {
+    const EOPNOTSUPP: u64 = (-95i64) as u64;
+    const EINTR_: u64 = (-4i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    if sa != 0 && !range_ok_w(sa, 16) {
+        return EFAULT;
+    }
+    let Some(li) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Tcp(i)) => Some(*i),
+        _ => None,
+    }) else {
+        return EOPNOTSUPP;
+    };
+    crate::e1000::rx_drain();
+    let socks = tcp_socks();
+    let Some(k) = socks[li].as_mut() else { return EOPNOTSUPP };
+    if k.state != TcpState::Listen {
+        return EINVAL;
+    }
+    if k.blen > 0 {
+        let ci = k.backlog[0];
+        for j in 1..k.blen {
+            k.backlog[j - 1] = k.backlog[j];
+        }
+        k.blen -= 1;
+        let (pip, pport) = {
+            let c = socks[ci].as_ref().unwrap();
+            (c.peer_ip, c.peer_port)
+        };
+        let Some(t) = cur_mut() else { return EBADF };
+        let fd = match tcp_mint_fd(t, ci) {
+            Ok(f) => f,
+            Err(e) => {
+                let k = tcp_socks()[li].as_mut().unwrap();
+                k.backlog[k.blen] = ci;
+                k.blen += 1;
+                return e;
+            }
+        };
+        if sa != 0 {
+            // SAFETY: sa validated writable above; all 16 bytes
+            // come from the zeroed sockaddr_in.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    sockaddr_in(pport, pip).as_ptr(),
+                    sa as *mut u8,
+                    16,
+                );
+            }
+        }
+        return fd;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    if t.pending != 0 {
+        return EINTR_;
+    }
+    t.wait_on = WaitOn::TcpAccept(li);
+    t.wait_ptr2 = sa;
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// Stream receive shared by read()/recvfrom() on a TCP fd.
+/// `sa` (when nonzero) gets the peer's sockaddr.
+fn tcp_recv_or_block(
+    ctx: &mut UCtx,
+    si: usize,
+    buf: u64,
+    len: u64,
+    sa: u64,
+) -> u64 {
+    const ENOTCONN: u64 = (-107i64) as u64;
+    const ECONNRESET: u64 = (-104i64) as u64;
+    const EINTR_: u64 = (-4i64) as u64;
+    if cur_mut().is_none() {
+        return EBADF;
+    }
+    crate::e1000::rx_drain();
+    {
+        let socks = tcp_socks();
+        let Some(k) = socks[si].as_mut() else { return EBADF };
+        if k.dead {
+            return ECONNRESET;
+        }
+        match k.state {
+            TcpState::Estab
+            | TcpState::CloseWait
+            | TcpState::FinWait
+            | TcpState::LastAck
+            | TcpState::Closed => {}
+            _ => return ENOTCONN, // no data stream yet
+        }
+        if k.rxl > 0 {
+            let n = core::cmp::min(k.rxl, len as usize);
+            if n > 0 && !range_ok_w(buf, n as u64) {
+                return EFAULT;
+            }
+            // SAFETY: buf validated writable under this task's
+            // page table; rxb holds received bytes only.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    k.rxb.as_ptr(),
+                    buf as *mut u8,
+                    n,
+                );
+            }
+            k.rxb.copy_within(n..k.rxl, 0);
+            k.rxl -= n;
+            return n as u64;
+        }
+        if k.fin_rx || k.state == TcpState::Closed {
+            return 0; // EOF
+        }
+    }
+    if !range_ok_w(buf, len.min(TCP_RX_CAP as u64).max(1)) {
+        return EFAULT;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    if t.pending != 0 {
+        return EINTR_;
+    }
+    t.wait_on = WaitOn::TcpRecv(si);
+    t.wait_ptr = buf;
+    t.wait_len = len.min(TCP_RX_CAP as u64);
+    t.wait_ptr2 = sa;
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// Stream send shared by write()/sendto() on a TCP fd.
+fn tcp_send(si: usize, buf: u64, len: u64) -> u64 {
+    const ENOTCONN: u64 = (-107i64) as u64;
+    const EMSGSIZE: u64 = (-90i64) as u64;
+    const EPIPE_: u64 = (-32i64) as u64;
+    if cur_mut().is_none() {
+        return EBADF;
+    }
+    if len == 0 {
+        return 0;
+    }
+    if len > 1400 {
+        return EMSGSIZE;
+    }
+    if !range_ok(buf, len) {
+        return EFAULT;
+    }
+    let (state, dead) = {
+        let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+        match socks[si].as_ref() {
+            Some(k) => (k.state, k.dead),
+            None => return EBADF,
+        }
+    };
+    if dead {
+        return EPIPE_;
+    }
+    if !matches!(state, TcpState::Estab | TcpState::CloseWait) {
+        return ENOTCONN;
+    }
+    // SAFETY: buf validated readable for len under this task's
+    // page table; the slice is consumed by tcp_tx before any
+    // re-entrant drain could disturb it.
+    let pay = unsafe {
+        core::slice::from_raw_parts(buf as *const u8, len as usize)
+    };
+    // Snapshot what the segment needs — the tx path can re-enter
+    // the table (loopback drain) so no borrow crosses it.
+    let (pm, pi, sp, dp, sn, rn) = {
+        let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+        let k = socks[si].as_ref().unwrap();
+        (k.peer_mac, k.peer_ip, k.port, k.peer_port, k.snd_nxt,
+         k.rcv_nxt)
+    };
+    if !crate::e1000::tcp_tx(
+        pm, pi, sp, dp, sn, rn,
+        crate::net::TCP_PSH | crate::net::TCP_ACK,
+        pay,
+    ) {
+        return (-5i64) as u64; // EIO — tx ring rejected
+    }
+    let socks = tcp_socks();
+    match socks[si].as_mut() {
+        Some(k) => {
+            k.snd_nxt = k.snd_nxt.wrapping_add(len as u32);
+            len
+        }
+        None => EPIPE_, // loopback teardown freed it mid-send
+    }
+}
+
+/// shutdown(fd, how): how&2 closes the send side with a FIN.
+/// how==1 alone marks reads EOF; how==2 does both.
+pub fn fd_shutdown(fd: u64, how: u64) -> u64 {
+    const ENOTCONN: u64 = (-107i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Tcp(i)) => Some(*i),
+        _ => None,
+    }) else {
+        return EBADF;
+    };
+    if how > 2 {
+        return EINVAL;
+    }
+    let socks = tcp_socks();
+    let Some(k) = socks[si].as_mut() else { return EBADF };
+    if how == 0 || how == 2 {
+        k.fin_rx = true; // reads EOF now
+    }
+    if how >= 1 {
+        match k.state {
+            TcpState::Estab => {
+                let _ = tcp_seg(k, crate::net::TCP_FIN | crate::net::TCP_ACK, &[]);
+                let k = tcp_socks()[si].as_mut().unwrap();
+                k.snd_nxt = k.snd_nxt.wrapping_add(1);
+                k.state = TcpState::FinWait;
+            }
+            TcpState::CloseWait => {
+                let _ = tcp_seg(k, crate::net::TCP_FIN | crate::net::TCP_ACK, &[]);
+                let k = tcp_socks()[si].as_mut().unwrap();
+                k.snd_nxt = k.snd_nxt.wrapping_add(1);
+                k.state = TcpState::LastAck;
+            }
+            _ => return ENOTCONN,
+        }
+    }
+    0
+}
+
+/// Last-fd teardown for a TCP socket: FIN the live connection and
+/// orphan it to finish asynchronously; RST the half-open; listeners
+/// drop their incomplete children. Established backlog children
+/// survive — they're connections in their own right.
+fn tcp_sock_close(si: usize) {
+    enum A {
+        Free,
+        Fin(TcpState),
+        Orphan,
+    }
+    let socks = tcp_socks();
+    let Some(k) = socks[si].as_mut() else { return };
+    let act = match k.state {
+        TcpState::Estab => A::Fin(TcpState::FinWait),
+        TcpState::CloseWait => A::Fin(TcpState::LastAck),
+        TcpState::FinWait | TcpState::LastAck => A::Orphan,
+        TcpState::SynSent | TcpState::SynRecv => {
+            let _ = tcp_seg(k, crate::net::TCP_RST, &[]);
+            A::Free
+        }
+        TcpState::Listen => {
+            // RST + free the listener's incomplete children.
+            let kids: [usize; MAX_TCPS] = {
+                let mut v = [usize::MAX; MAX_TCPS];
+                let mut n = 0;
+                for (i, s) in socks.iter().enumerate() {
+                    if s.as_ref().is_some_and(|c| c.parent == si
+                        && c.state == TcpState::SynRecv)
+                    {
+                        v[n] = i;
+                        n += 1;
+                    }
+                }
+                v
+            };
+            for ci in kids {
+                if ci != usize::MAX {
+                    if let Some(c) = socks[ci].as_mut() {
+                        let _ = tcp_seg(c, crate::net::TCP_RST, &[]);
+                    }
+                    tcp_free(ci);
+                }
+            }
+            A::Free
+        }
+        _ => A::Free,
+    };
+    match act {
+        A::Free => socks[si] = None,
+        A::Orphan => {
+            if let Some(k) = socks[si].as_mut() {
+                k.orphan = true;
+            }
+        }
+        A::Fin(next) => {
+            let Some(k) = socks[si].as_mut() else { return };
+            let _ = tcp_seg(k, crate::net::TCP_FIN | crate::net::TCP_ACK, &[]);
+            let k = socks[si].as_mut().unwrap();
+            k.snd_nxt = k.snd_nxt.wrapping_add(1);
+            k.state = next;
+            k.orphan = true;
+        }
+    }
 }
 
 /// getdents64(fd, dirp, count): emit linux_dirent64 records for the
