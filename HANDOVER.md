@@ -2,7 +2,7 @@
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:**  sched: preemptive round-robin — UCtx context switch via timer IRQ. Prior:  execve,  its docs.
+**Last commit:** `6b5e9f6` sched: preemptive round-robin — UCtx context switch via timer IRQ. Prior: `8541d13` execve, `d55104a` its docs.
 
 **Naming:** the project/repo brand is Rustux; on-disk directory names may still be `linux-rust` (Windows checkout `C:\Users\Davy\Documents\GitHub\linux-rust`, audit artifact dir `security-audit-skill/linux-rust` — rename at leisure; git does not care). The kernel's eventual runtime identity (`uname` etc.) is a separate Linux-compatibility decision, independent of the project name.
 
