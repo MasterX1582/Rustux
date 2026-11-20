@@ -122,3 +122,18 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 - Audit run-48 (standard, deserialization boundary): 0 confirmed; NV-48-1
   (re-audit if buddy ever pools LOADER_DATA), NV-48-2 (unsigned archive =
   boot-config trust), NV-48-3 (exact-1MiB cap edge).
+
+## 2026-07-17 — syscall-boundary selftest + Linux-ABI register fix (run-49)
+- `kernel/user/selftest.S`: second initrd entry exercising the syscall gates
+  from CPL3 — EBADF/EFAULT/EINVAL/ENOSYS exact-errno checks plus an r10
+  sentinel proving register preservation; exits with failure count.
+- Real bug found + fixed: the entry stub preserved only rcx/r11/rdi, but the
+  Rust handler runs under the Windows x64 ABI and was free to clobber
+  rdx/rsi/r8/r9/r10 — deviating from Linux (syscall may clobber only
+  rax/rcx/r11). Stub now saves/restores the full volatile set with explicit
+  16-byte call alignment. Selftest `exit(0)` = all 5 checks pass.
+- Makefile: `kernel/user/%.elf` pattern rule; initrd now packs `init` +
+  `selftest` (10056B). PROOF: both entries run, `selftest run done`, PASS.
+- cve.now: CVE-2006-0744 (sysret uncanonical rcx) is harmless by construction
+  (rcx is the CPU-saved next-instruction rip) — recorded as NV-49-1 against
+  any future rcx-touching syscall. Audit run-49 (standard): 0 confirmed.
