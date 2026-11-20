@@ -685,3 +685,41 @@ the task model now supports fork/clone/wait as the next rung.
   extended to TCPSOCKS (NV-63-1 family); known bounded limitations:
   no retransmit/timeout for orphans (slot pin), accept backlog
   tail-insert under EMFILE, no OOB/out-of-order queues (drop).
+
+## Memory-management ABI: brk + anon mmap + munmap + mprotect (audit run-66)
+- VMAs ARE the ranges[] table -- every mapped interval has an entry
+  (R/W flag bits), so the syscall pointer gate, first-fit allocator,
+  and teardown all walk the same truth. MAX_RANGES 8 -> 32 (the
+  vm.max_map_count analog); load_inner now FAILS on overflow instead
+  of silently dropping an entry (a dropped VMA would have been an
+  ungated mapped page).
+- brk(addr): page-granular break at the image-end-aligned brk_base,
+  256MiB cap, returns current break on any failure (never errno --
+  the Linux contract). Grow is collision-checked against other VMAs
+  and rollback-unmaps on alloc failure; shrink unmaps + flushes.
+- mmap: MAP_PRIVATE|MAP_ANONYMOUS only (fd/shared -> ENODEV until
+  file VMAs exist). First-fit in a dedicated 4TiB arena
+  (0x6000_0000_0000..0x7000_0000_0000); nonzero addr is a hint --
+  collision falls back to first-fit like Linux; MAP_FIXED unmaps the
+  overlap AND clips VMA entries then flushes the TLB before user
+  code can run (freed frames must not stay cached -- that was the
+  real stale-translation aliasing fix this rung caught in review).
+- munmap: alignment-only EINVALs; wild VA silently no-ops; len
+  rounds UP to whole pages; pages freed + VMAs split atomically --
+  clip_entry_count proves the result fits the table BEFORE a single
+  PTE is touched, so no half-applied unmap exists.
+- mprotect: ENOMEM over unmapped VA, VMA splits (3 pieces max),
+  leaf flags rewritten to match the gate flags; PROT_NONE maps as
+  present-supervisor leaves -- VMA-reserved, faulting, recoverable.
+- mmtest: 37 distinct failure exits covering grow/shrink/cap, both
+  gates via pipe read/write, first-fit hole reuse after munmap,
+  MAP_FIXED replace, kernel-window EINVAL, 3-page VMA split with
+  surviving neighbor data, bad-arg table, 8-page single-call grow,
+  and fork heap inheritance. exit(0), zero leak, 4x WSL.
+- Audit run-66 (scoped, standard-grade on the diff): 0 confirmed
+  after fixes; rejected: 29369/99463 race classes (n/a -- no
+  concurrency), MAP_FIXED kernel-slot write, addr+len wraps, gate/
+  PTE desync on sub-page unmap; NV-66-1 = NV-63-1 reentrant-statics
+  pattern extended to the VM syscalls (functionally safe
+  single-CPU, stacked-borrows UB in principle -- the same debt
+  already tracked).
