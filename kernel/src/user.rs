@@ -169,6 +169,232 @@ struct Pipe {
 
 static mut PIPES: [Option<Pipe>; MAX_PIPES] = [const { None }; MAX_PIPES];
 
+// ---- signals ----
+
+const SIG_DFL: u64 = 0;
+const SIG_IGN: u64 = 1;
+const SIGCHLD: usize = 17;
+const SIGKILL: usize = 9;
+const SIGSTOP: usize = 19;
+const SIGSEGV: usize = 11;
+/// Bytes pushed on the task's user stack per delivered signal:
+/// signo (8) + the interrupted UCtx (160).
+const SIGFRAME_SIZE: u64 = 168;
+// The frame layout is only sound while UCtx stays 20 u64s — a size
+// change must grow the frame and both copy sites with it.
+const _: () = assert!(core::mem::size_of::<UCtx>() == 160);
+
+/// Signals whose default is to do nothing — job-control and
+/// informational signals; everything else kills by default.
+fn sig_default_ignore(sig: usize) -> bool {
+    matches!(sig, 17 | 18 | 19 | 20 | 23 | 28)
+}
+
+/// Write `data` into `pml4`'s user space byte-wise — each byte
+/// translated through that task's tables (which may be inactive).
+/// Returns false on the first unmapped or unwritable byte.
+fn write_task_bytes(pml4: u64, va: u64, data: &[u8]) -> bool {
+    for (i, &b) in data.iter().enumerate() {
+        let Some(pa) = translate(pml4, va + i as u64) else {
+            return false;
+        };
+        // SAFETY: pa is a present, writable user frame in pml4.
+        unsafe { (pa as *mut u8).write(b) };
+    }
+    true
+}
+
+/// Apply one pending signal to `ctx` — the resume image of task `t`.
+/// Handler installed: push [signo][interrupted UCtx] onto the task's
+/// own stack, redirect rip to the handler, rdi=signo — sigreturn
+/// pops it back. Ignore-default signals drop; every other default
+/// kills with wait status = bare signo (the Linux wstatus shape).
+/// An unwritable stack kills the task like Linux's delivery SEGV.
+fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
+    while t.pending != 0 {
+        let sig = t.pending.trailing_zeros() as usize + 1;
+        t.pending &= !(1u32 << (sig - 1));
+        match t.handlers.get(sig - 1).copied().unwrap_or(SIG_DFL) {
+            SIG_IGN => {}
+            SIG_DFL => {
+                if sig_default_ignore(sig) {
+                    continue;
+                }
+                t.state = TaskState::Exited;
+                t.exit_status = sig as u64;
+                return;
+            }
+            handler => {
+                let frame = (ctx.rsp.wrapping_sub(SIGFRAME_SIZE)) & !15;
+                let sig64 = sig as u64;
+                // SAFETY: reinterprets the UCtx as its repr(C) bytes —
+                // written verbatim into the task's own stack.
+                let raw = unsafe {
+                    core::slice::from_raw_parts(ctx as *const UCtx as *const u8, 160)
+                };
+                let ok = write_task_bytes(t.pml4, frame, &sig64.to_le_bytes())
+                    && write_task_bytes(t.pml4, frame + 8, raw);
+                if !ok {
+                    t.state = TaskState::Exited;
+                    t.exit_status = SIGSEGV as u64;
+                    return;
+                }
+                ctx.rsp = frame;
+                ctx.rip = handler;
+                ctx.rdi = sig64;
+                return; // one signal per resume, Linux-style
+            }
+        }
+    }
+}
+
+/// Deliver pending signals into task n's saved ctx for a pick-time
+/// resume; false when the delivery killed it (caller re-picks).
+fn deliver_for(n: usize) -> bool {
+    let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
+    if t.pending != 0 {
+        let mut c = t.ctx;
+        maybe_deliver(t, &mut c);
+        t.ctx = c;
+    }
+    t.state == TaskState::Runnable
+}
+
+/// pick_next + signal delivery: the chosen task's ctx is rewritten
+/// before resume — a default-fatal signal marks it Exited and the
+/// loop picks again.
+fn pick_ready() -> Option<usize> {
+    loop {
+        let n = pick_next()?;
+        if deliver_for(n) {
+            return Some(n);
+        }
+    }
+}
+
+/// At the end of a syscall, apply pending signals to the return ctx.
+/// A handler redirects the resume image; a default-fatal signal
+/// dies exactly like exit() — this never returns to the dead task.
+pub fn deliver_current(ctx: &mut UCtx) {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if cur == usize::MAX {
+        return;
+    }
+    let dead = {
+        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+        match tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+            Some(t) => {
+                maybe_deliver(t, ctx);
+                t.state == TaskState::Exited
+            }
+            None => false,
+        }
+    };
+    if dead {
+        task_exit_inner() // exit_status already carries the signo
+    }
+}
+
+/// kill(pid, sig): pend a signal on the target. A blocked target
+/// wakes with -EINTR — the interrupted-syscall semantic (its saved
+/// ctx then delivers the handler on resume). Zombie targets accept
+/// the signal silently like Linux. ESRCH when no such pid.
+pub fn kill(pid: u64, sig: u64) -> u64 {
+    const ESRCH: u64 = (-3i64) as u64;
+    if sig == 0 || sig > 31 {
+        return EINVAL;
+    }
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let Some(t) = tasks.iter_mut().flatten().find(|t| t.pid == pid) else {
+        return ESRCH;
+    };
+    if t.state == TaskState::Exited {
+        return 0;
+    }
+    t.pending |= 1u32 << (sig - 1);
+    // Wake a blocked target only when the signal actually interrupts:
+    // an ignored disposition (SIG_IGN, or a default-ignore signal)
+    // must not turn a sleeping syscall into a spurious EINTR.
+    let h = t.handlers.get(sig as usize - 1).copied().unwrap_or(SIG_DFL);
+    let ignored = h == SIG_IGN || (h == SIG_DFL && sig_default_ignore(sig as usize));
+    if t.state == TaskState::Blocked && !ignored {
+        t.ctx.rax = (-4i64) as u64; // -EINTR
+        t.wait_on = WaitOn::None;
+        t.wait_ptr = 0;
+        t.wait_len = 0;
+        t.state = TaskState::Runnable;
+    }
+    0
+}
+
+/// rt_sigaction(sig, act, oldact): read/swap the disposition word —
+/// 0=SIG_DFL, 1=SIG_IGN, else a user handler VA (validated at
+/// delivery, like Linux). SIGKILL/SIGSTOP stay uncatchable.
+pub fn sigaction(sig: u64, act: u64, oldact: u64) -> u64 {
+    if sig == 0 || sig > 31 {
+        return EINVAL;
+    }
+    let Some(t) = cur_mut() else { return EINVAL };
+    let i = (sig - 1) as usize;
+    if oldact != 0 {
+        if !range_ok_w(oldact, 8) {
+            return EFAULT;
+        }
+        // SAFETY: validated writable user range.
+        unsafe { (oldact as *mut u64).write_unaligned(t.handlers[i]) };
+    }
+    if act != 0 {
+        if !range_ok(act, 8) {
+            return EFAULT;
+        }
+        // SAFETY: validated readable user range.
+        let h = unsafe { (act as *const u64).read_unaligned() };
+        // SIGKILL/SIGSTOP refuse every disposition change — a task
+        // that could ignore SIGKILL would be unkillable by signal.
+        if sig as usize == SIGKILL || sig as usize == SIGSTOP {
+            return EINVAL;
+        }
+        t.handlers[i] = h;
+    }
+    0
+}
+
+/// rt_sigreturn: restore the interrupted ctx the delivery pushed at
+/// the caller's rsp — [signo][UCtx]. Every byte is user-owned, so
+/// the privilege fields are pinned, not trusted — cs=0x33, ss=0x2b,
+/// rip inside a user range, rsp inside a writable one, TF/NT/IOPL
+/// cleared (the CVE-2014-9322 / SROP hardening). A bad frame kills
+/// with SIGSEGV, like Linux.
+pub fn sigreturn(ctx: &mut UCtx) -> u64 {
+    let frame = ctx.rsp;
+    if !range_ok(frame, SIGFRAME_SIZE) {
+        die_signal(SIGSEGV as u64);
+    }
+    let mut saved = UCtx::ZERO;
+    // SAFETY: validated user range in the current (caller's) space.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (frame + 8) as *const u8,
+            &mut saved as *mut UCtx as *mut u8,
+            160,
+        )
+    };
+    saved.cs = 0x33;
+    saved.ss = 0x2b;
+    saved.rflags = (saved.rflags | 0x2) & !(0x100 | 0x3000 | 0x4000);
+    // rsp == stack_top is legal (empty stack): require the byte
+    // BELOW rsp — the first push target — to be writable user space.
+    if saved.rip >= 0x8000_0000_0000
+        || saved.rsp >= 0x8000_0000_0000
+        || !range_ok(saved.rip, 1)
+        || !range_ok_w(saved.rsp.wrapping_sub(1), 1)
+    {
+        die_signal(SIGSEGV as u64);
+    }
+    *ctx = saved;
+    ctx.rax // restored rax IS the return value
+}
+
 /// An open file description — the Linux `struct file` analog. fds
 /// are only slots pointing here; dup'd slots share one OFD, which is
 /// why the seek offset lives here and not in the slot.
@@ -203,14 +429,21 @@ pub struct Task {
     /// Process identity — Linux-visible pid and parent pid (0 = none).
     pid: u64,
     ppid: u64,
-    /// The exit() argument — consumed by wait4 (status = code<<8).
-    exit_code: u64,
+    /// The wait status wait4 reports: (exit_code << 8) normally, or
+    /// the raw signo in the low byte for a signal death — the real
+    /// Linux wstatus layout.
+    exit_status: u64,
     /// What this task is Blocked on (None when not Blocked).
     wait_on: WaitOn,
     /// wait4 status VA, or the user buffer for a blocked pipe io.
     wait_ptr: u64,
     /// Blocked pipe io length (unused by wait4).
     wait_len: u64,
+    /// Pending signal bitmask — bit (sig-1), sigs 1..=31.
+    pending: u32,
+    /// Per-signal disposition: 0=SIG_DFL, 1=SIG_IGN, else a user VA
+    /// handler. SIGKILL/SIGSTOP can't be overridden (EINVAL).
+    handlers: [u64; 31],
 }
 
 /// Max open file descriptions system-wide — a hard bound so fd
@@ -483,10 +716,12 @@ fn load(img: &[u8]) -> Option<Task> {
         state: TaskState::Runnable,
         pid: 0,
         ppid: 0,
-        exit_code: 0,
+        exit_status: 0,
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_len: 0,
+        pending: 0,
+        handlers: [0; 31],
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
     // global OFD, like separate opens of /dev/console.
@@ -629,6 +864,9 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
                 if !range_ok_w(buf, 1) {
                     return EFAULT;
                 }
+                if t.pending != 0 {
+                    return (-4i64) as u64; // -EINTR: signal before sleep
+                }
                 t.wait_on = WaitOn::PipeRead(id);
                 t.wait_ptr = buf;
                 t.wait_len = len;
@@ -685,6 +923,9 @@ pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
         // OUR tables and deposits the count in ctx.rax.
         if len > 0 && !range_ok(buf, 1) {
             return EFAULT;
+        }
+        if t.pending != 0 {
+            return (-4i64) as u64; // -EINTR: signal before sleep
         }
         t.wait_on = WaitOn::PipeWrite(id);
         t.wait_ptr = buf;
@@ -1160,6 +1401,13 @@ pub fn exec(img: &[u8], ctx: &mut UCtx) -> bool {
     // be flushed or user code could run on freed frames.
     // SAFETY: reloading the current cr3 only flushes the TLB.
     unsafe { core::arch::asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _) };
+    // exec resets caught handlers to default (SIG_IGN survives) —
+    // a handler in the OLD image would be unmapped garbage here.
+    for h in t.handlers.iter_mut() {
+        if *h != SIG_IGN {
+            *h = SIG_DFL;
+        }
+    }
     *ctx = UCtx::launch(t.entry, t.stack_top);
     true
 }
@@ -1232,7 +1480,7 @@ fn pick_next() -> Option<usize> {
 /// Returns only when the run queue is empty — the last task's exit
 /// unwinds to the kernel context sched_launch saved.
 pub fn launch() {
-    let Some(n) = pick_next() else {
+    let Some(n) = pick_ready() else {
         return;
     };
     unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
@@ -1265,14 +1513,34 @@ fn switch_to(n: usize) -> ! {
 /// kernel context sched_launch saved when the queue is empty.
 pub fn task_exit(code: u64) -> ! {
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
-    let (cpid, cppid) = {
+    if let Some(t) = unsafe { (*core::ptr::addr_of_mut!(TASKS))[cur].as_mut() } {
+        t.exit_status = (code & 0xff) << 8;
+    }
+    task_exit_inner()
+}
+
+/// The running task died to a signal: same teardown as exit, but the
+/// wait status is the bare signo in the low byte — real wstatus.
+fn die_signal(signo: u64) -> ! {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if let Some(t) = unsafe { (*core::ptr::addr_of_mut!(TASKS))[cur].as_mut() } {
+        t.exit_status = signo;
+    }
+    task_exit_inner()
+}
+
+/// Shared exit/signal-death teardown: mark Exited, wake a matching
+/// wait4 parent (status + pid), SIGCHLD the parent if it lives,
+/// orphan children, then switch away or unwind.
+fn task_exit_inner() -> ! {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let (cpid, cppid, wstatus) = {
         let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
         if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
             t.state = TaskState::Exited;
-            t.exit_code = code;
-            (t.pid, t.ppid)
+            (t.pid, t.ppid, t.exit_status)
         } else {
-            (0, 0)
+            (0, 0, 0)
         }
     };
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
@@ -1292,7 +1560,7 @@ pub fn task_exit(code: u64) -> ! {
                     // SAFETY: pa is a translated, present user frame.
                     unsafe {
                         ((pa) as *mut u32)
-                            .write_unaligned(((code & 0xff) << 8) as u32)
+                            .write_unaligned((wstatus & 0xffff) as u32)
                     };
                 }
             }
@@ -1316,7 +1584,14 @@ pub fn task_exit(code: u64) -> ! {
             }
         }
     }
-    if let Some(n) = pick_next() {
+    // SIGCHLD to the parent — pending only; default disposition
+    // ignores it, a handler sees it on the parent's next resume.
+    if cppid != 0 {
+        if let Some(p) = tasks.iter_mut().flatten().find(|t| t.pid == cppid) {
+            p.pending |= 1 << (SIGCHLD - 1);
+        }
+    }
+    if let Some(n) = pick_ready() {
         switch_to(n)
     }
     syscall::terminate()
@@ -1327,7 +1602,7 @@ pub fn task_exit(code: u64) -> ! {
 /// idle on hlt until a tick re-arms the pick loop.
 fn block_switch() -> ! {
     loop {
-        if let Some(n) = pick_next() {
+        if let Some(n) = pick_ready() {
             switch_to(n)
         }
         // Nothing runnable — sleep one tick. A child exiting or any
@@ -1337,11 +1612,25 @@ fn block_switch() -> ! {
     }
 }
 
+/// Resume task n from the IRQ path: set kstack + cr3 and return its
+/// ctx for the dispatch stub to pop+iret.
+fn resume_ctx(n: usize) -> *const UCtx {
+    unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
+    let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
+    syscall::set_kstack(t.kstack_top);
+    // Switch address space before returning the new task's ctx —
+    // shared kernel slots make the swap safe mid-function.
+    // SAFETY: pml4 is a live task-owned PML4.
+    unsafe { core::arch::asm!("mov cr3, {}", in(reg) t.pml4) };
+    &t.ctx
+}
+
 /// Timer IRQ — called from the sched dispatch stub with the full
 /// context image it pushed. A kernel frame (cs&3==0 — mid-syscall,
 /// where IF is masked anyway, or any kernel context) just ticks.
-/// A CPL3 frame is a preemptible task: snapshot its ctx and round-
-/// robin. Returns the ctx the stub should resume.
+/// A CPL3 frame is a preemptible task: snapshot its ctx, deliver
+/// pending signals (a default-fatal one kills it here), round-robin
+/// with delivery at the pick, and return the ctx to resume.
 pub fn tick(img: &mut UCtx) -> *const UCtx {
     if img.cs & 3 != 3 {
         return img;
@@ -1354,25 +1643,30 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
     if let Some(t) = unsafe { (*core::ptr::addr_of_mut!(TASKS))[cur].as_mut() } {
         t.ctx = *img;
     }
-    let Some(n) = pick_next() else {
-        return img;
+    deliver_for(cur);
+    let Some(n) = pick_ready() else {
+        // Nothing else runnable: if cur survived delivery it's the
+        // only task — resume its (possibly redirected) ctx. If a
+        // default-fatal signal killed it, the queue is empty —
+        // unwind to the kernel frame like the last exit does.
+        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+        match tasks[cur].as_ref() {
+            Some(t) if t.state == TaskState::Runnable => return &t.ctx,
+            _ => syscall::terminate(),
+        }
     };
     if n == cur {
-        return img;
+        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+        return &tasks[cur].as_ref().unwrap().ctx;
     }
-    unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
-    let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
-    syscall::set_kstack(t.kstack_top);
-    // Switch address space before returning the new task's ctx —
-    // shared kernel slots make the swap safe mid-function.
-    // SAFETY: pml4 is a live task-owned PML4.
-    unsafe { core::arch::asm!("mov cr3, {}", in(reg) t.pml4) };
-    &t.ctx
+    resume_ctx(n)
 }
 
 /// Translate a user VA to its identity-mapped physical address under
-/// `pml4` — used to write a wait4 status into a BLOCKED task's
-/// address space while a different task's tables are active.
+/// `pml4` — used to write into another task's address space while a
+/// different task's tables are active (wait4 status, pipe io, signal
+/// frames). Requires the leaf's WRITE bit: every caller writes, and
+/// a read-only page must not be modified through this path.
 fn translate(pml4: u64, va: u64) -> Option<u64> {
     let mut tab = pml4;
     for shift in [39u64, 30, 21] {
@@ -1383,7 +1677,7 @@ fn translate(pml4: u64, va: u64) -> Option<u64> {
         tab = e & PHYS_MASK;
     }
     let e = rd64(tab + 8 * ((va >> 12) & 0x1ff));
-    if e & PRESENT == 0 {
+    if e & PRESENT == 0 || e & WRITE == 0 {
         return None;
     }
     Some((e & PHYS_MASK) | (va & 0xfff))
@@ -1487,10 +1781,14 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         state: TaskState::Runnable,
         pid: next_pid(),
         ppid: p.pid,
-        exit_code: 0,
+        exit_status: 0,
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_len: 0,
+        // Dispositions inherit across fork (the Linux semantic);
+        // the pending set does not.
+        pending: 0,
+        handlers: p.handlers,
     };
     // Either failure frees the (possibly partial) user page-table
     // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs
@@ -1546,7 +1844,7 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
             // SAFETY: validated writable user range in cur's space.
             unsafe {
                 (status_va as *mut u32)
-                    .write_unaligned(((t.exit_code & 0xff) << 8) as u32)
+                    .write_unaligned((t.exit_status & 0xffff) as u32)
             };
         }
         let r = t.pid;
@@ -1563,6 +1861,9 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
     }
     {
         let t = tasks[cur].as_mut().unwrap();
+        if t.pending != 0 {
+            return (-4i64) as u64; // -EINTR: signal before sleep
+        }
         t.wait_on = if pid == -1 { WaitOn::Any } else { WaitOn::Child(pid as u64) };
         t.wait_ptr = status_va;
         t.ctx = *ctx;

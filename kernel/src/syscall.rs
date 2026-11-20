@@ -180,6 +180,8 @@ const NR_READ: u64 = 0;
 const NR_WRITE: u64 = 1;
 const NR_OPEN: u64 = 2;
 const NR_CLOSE: u64 = 3;
+const NR_SIGACTION: u64 = 13;
+const NR_SIGRETURN: u64 = 15;
 const NR_PIPE: u64 = 22;
 const NR_LSEEK: u64 = 8;
 const NR_DUP: u64 = 32;
@@ -189,6 +191,7 @@ const NR_FORK: u64 = 57;
 const NR_EXECVE: u64 = 59;
 const NR_EXIT: u64 = 60;
 const NR_WAIT4: u64 = 61;
+const NR_KILL: u64 = 62;
 const NR_GETPPID: u64 = 110;
 const NR_PIPE2: u64 = 293;
 const NR_GETDENTS: u64 = 217;
@@ -234,17 +237,23 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         // off arrives as u64; the fd layer interprets it as i64 —
         // negative seeks are how SEEK_CUR/END move backwards.
         NR_LSEEK => user::fd_lseek(a1, a2 as i64, a3),
+        NR_SIGACTION => user::sigaction(a1, a2, a3),
+        NR_SIGRETURN => user::sigreturn(ctx),
         NR_DUP => user::fd_dup(a1),
         NR_DUP2 => user::fd_dup2(a1, a2),
         NR_GETPID => user::getpid(),
         NR_FORK => user::fork(ctx),
         NR_WAIT4 => user::wait4(ctx, a1 as i64, a2, a3),
+        NR_KILL => user::kill(a1, a2),
         NR_GETPPID => user::getppid(),
         NR_GETDENTS => user::fd_getdents(a1, a2, a3),
         NR_EXECVE => sys_execve(ctx, a1, a2, a3),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
     };
+    // Signals deliver on the way back to user mode — a handler
+    // redirects this ctx; a default-fatal signal never returns.
+    user::deliver_current(ctx);
 }
 
 /// Copy a NUL-terminated user pathname into `name` under the pointer

@@ -35,7 +35,7 @@ demo: $(ESP_IMG)
 FORCE:
 
 # Ring-3 milestone images: static ELF64s loaded by kernel/src/elf.rs.
-USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf kernel/user/lstest.elf kernel/user/exectest.elf kernel/user/spinA.elf kernel/user/spinB.elf kernel/user/forktest.elf kernel/user/pipetest.elf
+USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf kernel/user/lstest.elf kernel/user/exectest.elf kernel/user/spinA.elf kernel/user/spinB.elf kernel/user/forktest.elf kernel/user/pipetest.elf kernel/user/sigtest.elf
 INITRD    := initrd.cpio
 
 kernel/user/%.elf: kernel/user/%.S
@@ -46,7 +46,7 @@ kernel/user/%.elf: kernel/user/%.S
 # file, read from the ESP by the kernel before ExitBootServices. The
 # archive doubles as the fd layer's read-only root filesystem.
 $(INITRD): $(USER_ELFS) kernel/user/motd.txt tools/mkinitrd.py
-	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/lstest.elf lstest kernel/user/exectest.elf exectest kernel/user/spinA.elf spinA kernel/user/spinB.elf spinB kernel/user/forktest.elf forktest kernel/user/pipetest.elf pipetest kernel/user/motd.txt motd.txt > $@
+	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/lstest.elf lstest kernel/user/exectest.elf exectest kernel/user/spinA.elf spinA kernel/user/spinB.elf spinB kernel/user/forktest.elf forktest kernel/user/pipetest.elf pipetest kernel/user/sigtest.elf sigtest kernel/user/motd.txt motd.txt > $@
 
 $(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml kernel/user/hello.elf FORCE
 	cargo build --release --target $(TARGET) -p kernel
