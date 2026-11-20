@@ -5,13 +5,42 @@
 </p>
 
 An incremental reimplementation of the Linux kernel in Rust, verified against
-the original C kernel's recorded behavior.
+the original C kernel's recorded behavior — and the first kernel to speak
+IPv8 on the wire.
 
 The C kernel source is the reference and stays untouched in a separate tree
 (`$LINUX_REF`, default `~/linux-ref`). Each unit is ported one at a time with
 [rust-anything](https://github.com/erkamyaman/rust-anything): the original's
 behavior is recorded to `cases.jsonl`, the Rust port must match every recorded
 case (`diff`) and pass `gate` before it is adopted.
+
+## A world's first
+
+Rustux carries the first known working implementation of
+[draft-thain-ipv8](https://datatracker.ietf.org/doc/draft-thain-ipv8/):
+the version-8 header, 32-bit Route Number + 32-bit local addressing,
+and native EtherType `0x8080` — proven live between two Rustux
+QEMU guests on a socket link:
+
+```
+B: ipv8: echo req from rn0x1 10.0.0.1 seq=1 -> replied
+A: ipv8: echo reply rn0x2 10.0.0.2 seq=1 (71B native 0x8080)
+```
+
+Honest scope: IPv8 is an individual IETF Internet-Draft, not a
+standard; its companion protocols (ARP8, ICMPv8, DHCP8, routing)
+were never submitted, so Rustux implements only what the draft
+actually specifies, plus clearly-labeled first-implementation
+choices. IPv8 is an experimental differentiator — IPv6 remains on
+the roadmap for real-world compatibility.
+
+## Where the kernel is today
+
+A `#![no_std]` UEFI kernel that boots under OVMF with its own GDT/IDT,
+identity-mapped page tables, buddy allocator and slab heap, ACPI/LAPIC/
+I/O-APIC interrupt routing, printk ring buffer, PCI enumeration, and an
+e1000e NIC driver with real TX/RX DMA rings, MSI-X interrupt delivery,
+ARP, IPv4 and ICMP echo — plus the IPv8 path above.
 
 ## Acknowledgements
 
@@ -44,6 +73,11 @@ make run             # builds kernel.efi -> esp.img, boots under OVMF in QEMU;
 ```
 
 The kernel prints its boot proofs to COM1 and to a GOP framebuffer text
-console (VGA 8x16 font from `lib/fonts/font_8x16.c`), then exits UEFI boot
-services and reports the firmware memory map — a `-display gtk` QEMU window
-shows the boot logo and the kernel's own console output.
+console (VGA 8x16 font from `lib/fonts/font_8x16.c`), runs its NIC
+datapath and protocol self-tests live (ARP round-trip, IPv4 ping against
+QEMU slirp, MSI-X receive interrupt), then exits via `isa-debug-exit` —
+a `-display gtk` QEMU window shows the boot logo and the kernel's own
+console output.
+
+Rustux is GPL-2.0-only (`LICENSE`): its ported units are derivative
+works of GPL-2.0-only kernel code.
