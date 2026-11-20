@@ -1,4 +1,4 @@
-# linux-rust: run inside WSL (Ubuntu). `make run` builds the kernel, packs it
+# Rustux: run inside WSL (Ubuntu). `make run` builds the kernel, packs it
 # into a read-only FAT disk image, and boots it in QEMU; the kernel prints over
 # COM1 and exits QEMU via isa-debug-exit.
 #

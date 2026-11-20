@@ -31,8 +31,9 @@ The dev VM is a live Zorin OS 18.1 install — kernel
   diffed against the same workload running on real Zorin,
 - the eventual acceptance environment for the ladder below.
 
-Repo sync: `~/linux-rust` on the VM is populated via the PUT receiver
-(`~/recv/recv.py`, port 9876) from the Windows host — see
+Repo sync: the Rustux checkout at `~/rustux` on the VM is populated via
+`git pull` from GitHub (`MasterX1582/Rustux`, public) or via the PUT
+receiver (`~/recv/recv.py`, port 9876) from the Windows host — see
 `test/zorin/` scripts.
 
 ## The ladder (each rung is a real bootable test)

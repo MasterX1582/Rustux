@@ -1,19 +1,21 @@
-# Handover — linux-rust port project
+# Handover — Rustux port project (formerly linux-rust)
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:** `8ab0e02 kernel: kmalloc/slab heap over the buddy allocator` — the LAPIC timer now delivers real async IRQs through our IDT (timer 0xf0, spurious 0xff) on top of GDT/IDT (`f26b2e4`), page tables + FrameAlloc (`e8946f8`), and the boot logo (`2159f67`). Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo is public: `https://github.com/MasterX1582/Linux-Rust` (history rewritten/anonymized — force-pushed baseline `ef6f55f`).
+**Last commit:** `<SHA> project rename: linux-rust -> Rustux + new shield logo` — branding renamed to **Rustux** (kernel log prefix `rustux:`, README, docs, new penguin+gear shield logo); GitHub repo is `https://github.com/MasterX1582/Rustux`. On top of kmalloc/slab heap (`8ab0e02`), LAPIC timer IRQs, GDT/IDT (`f26b2e4`), page tables + buddy (`e8946f8`/`4a48db4`), boot logo (`2159f67`). Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. History was rewritten/anonymized once — force-pushed baseline `ef6f55f`.
+
+**Naming:** the project/repo brand is Rustux; on-disk directory names may still be `linux-rust` (Windows checkout `C:\Users\Davy\Documents\GitHub\linux-rust`, audit artifact dir `security-audit-skill/linux-rust` — rename at leisure; git does not care). The kernel's eventual runtime identity (`uname` etc.) is a separate Linux-compatibility decision, independent of the project name.
 
 ## Environments
 
 | host | path | role |
 |------|------|------|
-| Primary host | `$REPO` (this checkout) | primary repo, port jobs run here |
+| Primary host | `$REPO` (this checkout, dir still named `linux-rust`) | primary repo, port jobs run here |
 | Primary host | `$LINUX_REF` | Linux reference tree (torvalds clone or scoped subset); `check-sources.sh` reads `${LINUX_REF:-$HOME/linux-ref}` |
-| Linux dev VM | `~/linux-rust` | git checkout — sync via `git pull` (origin = GitHub, public); native build+test+boot host |
+| Linux dev VM | `~/rustux` | git checkout — sync via `git pull` (origin = GitHub `MasterX1582/Rustux`, public); native build+test+boot host |
 | Linux dev VM | `~/linux-ref` | scoped ref tree (lib/, include/, arch/x86/include/, Kbuild/Kconfig/Makefile) — the `$LINUX_REF` default |
 | Linux dev VM | `~/recv/recv.py` | HTTP PUT receiver on `:9876` — `curl -T file http://<VM_IP>:9876/name` |
-| Linux dev VM | `~/linux-rust/test/zorin/fixtures/` | Zorin 18.1 ISO fixtures: vmlinuz 6.17, initrd (4-layer: AMD ucode → Intel ucode → modules/firmware cpio → gzip'd casper userspace), grub.cfg; dissection docs in `test/zorin/README.md` |
+| Linux dev VM | `~/rustux/test/zorin/fixtures/` | Zorin 18.1 ISO fixtures: vmlinuz 6.17, initrd (4-layer: AMD ucode → Intel ucode → modules/firmware cpio → gzip'd casper userspace), grub.cfg; dissection docs in `test/zorin/README.md` |
 
 VM toolchain: gcc 13.3, clang 18.1, QEMU 8.2.2+OVMF, mtools, cargo 1.100 (`~/.cargo/bin`), rust-anything 2.0.0, passwordless sudo. Verify on VM: `cargo test -p klib` and `make run` (boot → exit 33 = PASS). NOTE: cargo/rustup need `export PATH=$HOME/.cargo/bin:$PATH`.
 
@@ -32,7 +34,7 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 ## Kernel runtime status (as of 2159f67)
 
 - Consoles: COM1 serial (`kernel/src/uart.rs`) + GOP framebuffer text console (`kernel/src/fbcon.rs`, `klib::font` = generated `lib/fonts/font_8x16.c` glyphs via `extract_font.py`). `Console` in `main.rs` fans every write to both. Committed `e7486d7`, audit run-21 clean.
-- Boot logo (`2159f67`, audit run-25 clean): `gen_logo.ps1` edge-flood-fills the source PNG → transparent `docs/logo.png` + 96×143 RGB const `kernel/src/logo_data.rs`; `fbcon::splash()` draws it centered at top and a `top` row bound makes `scroll()` move only the text region (fbcon-style pinned logo). Verified by QEMU monitor `screendump` on the VM.
+- Boot logo (`2159f67`, audit run-25 clean; new Rustux shield + bg-agnostic fill pending run-29): `gen_logo.ps1` learns the background color range from edge pixels then 4-connected flood-fills it to alpha 0 → transparent `docs/logo.png` + 96×143 RGB const `kernel/src/logo_data.rs`; `fbcon::splash()` draws it centered at top and a `top` row bound makes `scroll()` move only the text region (fbcon-style pinned logo). Verified by QEMU monitor `screendump` on the VM.
 - `ExitBootServices` claimed (`ea5cfcf`, audit run-22 clean): kernel leaves UEFI boot services, takes the final memory map, prints usable/reclaimable/largest-region summary. Post-exit output still reaches both consoles (COM1 = port I/O, fb = GOP BAR memory; the uefi crate's `MemoryMapOwned` drop is post-EBS-safe).
 - Own page tables + buddy allocator (`e8946f8`, audit run-23 clean; buddy upgrade audit run-27 clean): `kernel/src/mm.rs` builds a 4-level identity map 0..max(4 GiB, map top) with 2 MiB pages (multi-PDPT layout — QEMU's ~1 TiB PCI-hole descriptor needs >512 entries), switches CR3, and pools every conventional frame minus the carve into a Linux-style buddy allocator (`free_area[order]` lists, split-on-alloc, merge-on-free via address-buddy, largest-aligned seeding). Boot proof: order-0 + order-2 contiguous alloc/write/free, count conserved.
 - kmalloc/slab heap (audit run-28 clean): `kernel/src/kalloc.rs` — size-class caches 32..4096 carved from buddy blocks, direct blocks for larger requests, 16-byte per-allocation header so kfree needs no size hint (the struct-page role), irqsave/irqrestore on every op. Boot proof: freelist reuse, zalloc zero-fill, 12 KiB direct-block round-trip.

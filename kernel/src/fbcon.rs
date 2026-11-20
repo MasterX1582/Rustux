@@ -176,7 +176,7 @@ impl FbConsole {
     /// Accent-colored banner line (proof the console is alive before any
     /// serial-fanned text arrives).
     pub fn banner(&mut self) {
-        for (i, &b) in b"linux-rust: framebuffer console (GOP, font_8x16)".iter().enumerate() {
+        for (i, &b) in b"rustux: framebuffer console (GOP, font_8x16)".iter().enumerate() {
             if i >= self.cols {
                 break;
             }

@@ -1,4 +1,4 @@
-//! klib: kernel library — the linux-rust counterpart of the C kernel's `lib/`.
+//! klib: kernel library — the Rustux counterpart of the C kernel's `lib/`.
 //!
 //! Every function here was ported from a C unit under `ports/` and proven
 //! behavior-identical against the original's recorded cases before adoption

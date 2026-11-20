@@ -1,4 +1,4 @@
-//! linux-rust kernel entry point.
+//! Rustux kernel entry point.
 //!
 //! Boots under UEFI (OVMF in QEMU). Serial + GOP framebuffer consoles, the
 //! adopted klib unit proofs, then ExitBootServices and the firmware memory
@@ -61,53 +61,53 @@ fn main() -> Status {
         fb.splash();
         fb.banner();
     }
-    let _ = writeln!(con, "linux-rust: Rust kernel alive under UEFI");
-    let _ = writeln!(con, "linux-rust: serial console up on COM1");
+    let _ = writeln!(con, "rustux: Rust kernel alive under UEFI");
+    let _ = writeln!(con, "rustux: serial console up on COM1");
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::int_sqrt(1<<40) = {} (verified port of lib/math/int_sqrt.c)",
+        "rustux: klib::math::int_sqrt(1<<40) = {} (verified port of lib/math/int_sqrt.c)",
         klib::math::int_sqrt(1 << 40)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::gcd(1071,462) = {} (verified port of lib/math/gcd.c)",
+        "rustux: klib::math::gcd(1071,462) = {} (verified port of lib/math/gcd.c)",
         klib::math::gcd(1071, 462)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::lcm(21,6) = {} (verified port of lib/math/lcm.c)",
+        "rustux: klib::math::lcm(21,6) = {} (verified port of lib/math/lcm.c)",
         klib::math::lcm(21, 6)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::int_pow(7,13) = {} (verified port of lib/math/int_pow.c)",
+        "rustux: klib::math::int_pow(7,13) = {} (verified port of lib/math/int_pow.c)",
         klib::math::int_pow(7, 13)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::intlog10(255) = {} (verified port of lib/math/int_log.c)",
+        "rustux: klib::math::intlog10(255) = {} (verified port of lib/math/int_log.c)",
         klib::math::intlog10(255)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::mul_u64_add_u64_div_u64(2^63,2^63,0,2^63) = {} (verified port of lib/math/div64.c)",
+        "rustux: klib::math::mul_u64_add_u64_div_u64(2^63,2^63,0,2^63) = {} (verified port of lib/math/div64.c)",
         klib::math::mul_u64_add_u64_div_u64(1 << 63, 1 << 63, 0, 1 << 63)
     );
     let (rn, rd) = klib::math::rational_best_approximation(31415, 10000, 255, 31);
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::rational_best_approximation(3.1415) = {rn}/{rd} (verified port of lib/math/rational.c)"
+        "rustux: klib::math::rational_best_approximation(3.1415) = {rn}/{rd} (verified port of lib/math/rational.c)"
     );
     let rv = klib::math::reciprocal_value(7);
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::reciprocal_value(7) = {:#x},{},{} (verified port of lib/math/reciprocal_div.c)",
+        "rustux: klib::math::reciprocal_value(7) = {:#x},{},{} (verified port of lib/math/reciprocal_div.c)",
         rv.m, rv.sh1, rv.sh2
     );
     let iq = klib::math::cordic_calc_iq(45);
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::cordic_calc_iq(45) = {},{} (verified port of lib/math/cordic.c)",
+        "rustux: klib::math::cordic_calc_iq(45) = {},{} (verified port of lib/math/cordic.c)",
         iq.i, iq.q
     );
     let terms = [
@@ -132,18 +132,18 @@ fn main() -> Status {
     ];
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::polynomial_calc(x^2+2x+3, x=4) = {} (verified port of lib/math/polynomial.c)",
+        "rustux: klib::math::polynomial_calc(x^2+2x+3, x=4) = {} (verified port of lib/math/polynomial.c)",
         klib::math::polynomial_calc(&terms, 1, 4)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::math::is_prime_number(7919) = {}, next_prime_number(65535) = {} (verified port of lib/math/prime_numbers.c)",
+        "rustux: klib::math::is_prime_number(7919) = {}, next_prime_number(65535) = {} (verified port of lib/math/prime_numbers.c)",
         klib::math::is_prime_number(7919),
         klib::math::next_prime_number(65535)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::bcd::bcd2bin(0x45) = {}, bin2bcd(45) = {:#x} (verified port of lib/bcd.c)",
+        "rustux: klib::bcd::bcd2bin(0x45) = {}, bin2bcd(45) = {:#x} (verified port of lib/bcd.c)",
         klib::bcd::bcd2bin(0x45),
         klib::bcd::bin2bcd(45)
     );
@@ -151,7 +151,7 @@ fn main() -> Status {
     klib::sort::sort(&mut arr, |x, y| i32::from(x > y) - i32::from(x < y));
     let _ = writeln!(
         con,
-        "linux-rust: klib::sort::sort([9,4,7,1,8,2,6,3,5,0]) = {:?} (verified port of lib/sort.c)",
+        "rustux: klib::sort::sort([9,4,7,1,8,2,6,3,5,0]) = {:?} (verified port of lib/sort.c)",
         arr
     );
     const L: usize = 8;
@@ -172,19 +172,19 @@ fn main() -> Status {
     let last = keys[links[L].prev];
     let _ = writeln!(
         con,
-        "linux-rust: klib::list_sort::list_sort({:?}) first={} last={} (verified port of lib/list_sort.c)",
+        "rustux: klib::list_sort::list_sort({:?}) first={} last={} (verified port of lib/list_sort.c)",
         keys, first, last
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::crc::crc32_le(0,\"123456789\") = {:#x}, crc16(0,...) = {:#x}, crc4(0,0x12345678,32) = {:#x} (verified ports of lib/crc/)",
+        "rustux: klib::crc::crc32_le(0,\"123456789\") = {:#x}, crc16(0,...) = {:#x}, crc4(0,0x12345678,32) = {:#x} (verified ports of lib/crc/)",
         klib::crc::crc32_le(0, b"123456789"),
         klib::crc::crc16(0, b"123456789"),
         klib::crc::crc4(0, 0x12345678, 32)
     );
     let _ = writeln!(
         con,
-        "linux-rust: klib::hash::siphash_1u64(0xdeadbeef,k) = {:#x}, xxh64(\"123456789\",0) = {:#x}, jhash_1word(1,0) = {:#x} (verified ports of siphash.c/xxhash.c/jhash.h)",
+        "rustux: klib::hash::siphash_1u64(0xdeadbeef,k) = {:#x}, xxh64(\"123456789\",0) = {:#x}, jhash_1word(1,0) = {:#x} (verified ports of siphash.c/xxhash.c/jhash.h)",
         klib::hash::siphash_1u64(0xdeadbeef, (0x0706050403020100, 0x0f0e0d0c0b0a0908)),
         klib::hash::xxh64(b"123456789", 0),
         klib::hash::jhash_1word(1, 0)
@@ -195,7 +195,7 @@ fn main() -> Status {
     let free = klib::bitmap::bitmap_find_free_region(&mut bm, 128, 2);
     let _ = writeln!(
         con,
-        "linux-rust: klib::bitmap: set(62..72) -> first={} free_region(4)={} weight_after_alloc={} (verified ports of find_bit.c/bitmap.c)",
+        "rustux: klib::bitmap: set(62..72) -> first={} free_region(4)={} weight_after_alloc={} (verified ports of find_bit.c/bitmap.c)",
         klib::bitmap::find_first_bit(&bm, 128),
         free,
         klib::bitmap::bitmap_weight(&bm, 128)
@@ -262,7 +262,7 @@ fn main() -> Status {
         }
         let _ = writeln!(
             con,
-            "linux-rust: klib::rbtree: insert(5,3,8,1,4,7,9,2) inorder={} erase(4)={} asc(1..8)->{}nodes (verified port of lib/rbtree.c)",
+            "rustux: klib::rbtree: insert(5,3,8,1,4,7,9,2) inorder={} erase(4)={} asc(1..8)->{}nodes (verified port of lib/rbtree.c)",
             inorder, inorder2, h
         );
         assert_eq!(inorder, 12345789);
@@ -273,17 +273,17 @@ fn main() -> Status {
     {
         use klib::string::*;
         let mut dst = [0u8; 16];
-        let copied = sized_strscpy(&mut dst, b"linux-rust\0", 16);
+        let copied = sized_strscpy(&mut dst, b"rustux\0", 16);
         let hay = b"the quick brown fox\0";
         let _ = writeln!(
             con,
-            "linux-rust: klib::string: strscpy={} strstr(fox)={:?} memchr_inv={:?} strcasecmp={} (verified port of lib/string.c)",
+            "rustux: klib::string: strscpy={} strstr(fox)={:?} memchr_inv={:?} strcasecmp={} (verified port of lib/string.c)",
             copied,
             strstr(hay, b"fox\0"),
             memchr_inv(b"aaaab", b'a', 5),
             strcasecmp(b"ReSeT\0", b"reset\0")
         );
-        assert_eq!(copied, 10);
+        assert_eq!(copied, 6);
         assert_eq!(strstr(hay, b"fox\0"), Some(16));
         assert_eq!(memchr_inv(b"aaaab", b'a', 5), Some(4));
         assert_eq!(strcasecmp(b"ReSeT\0", b"reset\0"), 0);
@@ -305,7 +305,7 @@ fn main() -> Status {
         hmac_sha256(&hkey, b"what do ya want for nothing?", 28, &mut hm);
         let _ = writeln!(
             con,
-            "linux-rust: klib::sha: sha256(abc)={:02x}{:02x}..{:02x}{:02x} sha1(a+bc)={:02x}{:02x}.. hmac={:02x}{:02x}.. (verified port of lib/crypto/sha*.c)",
+            "rustux: klib::sha: sha256(abc)={:02x}{:02x}..{:02x}{:02x} sha1(a+bc)={:02x}{:02x}.. hmac={:02x}{:02x}.. (verified port of lib/crypto/sha*.c)",
             d[0], d[1], d[30], d[31], d1[0], d1[1], hm[0], hm[1]
         );
         assert_eq!(
@@ -338,7 +338,7 @@ fn main() -> Status {
         let got = kfifo_out(&mut f, &mut all, 8);
         let _ = writeln!(
             con,
-            "linux-rust: klib::kfifo: in={} wrap-drain={} -> {:?} (verified port of lib/kfifo.c)",
+            "rustux: klib::kfifo: in={} wrap-drain={} -> {:?} (verified port of lib/kfifo.c)",
             n,
             got,
             &all[..8]
@@ -359,7 +359,7 @@ fn main() -> Status {
         let rev = llist_reverse_order(&mut next, chain); // 0 -> 1
         let _ = writeln!(
             con,
-            "linux-rust: klib::llist: pop={} chain={} rev-head={} (verified port of lib/llist.c)",
+            "rustux: klib::llist: pop={} chain={} rev-head={} (verified port of lib/llist.c)",
             a, chain, rev
         );
         assert_eq!((a, chain, rev), (2, 1, 0));
@@ -376,7 +376,7 @@ fn main() -> Status {
         s.printf(b"=%d", &[Arg::I(33)]);
         let _ = writeln!(
             con,
-            "linux-rust: klib::seqbuf: puts+printf -> {:?} (verified port of lib/seq_buf.c)",
+            "rustux: klib::seqbuf: puts+printf -> {:?} (verified port of lib/seq_buf.c)",
             s.as_slice()
         );
         assert_eq!(s.as_slice(), b"boot=33");
@@ -409,7 +409,7 @@ fn main() -> Status {
         let rm = t.rhashtable_remove_fast(Rhashtable::obj(2) + 8);
         let _ = writeln!(
             con,
-            "linux-rust: klib::rhashtable: hit={} miss={} rm={} nelems={} (verified port of lib/rhashtable.c)",
+            "rustux: klib::rhashtable: hit={} miss={} rm={} nelems={} (verified port of lib/rhashtable.c)",
             hit,
             miss,
             rm,
@@ -435,7 +435,7 @@ fn main() -> Status {
         let deep = xa.xa_load(1 << 16);
         let _ = writeln!(
             con,
-            "linux-rust: klib::xarray: find={} idx={} l100={} deep={} (verified port of lib/xarray.c)",
+            "rustux: klib::xarray: find={} idx={} l100={} deep={} (verified port of lib/xarray.c)",
             f0,
             idx,
             l100,
@@ -462,7 +462,7 @@ fn main() -> Status {
         let del = rt.radix_tree_delete(3);
         let _ = writeln!(
             con,
-            "linux-rust: klib::radix_tree: l3={} deep={} gang={} del={} (verified port of lib/radix-tree.c)",
+            "rustux: klib::radix_tree: l3={} deep={} gang={} del={} (verified port of lib/radix-tree.c)",
             l3,
             deep,
             gang,
@@ -486,7 +486,7 @@ fn main() -> Status {
         let c = idr.idr_alloc(0x2020, 0, 0, GFP_KERNEL);
         let _ = writeln!(
             con,
-            "linux-rust: klib::idr: a={} b={} f={} c={} (verified port of lib/idr.c)",
+            "rustux: klib::idr: a={} b={} f={} c={} (verified port of lib/idr.c)",
             a,
             b,
             f,
@@ -511,7 +511,7 @@ fn main() -> Status {
         let nxt = mt.mt_next(MT_CANON, 5, u64::MAX);
         let _ = writeln!(
             con,
-            "linux-rust: klib::maple_tree: l5={} l105={} next={} (verified port of lib/maple_tree.c)",
+            "rustux: klib::maple_tree: l5={} l105={} next={} (verified port of lib/maple_tree.c)",
             l5,
             l105,
             nxt
@@ -554,7 +554,7 @@ fn main() -> Status {
         let reused = alloc.alloc_node().is_some();
         let _ = writeln!(
             con,
-            "linux-rust: klib::genradix: l3={:#x} deep={:#x} miss={} iter={} reuse={} (verified port of lib/generic-radix-tree.c)",
+            "rustux: klib::genradix: l3={:#x} deep={:#x} miss={} iter={} reuse={} (verified port of lib/generic-radix-tree.c)",
             l3,
             ldeep,
             miss,
@@ -599,7 +599,7 @@ fn main() -> Status {
         let subroot = ctx.sub[root.root.rb_node];
         let _ = writeln!(
             con,
-            "linux-rust: klib::interval_tree: q[8,16]={}hits rm(0)->first={} subroot={} (verified port of lib/interval_tree.c)",
+            "rustux: klib::interval_tree: q[8,16]={}hits rm(0)->first={} subroot={} (verified port of lib/interval_tree.c)",
             cnt,
             first,
             subroot
@@ -646,7 +646,7 @@ fn main() -> Status {
         assoc_array_destroy(&mut aa);
         let _ = writeln!(
             con,
-            "linux-rust: klib::assoc_array: find={:#x} iter={} del->leaves={} root={} (verified port of lib/assoc_array.c)",
+            "rustux: klib::assoc_array: find={:#x} iter={} del->leaves={} root={} (verified port of lib/assoc_array.c)",
             hit, cnt, after_del, aa.root
         );
         assert_eq!(hit, leaf_to_ptr(1));
@@ -669,7 +669,7 @@ fn main() -> Status {
         let s2 = string_helpers::string_get_size(1, 1500, string_helpers::STRING_UNITS_2, &mut szb, 32);
         let _ = writeln!(
             con,
-            "linux-rust: klib::kstrtox+string_helpers: u64={:#x} err={} bool={} hex={} match={} esc={:?} size={:?} (verified ports of lib/kstrtox.c lib/hexdump.c lib/string_helpers.c)",
+            "rustux: klib::kstrtox+string_helpers: u64={:#x} err={} bool={} hex={} match={} esc={:?} size={:?} (verified ports of lib/kstrtox.c lib/hexdump.c lib/string_helpers.c)",
             v, e, b, n, m,
             core::str::from_utf8(&esb[..e2]).unwrap_or("?"),
             core::str::from_utf8(&szb[..s2 as usize]).unwrap_or("?"),
@@ -693,7 +693,7 @@ fn main() -> Status {
         let sum = c.sum();
         let _ = writeln!(
             con,
-            "linux-rust: klib::percpu_counter: sum={} (verified port of lib/percpu_counter.c)",
+            "rustux: klib::percpu_counter: sum={} (verified port of lib/percpu_counter.c)",
             sum
         );
         assert_eq!(sum, 13);
@@ -720,7 +720,7 @@ fn main() -> Status {
         let rd = prb.read_valid(0, Some(&mut ri), Some(&mut rbuf));
         let _ = writeln!(
             con,
-            "linux-rust: klib::prb: reserve={} read={} len={} (verified port of kernel/printk/printk_ringbuffer.c)",
+            "rustux: klib::prb: reserve={} read={} len={} (verified port of kernel/printk/printk_ringbuffer.c)",
             ok,
             rd,
             ri.text_len
@@ -734,7 +734,7 @@ fn main() -> Status {
     // From here no UEFI boot-services call is legal; the console keeps working
     // because it is pure port I/O + framebuffer memory, both of which survive
     // the transition.
-    let _ = writeln!(con, "linux-rust: exiting boot services...");
+    let _ = writeln!(con, "rustux: exiting boot services...");
     // SAFETY: every firmware call this program makes happens before this
     // point; nothing afterwards touches boot or runtime services.
     let mmap = unsafe { uefi::boot::exit_boot_services(None) };
@@ -744,7 +744,7 @@ fn main() -> Status {
     // interrupts internally, and a stray IRQ vectoring through our IDT whose
     // selector doesn't exist in a firmware GDT would triple-fault the boot.
     cpu::init();
-    let _ = writeln!(con, "linux-rust: cpu: own GDT+IDT active");
+    let _ = writeln!(con, "rustux: cpu: own GDT+IDT active");
     let (mut n, mut conv, mut bsvc, mut largest) = (0usize, 0u64, 0u64, (0u64, 0u64));
     for d in mmap.entries() {
         n += 1;
@@ -763,14 +763,14 @@ fn main() -> Status {
     }
     let _ = writeln!(
         con,
-        "linux-rust: boot services exited -- {} mmap entries, {} MiB usable, {} KiB reclaimable",
+        "rustux: boot services exited -- {} mmap entries, {} MiB usable, {} KiB reclaimable",
         n,
         conv / 256,
         bsvc * 4
     );
     let _ = writeln!(
         con,
-        "linux-rust: largest free region {:#010x}..{:#010x} ({} MiB)",
+        "rustux: largest free region {:#010x}..{:#010x} ({} MiB)",
         largest.0,
         largest.0 + largest.1 * 4096,
         largest.1 / 256
@@ -787,7 +787,7 @@ fn main() -> Status {
     mm::load_cr3(pml4);
     let _ = writeln!(
         con,
-        "linux-rust: own page tables active (identity map, {} GiB, {} table frames at {:#x})",
+        "rustux: own page tables active (identity map, {} GiB, {} table frames at {:#x})",
         ngib,
         mm::table_frames(ngib),
         carve
@@ -831,7 +831,7 @@ fn main() -> Status {
     }
     let _ = writeln!(
         con,
-        "linux-rust: klib::mm: buddy+slab heap {}/{} frames free, kmalloc/kfree proof {}",
+        "rustux: klib::mm: buddy+slab heap {}/{} frames free, kmalloc/kfree proof {}",
         kalloc::free_frames(),
         free0,
         ok
@@ -846,14 +846,14 @@ fn main() -> Status {
         Some(hz) => {
             let _ = writeln!(
                 con,
-                "linux-rust: apic: lapic timer {hz} Hz counter -> 100 Hz periodic on vec {:#x} ({} mode)",
+                "rustux: apic: lapic timer {hz} Hz counter -> 100 Hz periodic on vec {:#x} ({} mode)",
                 apic::IRQ_TIMER,
                 if apic::is_x2apic() { "x2apic" } else { "xapic" }
             );
             true
         }
         None => {
-            let _ = writeln!(con, "linux-rust: apic: no local APIC -- interrupts stay off");
+            let _ = writeln!(con, "rustux: apic: no local APIC -- interrupts stay off");
             false
         }
     };
@@ -872,7 +872,7 @@ fn main() -> Status {
         }
         let _ = writeln!(
             con,
-            "linux-rust: apic: {} periodic timer IRQs delivered via own IDT",
+            "rustux: apic: {} periodic timer IRQs delivered via own IDT",
             apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - t0
         );
     }
@@ -881,7 +881,7 @@ fn main() -> Status {
     // 2-byte ud2, and execution resumes here.
     // SAFETY: ud2 always raises #UD; our handler makes it survivable.
     unsafe { core::arch::asm!("ud2", options(nomem, nostack)) };
-    let _ = writeln!(con, "linux-rust: cpu: IDT caught #UD and resumed");
+    let _ = writeln!(con, "rustux: cpu: IDT caught #UD and resumed");
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);

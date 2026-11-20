@@ -153,14 +153,14 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
         6 => {
             let _ = writeln!(
                 u,
-                "linux-rust: cpu: caught #UD rip={:#x} -- skipping",
+                "rustux: cpu: caught #UD rip={:#x} -- skipping",
                 f.rip
             );
             f.rip += 2;
         }
         // #BP/int3 resumes in place.
         3 => {
-            let _ = writeln!(u, "linux-rust: cpu: caught #BP rip={:#x} -- resuming", f.rip);
+            let _ = writeln!(u, "rustux: cpu: caught #BP rip={:#x} -- resuming", f.rip);
         }
         v => {
             let name = if v == u64::MAX {
@@ -172,7 +172,7 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
             };
             let _ = writeln!(
                 u,
-                "linux-rust: cpu: EXCEPTION {} rip={:#x} err={:#x} cs={:#x} -- halting",
+                "rustux: cpu: EXCEPTION {} rip={:#x} err={:#x} cs={:#x} -- halting",
                 name, f.rip, f.err, f.cs
             );
             loop {

@@ -1,7 +1,7 @@
-# Rust-Linux
+# Rustux
 
 <p align="center">
-  <img src="docs/logo.png" alt="linux-rust logo" width="220">
+  <img src="docs/logo.png" alt="Rustux logo" width="220">
 </p>
 
 An incremental reimplementation of the Linux kernel in Rust, verified against
