@@ -15,6 +15,8 @@ use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
 use klib::font::{FONT_8X16, FONT_8X16_H, FONT_8X16_W};
 
+use crate::logo_data::{LOGO_H, LOGO_RGB, LOGO_W};
+
 const FG: u32 = 0x00c0c0c0; // light gray text
 const BG: u32 = 0x00000000; // black background
 const FG_BOOT: u32 = 0x0000ff7f; // accent for the banner line
@@ -28,6 +30,7 @@ pub struct FbConsole {
     bgr: bool,
     cols: usize,
     rows: usize,
+    top: usize, // first text row; rows above it (the splash) never scroll
     cx: usize,
     cy: usize,
 }
@@ -61,6 +64,7 @@ impl FbConsole {
             bgr,
             cols: width / FONT_8X16_W,
             rows: height / FONT_8X16_H,
+            top: 0,
             cx: 0,
             cy: 0,
         };
@@ -101,13 +105,15 @@ impl FbConsole {
 
     fn scroll(&mut self) {
         let row_bytes = self.stride * 4;
-        let move_bytes = row_bytes * (self.rows - 1) * FONT_8X16_H;
-        // SAFETY: src/dst ranges stay inside `size` — move_bytes + tail clear
-        // together cover rows*GH*stride*4 <= height*stride*4 <= size.
+        let region_top = self.top * FONT_8X16_H * row_bytes;
+        let move_bytes = row_bytes * FONT_8X16_H * (self.rows - self.top - 1);
+        // SAFETY: src/dst stay inside `size` — the scroll region covers the
+        // (rows-top)*GH scanlines starting at top*GH, all below
+        // height*stride*4 <= size. rows > top always (splash clamps top).
         unsafe {
             ptr::copy(
-                self.base.add(row_bytes * FONT_8X16_H),
-                self.base,
+                self.base.add(region_top + row_bytes * FONT_8X16_H),
+                self.base.add(region_top),
                 move_bytes,
             );
         }
@@ -145,6 +151,26 @@ impl FbConsole {
         if self.cy >= self.rows {
             self.scroll();
         }
+    }
+
+    /// Boot splash: draw the generated logo image centered at the top of the
+    /// screen, then place the text cursor on the first row below it.
+    pub fn splash(&mut self) {
+        let lw = LOGO_W.min(self.width);
+        let lh = LOGO_H.min(self.height);
+        let x0 = (self.width - lw) / 2;
+        for y in 0..lh {
+            for x in 0..lw {
+                let i = (y * LOGO_W + x) * 3;
+                let rgb = (u32::from(LOGO_RGB[i]) << 16)
+                    | (u32::from(LOGO_RGB[i + 1]) << 8)
+                    | u32::from(LOGO_RGB[i + 2]);
+                self.px(x0 + x, y, rgb);
+            }
+        }
+        self.cx = 0;
+        self.top = lh.div_ceil(FONT_8X16_H).min(self.rows - 1);
+        self.cy = self.top;
     }
 
     /// Accent-colored banner line (proof the console is alive before any

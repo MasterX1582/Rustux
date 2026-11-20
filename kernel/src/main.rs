@@ -15,6 +15,7 @@ use uefi::prelude::*;
 
 mod cpu;
 mod fbcon;
+mod logo_data;
 mod mm;
 mod uart;
 
@@ -55,6 +56,7 @@ fn main() -> Status {
     };
     con.uart.init();
     if let Some(fb) = con.fb.as_mut() {
+        fb.splash();
         fb.banner();
     }
     let _ = writeln!(con, "linux-rust: Rust kernel alive under UEFI");

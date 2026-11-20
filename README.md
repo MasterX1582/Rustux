@@ -1,5 +1,9 @@
 # linux-rust
 
+<p align="center">
+  <img src="docs/logo.png" alt="linux-rust logo" width="220">
+</p>
+
 An incremental reimplementation of the Linux kernel in Rust, verified against
 the original C kernel's recorded behavior.
 
@@ -33,4 +37,4 @@ make run             # builds kernel.efi -> esp.img, boots under OVMF in QEMU;
 The kernel prints its boot proofs to COM1 and to a GOP framebuffer text
 console (VGA 8x16 font from `lib/fonts/font_8x16.c`), then exits UEFI boot
 services and reports the firmware memory map — a `-display gtk` QEMU window
-shows the kernel's own console output.
+shows the boot logo and the kernel's own console output.
