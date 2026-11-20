@@ -650,7 +650,7 @@ pub fn ping_selftest(base: usize, mac: [u8; 6]) -> bool {
 /// exist — its spec was never submitted); the responder learns the
 /// sender's MAC from the received frame and unicasts the reply.
 /// Addresses: A = RN 0.0.0.1 / 10.0.0.1, B = RN 0.0.0.2 / 10.0.0.2.
-pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
+pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     let role = mac[5];
     if role != 0x01 && role != 0x02 {
         return; // single-node boot: no peer configured
@@ -680,6 +680,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
         }
         let mut sent = false;
         let mut rounds = 0u32;
+        let mut seen = 0u32;
         loop {
             for d in 0..N_RX {
                 // SAFETY: same contract as arp_selftest.
@@ -701,6 +702,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
                         len as usize,
                     )
                 };
+                seen += 1;
                 let et = u16::from_be_bytes([buf[12], buf[13]]);
                 if et == crate::net::ET_IPV8 {
                     if let Some(ip) = crate::net::parse_ipv8(&buf[14..]) {
@@ -736,6 +738,12 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
                 }
             }
             rounds += 1;
+            if rounds % 64_000_000 == 0 {
+                crate::log::printk(format_args!(
+                    "rustux: ipv8: ini hb r={rounds} seen={seen}"
+                ));
+                crate::log::drain(con);
+            }
             if rounds == u32::MAX {
                 printk(format_args!("rustux: ipv8: no reply (peer down?)"));
                 return;
@@ -748,8 +756,9 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
     }
 
     // Responder: bounded listen for an IPv8 echo request, then reply.
-    printk(format_args!("rustux: ipv8: responder listening ~50s"));
+    printk(format_args!("rustux: ipv8: responder listening (indef)"));
     let mut i = 0u32;
+    let mut seen = 0u32;
     loop {
         for d in 0..N_RX {
             // SAFETY: same contract as arp_selftest.
@@ -768,6 +777,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
             let buf = unsafe {
                 core::slice::from_raw_parts(bufs.add(d * RX_BUF), len as usize)
             };
+            seen += 1;
             let et = u16::from_be_bytes([buf[12], buf[13]]);
             if et == crate::net::ET_IPV8 && buf.len() >= 14 + 28 {
                 let dst_mac: [u8; 6] =
@@ -813,6 +823,12 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
             }
         }
         i += 1;
+        if i % 64_000_000 == 0 {
+            crate::log::printk(format_args!(
+                "rustux: ipv8: resp hb iters={i} frames={seen}"
+            ));
+            crate::log::drain(con);
+        }
         if i == u32::MAX {
             i = 0; // dedicated demo peer: listen indefinitely
         }

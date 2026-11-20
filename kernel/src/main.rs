@@ -914,7 +914,7 @@ fn main() -> Status {
                 let ping_ok = e1000::ping_selftest(e_base, e_mac);
                 kprintln!(con, "rustux: e1000: IPv4/ICMP ping {ping_ok}");
             }
-            e1000::ipv8_demo(e_base, e_mac);
+            e1000::ipv8_demo(e_base, e_mac, &mut con);
         }
     } else {
         kprintln!(con, "rustux: e1000: no 82574L on the bus");
