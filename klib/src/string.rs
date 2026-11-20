@@ -1,4 +1,9 @@
-//! String/memory routines, ported from Linux `lib/string.c`.
+//! String/memory routines, ported from Linux `lib/string.c`, plus the
+//! string helpers upstream keeps in `lib/string_helpers.c` and
+//! `include/linux/string_helpers.h` (`sysfs_streq`, `match_string`,
+//! `__sysfs_match_string`, `strreplace`, `skip_spaces`, `strim`,
+//! `string_upper`, `string_lower`, `string_is_terminated`,
+//! `memcpy_and_pad` — the `ports/lib-strtox-helpers` overlap).
 //!
 //! C pointers become `&[u8]` slices or `usize` offsets into them; NUL
 //! pointers become `None` / [`Option<usize>`] offsets. Functions that scan
@@ -10,6 +15,7 @@
 //! `int` returns map to `i32`, `ssize_t` to `isize`.
 
 const E2BIG: isize = 7;
+const EINVAL: i32 = 22;
 const WAAT_ONES: u64 = 0x0101010101010101;
 const WAAT_HIGHS: u64 = 0x8080808080808080;
 const ALLBUTLAST_BYTE_MASK: u64 = u64::MAX >> 8; /* little-endian */
@@ -548,6 +554,164 @@ pub fn memchr_inv(start: &[u8], c: u8, bytes: usize) -> Option<usize> {
     check_bytes8(&start[pos..], value, bytes % 8).map(|r| pos + r)
 }
 
+// ---- merged: lib/string_helpers.c + include/linux/string_helpers.h ------
+// (the ports/lib-strtox-helpers overlap — composites over the primitives
+// above, verified in the 11667-case differential)
+
+/// kernel `isspace` — the `_ctype` `_S` set: \t-\r, ' ', and 0xa0.
+fn isspace(c: u8) -> bool {
+    matches!(c, 0x09..=0x0d | 0x20 | 0xa0)
+}
+
+/// kernel `toupper` — `_ctype` `_L` is a-z plus Latin-1 0xdf-0xf6 and
+/// 0xf8-0xff (so `string_upper` maps e.g. 0xe1 to 0xc1, like upstream).
+fn toupper(c: u8) -> u8 {
+    if matches!(c, 0x61..=0x7a | 0xdf..=0xf6 | 0xf8..=0xff) { c - 32 } else { c }
+}
+
+/// kernel `tolower` — `_ctype` `_U` is A-Z plus Latin-1 0xc0-0xd6 and
+/// 0xd8-0xde. (`tolower_c` above stays the ASCII subset the strncasecmp
+/// family was adopted with.)
+fn tolower(c: u8) -> u8 {
+    if matches!(c, 0x41..=0x5a | 0xc0..=0xd6 | 0xd8..=0xde) { c + 32 } else { c }
+}
+
+/// `skip_spaces` — offset of the first non-whitespace char.
+pub fn skip_spaces(s: &[u8]) -> usize {
+    let mut i = 0;
+    while isspace(s[i]) {
+        i += 1;
+    }
+    i
+}
+
+/// `strim` — trim trailing whitespace in place, return the `skip_spaces`
+/// offset of the (still NUL-terminated) remainder.
+pub fn strim(s: &mut [u8]) -> usize {
+    let size = strlen(s);
+    if size == 0 {
+        return 0;
+    }
+    // C walks `end` back from s + size - 1; `e` is the exclusive end.
+    let mut e = size;
+    while e > 0 && isspace(s[e - 1]) {
+        e -= 1;
+    }
+    s[e] = 0;
+    skip_spaces(s)
+}
+
+/// `sysfs_streq` — true iff the strings are equal, treating NUL and
+/// newline-then-NUL as equivalent terminations on either side.
+pub fn sysfs_streq(s1: &[u8], s2: &[u8]) -> bool {
+    let (mut a, mut b) = (0usize, 0usize);
+    while s1[a] != 0 && s1[a] == s2[b] {
+        a += 1;
+        b += 1;
+    }
+    if s1[a] == s2[b] {
+        return true;
+    }
+    if s1[a] == 0 && s2[b] == b'\n' && s2[b + 1] == 0 {
+        return true;
+    }
+    if s1[a] == b'\n' && s1[a + 1] == 0 && s2[b] == 0 {
+        return true;
+    }
+    false
+}
+
+/// `match_string` — index of `s` in `array`, or -EINVAL. `array` is the
+/// `char * const *` model: `None` entries are C NULLs and the first one
+/// stops the scan; `n` bounds it independently (callers pass
+/// `array.len()`, or a larger n with a NULL terminator).
+pub fn match_string(array: &[Option<&[u8]>], n: usize, s: &[u8]) -> i32 {
+    let mut index = 0usize;
+    while index < n {
+        let item = match array[index] {
+            None => break,
+            Some(item) => item,
+        };
+        if strcmp(item, s) == 0 {
+            return index as i32;
+        }
+        index += 1;
+    }
+    -EINVAL
+}
+
+/// `__sysfs_match_string` — like `match_string` but with `sysfs_streq`.
+pub fn __sysfs_match_string(array: &[Option<&[u8]>], n: usize, s: &[u8]) -> i32 {
+    let mut index = 0usize;
+    while index < n {
+        let item = match array[index] {
+            None => break,
+            Some(item) => item,
+        };
+        if sysfs_streq(item, s) {
+            return index as i32;
+        }
+        index += 1;
+    }
+    -EINVAL
+}
+
+/// `strreplace` — replace every `old` with `new` in the NUL-terminated
+/// string, in place (upstream returns `str`, which the slice already is).
+pub fn strreplace(s: &mut [u8], old: u8, new: u8) {
+    let mut i = 0;
+    while s[i] != 0 {
+        if s[i] == old {
+            s[i] = new;
+        }
+        i += 1;
+    }
+}
+
+/// `memcpy_and_pad` — copy `count` bytes then pad to `dest_len`, or copy
+/// `dest_len` bytes when `count >= dest_len`.
+pub fn memcpy_and_pad(dest: &mut [u8], dest_len: usize, src: &[u8], count: usize, pad: u8) {
+    if dest_len > count {
+        memcpy(dest, src, count);
+        memset(&mut dest[count..], pad, dest_len - count);
+    } else {
+        memcpy(dest, src, dest_len);
+    }
+}
+
+/// `string_is_terminated` — `memchr(s, '\0', len) != NULL`. Upstream takes
+/// `int len`; `usize` keeps the safe model (`len <= s.len()` contract,
+/// like the other slice functions).
+pub fn string_is_terminated(s: &[u8], len: usize) -> bool {
+    memchr(s, 0, len).is_some()
+}
+
+/// `string_upper` — copy `src` to `dst` uppercased, including the NUL.
+pub fn string_upper(dst: &mut [u8], src: &[u8]) {
+    let mut i = 0;
+    loop {
+        let c = src[i];
+        dst[i] = toupper(c);
+        if c == 0 {
+            break;
+        }
+        i += 1;
+    }
+}
+
+/// `string_lower` — copy `src` to `dst` lowercased, including the NUL.
+pub fn string_lower(dst: &mut [u8], src: &[u8]) {
+    let mut i = 0;
+    loop {
+        let c = src[i];
+        dst[i] = tolower(c);
+        if c == 0 {
+            break;
+        }
+        i += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,5 +872,89 @@ mod tests {
         let mut s = [5u8; 10];
         s[9] = 1;
         assert_eq!(memchr_inv(&s, 5, 10), Some(9));
+    }
+
+    #[test]
+    fn sysfs_streq_rules() {
+        assert!(sysfs_streq(b"abc\0", b"abc\0"));
+        assert!(sysfs_streq(b"abc\0", b"abc\n\0"));
+        assert!(sysfs_streq(b"abc\n\0", b"abc\0"));
+        assert!(sysfs_streq(b"abc\n\0", b"abc\n\0"));
+        assert!(sysfs_streq(b"\0", b"\n\0"));
+        assert!(sysfs_streq(b"\n\0", b"\0"));
+        assert!(!sysfs_streq(b"abc\0", b"abd\n\0"));
+        assert!(!sysfs_streq(b"ab\0", b"abc\n\0"));
+        assert!(!sysfs_streq(b"abc\n\0", b"abd\0"));
+        // an interior newline is a real character, not a terminator
+        assert!(!sysfs_streq(b"ab\ncd\0", b"ab\0"));
+        // ...but a newline before the terminator matches like upstream:
+        // as C strings these are "ab\n" and "ab" — 'x' past the NUL is
+        // unreachable, same as for the C char* it models
+        assert!(sysfs_streq(b"ab\n\0x", b"ab\0"));
+    }
+
+    #[test]
+    fn match_string_family() {
+        let arr: [Option<&[u8]>; 4] = [
+            Some(b"one\0"),
+            Some(b"two\0"),
+            Some(b"three\0"),
+            None,
+        ];
+        assert_eq!(match_string(&arr, 4, b"two\0"), 1);
+        assert_eq!(match_string(&arr, 4, b"four\0"), -EINVAL);
+        // the n bound stops the scan before the NULL terminator
+        assert_eq!(match_string(&arr, 2, b"three\0"), -EINVAL);
+        // n = -1 upstream: an unbounded scan stops at the first NULL
+        assert_eq!(match_string(&arr, usize::MAX, b"three\0"), 2);
+        let arr2: [Option<&[u8]>; 3] = [Some(b"a\0"), None, Some(b"c\0")];
+        assert_eq!(match_string(&arr2, 3, b"c\0"), -EINVAL);
+        // sysfs variant: newline-terminated query matches too
+        assert_eq!(__sysfs_match_string(&arr, 4, b"two\n\0"), 1);
+        assert_eq!(match_string(&arr, 4, b"two\n\0"), -EINVAL);
+        // and a newline on the array side
+        let arr3: [Option<&[u8]>; 2] = [Some(b"on\n\0"), None];
+        assert_eq!(__sysfs_match_string(&arr3, 2, b"on\0"), 0);
+    }
+
+    #[test]
+    fn trim_and_case() {
+        assert_eq!(skip_spaces(b"  \t\nabc\0"), 4);
+        assert_eq!(skip_spaces(b"abc\0"), 0);
+        // kernel isspace covers 0xa0 via the _ctype _S flag
+        assert_eq!(skip_spaces(b"\xa0 x\0"), 2);
+        let mut s = *b"  hi  \0";
+        assert_eq!(strim(&mut s), 2);
+        assert_eq!(&s[..5], b"  hi\0");
+        let mut all = *b"   \0";
+        assert_eq!(strim(&mut all), 0);
+        assert_eq!(&all[..1], b"\0");
+        let mut empty = *b"\0";
+        assert_eq!(strim(&mut empty), 0);
+        let mut d = [0u8; 8];
+        string_upper(&mut d, b"Ab3\0");
+        assert_eq!(&d[..4], b"AB3\0");
+        string_lower(&mut d, b"Ab3\0");
+        assert_eq!(&d[..4], b"ab3\0");
+        // kernel case mapping covers Latin-1: 0xe1 -> 0xc1, 0xd8 -> 0xf8
+        string_upper(&mut d, b"\xe1\0");
+        assert_eq!(&d[..2], b"\xc1\0");
+        string_lower(&mut d, b"\xd8\0");
+        assert_eq!(&d[..2], b"\xf8\0");
+    }
+
+    #[test]
+    fn replace_pad_terminated() {
+        let mut s = *b"a,b,c\0";
+        strreplace(&mut s, b',', b';');
+        assert_eq!(&s[..6], b"a;b;c\0");
+        let mut d = [0u8; 8];
+        memcpy_and_pad(&mut d, 6, b"ab", 2, b'.');
+        assert_eq!(&d[..6], b"ab....");
+        memcpy_and_pad(&mut d, 3, b"wxyz", 5, b'.');
+        assert_eq!(&d[..3], b"wxy");
+        assert!(string_is_terminated(b"ab\0cd", 3));
+        assert!(!string_is_terminated(b"ab\0cd", 2));
+        assert!(!string_is_terminated(b"abc", 3));
     }
 }

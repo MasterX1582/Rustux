@@ -624,6 +624,34 @@ fn main() -> Status {
     }
 
     {
+        use klib::{kstrtox, seqbuf, string, string_helpers};
+        let v = kstrtox::kstrtoull(b"0xdeadbeef\0", 0).unwrap();
+        let e = kstrtox::kstrtouint(b"4294967296\0", 10).unwrap_err();
+        let b = kstrtox::kstrtobool(Some(b"on\0")).unwrap();
+        let mut lb = [0u8; 131];
+        let n = seqbuf::hex_dump_to_buffer(&[0x11, 0x22], 2, 16, 2, &mut lb, false);
+        let m = string::match_string(&[Some(b"one\0"), Some(b"two\0"), None], 3, b"two\0");
+        let mut esb = [0u8; 64];
+        let e2 = string_helpers::string_escape_str_any_np(b"a\n\x7f\0", &mut esb, None);
+        let mut szb = [0u8; 32];
+        let s2 = string_helpers::string_get_size(1, 1500, string_helpers::STRING_UNITS_2, &mut szb, 32);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::kstrtox+string_helpers: u64={:#x} err={} bool={} hex={} match={} esc={:?} size={:?} (verified ports of lib/kstrtox.c lib/hexdump.c lib/string_helpers.c)",
+            v, e, b, n, m,
+            core::str::from_utf8(&esb[..e2]).unwrap_or("?"),
+            core::str::from_utf8(&szb[..s2 as usize]).unwrap_or("?"),
+        );
+        assert_eq!(v, 0xdeadbeef);
+        assert_eq!(e, -34); // -ERANGE
+        assert!(b);
+        assert_eq!(n, 4); // "2211": LE u16 group of [0x11, 0x22]
+        assert_eq!(m, 1);
+        assert_eq!(&esb[..e2], b"a\\n\\177");
+        assert_eq!(&szb[..s2 as usize], b"1.46 KiB");
+    }
+
+    {
         use klib::percpu_counter::PercpuCounter;
         let mut lanes = [0i64; 4];
         let mut c = PercpuCounter::new();

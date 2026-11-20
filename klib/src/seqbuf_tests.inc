@@ -302,6 +302,74 @@ fn vprintf_huge_width_clamped() {
 }
 
 #[test]
+fn hex_dump_to_buffer_source_deltas() {
+    // groupsize 8: native u64 LE load per group
+    let mut lb = [0u8; 131];
+    let data = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    let n = hex_dump_to_buffer(&data, 8, 16, 8, &mut lb, false);
+    assert_eq!(&lb[..n as usize], b"0807060504030201");
+    // non-power-of-two groupsize resets to 1 upstream
+    let mut lb2 = [0u8; 131];
+    let n = hex_dump_to_buffer(&data[..4], 4, 16, 3, &mut lb2, false);
+    assert_eq!(&lb2[..n as usize], b"01 02 03 04");
+    // groupsize 16 > 8 resets to 1
+    let mut lb3 = [0u8; 131];
+    let n = hex_dump_to_buffer(&data[..4], 4, 16, 16, &mut lb3, false);
+    assert_eq!(&lb3[..n as usize], b"01 02 03 04");
+    // len % groupsize != 0 disables grouping ("no mixed size output")
+    let mut lb4 = [0u8; 131];
+    let n = hex_dump_to_buffer(&data[..6], 6, 16, 4, &mut lb4, false);
+    assert_eq!(&lb4[..n as usize], b"01 02 03 04 05 06");
+    // len > rowsize clamps to the row
+    let mut lb5 = [0u8; 131];
+    let big = [0x5au8; 32];
+    let n = hex_dump_to_buffer(&big, 20, 16, 1, &mut lb5, false);
+    assert_eq!(n, 47);
+    // bad rowsize resets to 16
+    let mut lb6 = [0u8; 131];
+    let n = hex_dump_to_buffer(&data, 8, 8, 1, &mut lb6, false);
+    assert_eq!(&lb6[..n as usize], b"01 02 03 04 05 06 07 08");
+    // rowsize 32 with an ASCII column: 32*2 + 32/1 + 1 = 97 + 8
+    let mut lb7 = [0u8; 160];
+    let n = hex_dump_to_buffer(&data, 8, 32, 1, &mut lb7, true);
+    assert_eq!(n, 97 + 8);
+    assert_eq!(&lb7[97..105], b"........"); // 0x01-0x08 aren't printable
+    // zero length: lone NUL, return 0
+    let mut lb8 = [0u8; 16];
+    let n = hex_dump_to_buffer(&data, 0, 16, 1, &mut lb8, false);
+    assert_eq!(n, 0);
+    assert_eq!(lb8[0], 0);
+    // zero-size linebuf still returns the would-be length
+    let n = hex_dump_to_buffer(&data, 8, 16, 1, &mut [], false);
+    assert_eq!(n, (2 + 1) * 8 - 1);
+}
+
+#[test]
+fn hex_to_bin_table() {
+    for d in 0..10u8 {
+        assert_eq!(hex_to_bin(b'0' + d), d as i32);
+    }
+    for d in 0..6u8 {
+        assert_eq!(hex_to_bin(b'a' + d), (10 + d) as i32);
+        assert_eq!(hex_to_bin(b'A' + d), (10 + d) as i32);
+    }
+    assert_eq!(hex_to_bin(b'g'), -1);
+    assert_eq!(hex_to_bin(b'/'), -1);
+    assert_eq!(hex_to_bin(b':'), -1);
+    assert_eq!(hex_to_bin(0xff), -1);
+    let mut dst = [0u8; 4];
+    assert_eq!(hex2bin(&mut dst, b"deadbeef", 4), 0);
+    assert_eq!(dst, [0xde, 0xad, 0xbe, 0xef]);
+    assert_eq!(hex2bin(&mut dst, b"zz", 1), -22);
+    let n = bin2hex(&mut dst, &[0xab, 0x12], 2);
+    assert_eq!(n, 4);
+    assert_eq!(&dst, b"ab12");
+    assert_eq!(HEX_ASC[10], b'a');
+    assert_eq!(hex_asc_hi(0xab), b'a');
+    assert_eq!(hex_asc_lo(0xab), b'b');
+}
+
+#[test]
 fn hex_dump_prefix_address() {
     let mut backing = [0u8; 256];
     let mut s = SeqBuf::new(&mut backing);

@@ -1,5 +1,7 @@
 //! Sequential buffer writer — port of `lib/seq_buf.c` +
-//! `include/linux/seq_buf.h`.
+//! `include/linux/seq_buf.h`, plus the `lib/hexdump.c` helpers it leans
+//! on (`hex_asc`, `hex_to_bin`, `hex2bin`, `bin2hex`, `hex_dump_to_buffer`
+//! — all verified in `ports/lib-strtox-helpers`).
 //!
 //! `struct seq_buf` is [`SeqBuf`], borrowing a caller-owned backing
 //! store. `size` is the logical capacity (`<= buf.len()`), `len` the
@@ -430,12 +432,78 @@ fn sized_strscpy(dst: &mut [u8], src: &[u8]) {
     dst[res] = 0;
 }
 
-fn hex_asc_hi(x: u8) -> u8 {
-    b"0123456789abcdef"[(x >> 4) as usize]
+/// `hex_asc[]` — lib/hexdump.c's lookup table (`EXPORT_SYMBOL` upstream).
+pub const HEX_ASC: [u8; 16] = *b"0123456789abcdef";
+
+/// `hex_asc_hi(x)` — the high nibble's hex digit.
+pub fn hex_asc_hi(x: u8) -> u8 {
+    HEX_ASC[(x >> 4) as usize]
 }
 
-fn hex_asc_lo(x: u8) -> u8 {
-    b"0123456789abcdef"[(x & 0x0f) as usize]
+/// `hex_asc_lo(x)` — the low nibble's hex digit.
+pub fn hex_asc_lo(x: u8) -> u8 {
+    HEX_ASC[(x & 0x0f) as usize]
+}
+
+/// `hex_to_bin` — lib/hexdump.c's branch-free decode: nibble value 0-15,
+/// or -1 for a non-hex character.
+pub fn hex_to_bin(ch: u8) -> i32 {
+    let c = ch as i32;
+    let cu = (ch & 0xdf) as i32;
+    let d = ((c - 0x39 - 1) & (0x30 - 1 - c)) as u32 >> 8;
+    let e = ((cu - 0x46 - 1) & (0x41 - 1 - cu)) as u32 >> 8;
+    (-1i32)
+        .wrapping_add((c - 0x30 + 1) & (d as i32))
+        .wrapping_add((cu - 0x41 + 11) & (e as i32))
+}
+
+/// `hex2bin` — decode `count` pairs of hex digits from `src` into `dst`.
+/// Writes are bounded by `dst.len()` (C's caller guarantees the room);
+/// `-EINVAL` (-22) on the first bad digit, 0 on success.
+pub fn hex2bin(dst: &mut [u8], src: &[u8], count: usize) -> i32 {
+    let mut si = 0usize;
+    let mut di = 0usize;
+    let mut count = count;
+    while count > 0 {
+        count -= 1;
+        let hi = hex_to_bin(sbyte(src, si));
+        si += 1;
+        if hi < 0 {
+            return -22; // -EINVAL
+        }
+        let lo = hex_to_bin(sbyte(src, si));
+        si += 1;
+        if lo < 0 {
+            return -22; // -EINVAL
+        }
+        if di < dst.len() {
+            dst[di] = ((hi << 4) | lo) as u8;
+        }
+        di += 1;
+    }
+    0
+}
+
+/// `bin2hex` — encode `count` bytes of `src` as hex into `dst`.
+/// Writes are bounded by `dst.len()` (C's caller guarantees room for
+/// `2*count` chars); the return is the exact `p - dst` count upstream
+/// would produce either way.
+pub fn bin2hex(dst: &mut [u8], src: &[u8], count: usize) -> usize {
+    let mut di = 0usize;
+    for &b in src.iter().take(count) {
+        if di + 1 < dst.len() {
+            dst[di] = hex_asc_hi(b);
+            dst[di + 1] = hex_asc_lo(b);
+        }
+        di += 2;
+    }
+    di
+}
+
+/// Byte read that tolerates reaching the end of the slice: an absent byte
+/// reads as the NUL tail (the `sbyte` model the verified port used).
+fn sbyte(s: &[u8], i: usize) -> u8 {
+    if i < s.len() { s[i] } else { 0 }
 }
 
 fn is_power_of_2(n: u64) -> bool {
