@@ -892,9 +892,20 @@ fn main() -> Status {
     // This is the table future drivers (e1000, AHCI, virtio) bind on.
     let n_pci = pci::scan();
     kprintln!(con, "rustux: pci: {n_pci} functions on the bus");
-    // Driver binding step 1: the e1000e QEMU attaches — enable the
-    // device and prove BAR0 MMIO by reading its station MAC back.
-    if e1000::probe().is_none() {
+    // Driver binding step 1: the e1000e QEMU attaches. The BAR check is
+    // the promised validation — the claimed MMIO window must not overlap
+    // any conventional-RAM range before the driver writes through it.
+    let bar_is_mmio = |base: u64, size: u64| -> bool {
+        !mmap.entries().any(|d| {
+            d.ty == MemoryType::CONVENTIONAL
+                && base < d.phys_start + d.page_count * 4096
+                && base + size > d.phys_start
+        })
+    };
+    if let Some((e_base, e_mac)) = e1000::probe(bar_is_mmio) {
+        let tx_ok = e1000::tx_selftest(e_base, e_mac);
+        kprintln!(con, "rustux: e1000: tx datapath self-test {tx_ok}");
+    } else {
         kprintln!(con, "rustux: e1000: no 82574L on the bus");
     }
 
