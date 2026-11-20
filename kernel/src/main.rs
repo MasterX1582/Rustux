@@ -1016,15 +1016,18 @@ fn main() -> Status {
     kprintln!(con, "rustux: cpu: IDT caught #UD and resumed");
 
     // Userspace milestone: the initrd IS the process table — every
-    // cpio entry loads as its own task (private page tables, private
-    // syscall stack, frames reclaimed on exit) and runs to completion
-    // on ring 3. Falls back to the embedded image when no initrd was
-    // loaded or the archive has no entries.
+    // cpio entry is enqueued as a Runnable task (private page tables,
+    // private syscall stack, frames reclaimed on exit) and the whole
+    // queue runs under the preemptive round-robin scheduler: the
+    // LAPIC timer snapshots a task's ctx at 100 Hz and iretq-resumes
+    // the next Runnable one; exit() switches directly task-to-task.
+    // Falls back to the embedded image when no initrd was loaded or
+    // the archive has no entries.
     // SAFETY: initrd names LOADER_DATA pages we allocated pre-EBS;
     // they are identity-mapped and still owned.
     let arc = initrd.map(|(a, l)| unsafe { core::slice::from_raw_parts(a as *const u8, l) });
     let before = kalloc::free_frames();
-    let mut ran = 0u32;
+    let mut queued = 0u32;
     if let Some(arc) = arc {
         // The archive doubles as the read-only root filesystem — fd
         // ops resolve paths against it for the kernel's lifetime.
@@ -1037,19 +1040,25 @@ fn main() -> Status {
                 kprintln!(con, "rustux: task {nm}: skipped (data file)");
                 continue;
             }
-            kprintln!(con, "rustux: task {nm}: spawning");
-            let ok = user::run(img);
-            kprintln!(con, "rustux: task {nm}: {}", if ok { "done" } else { "FAILED" });
-            ran += 1;
+            if user::spawn(img) {
+                kprintln!(con, "rustux: task {nm}: queued");
+                queued += 1;
+            } else {
+                kprintln!(con, "rustux: task {nm}: spawn FAILED");
+            }
         }
     }
-    if ran == 0 {
+    if queued == 0 {
         kprintln!(con, "rustux: initrd: no entries, using embedded ELF");
-        let ok = user::run(include_bytes!("../user/hello.elf"));
-        kprintln!(con, "rustux: user: ring-3 ELF run {}", if ok { "done" } else { "FAILED" });
+        if user::spawn(include_bytes!("../user/hello.elf")) {
+            queued = 1;
+        }
     }
+    // Enters the scheduler; returns when the last task has exited.
+    user::launch();
+    user::reap_all();
     let after = kalloc::free_frames();
-    kprintln!(con, "rustux: tasks: {} ran, frames {} -> {} after reap{}", ran, before, after,
+    kprintln!(con, "rustux: tasks: {} ran, frames {} -> {} after reap{}", queued, before, after,
         if after == before { " (zero leak)" } else { " (LEAK)" });
     kprintln!(
         con,

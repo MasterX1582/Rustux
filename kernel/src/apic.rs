@@ -108,12 +108,17 @@ fn eoi() {
 
 /// IRQ vector -> action, called from cpu::report_frame for the vectors
 /// with real IRQ stubs. Returns without printing so ticks stay cheap.
+/// Timer accounting + EOI for the scheduler path — vector 0xf0's
+/// dedicated stub bypasses irq_dispatch so a tick can switch tasks.
+pub fn timer_tick() {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+    eoi();
+}
+
+/// IRQ vector -> action, called from cpu::report_frame for the vectors
+/// with real IRQ stubs. Returns without printing so ticks stay cheap.
 pub fn irq_dispatch(vec: u64) {
     match vec {
-        IRQ_TIMER => {
-            TICKS.fetch_add(1, Ordering::Relaxed);
-            eoi();
-        }
         IRQ_PIT => {
             PIT_TICKS.fetch_add(1, Ordering::Relaxed);
             eoi();

@@ -125,12 +125,12 @@ syscall_entry:
 1:
     sysretq
 
-    .globl user_enter
-user_enter:
-    // Windows x64 args: rcx = user entry rip, rdx = user stack top,
-    // r8 = user pml4. Windows callee-saves rbx,rbp,rdi,rsi,r12-r15 —
-    // rsi/rdi are argument registers under SysV but NOT here; the
-    // caller may hold live pointers in them across this call.
+    .globl sched_launch
+sched_launch:
+    // First scheduler entry. Windows x64 args: rcx = &UCtx,
+    // rdx = pml4. Saves the kernel context the last task's exit
+    // unwinds to — Windows callee-saves rbx,rbp,rdi,rsi,r12-r15 and
+    // the caller may hold live pointers in rdi/rsi across this call.
     push rbx
     push rbp
     push rdi
@@ -142,14 +142,28 @@ user_enter:
     mov rax, cr3
     mov [rip + KCR3], rax
     mov [rip + KSP], rsp
-    mov cr3, r8
-    mov rax, 0x2b              // ss = udata|3
-    push rax
-    push rdx                   // user rsp
-    push 0x202                 // rflags: IF set in user mode
-    mov rax, 0x33              // cs = ucode|3
-    push rax
-    push rcx                   // user rip
+    // Fall into sched_iret — rcx/rdx still carry the arguments.
+    .globl sched_iret
+sched_iret:
+    // The single resume path for every switch: adopt the target
+    // task's page table, pop its saved GPRs, iretq into its frame.
+    mov cr3, rdx
+    mov rsp, rcx
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
     iretq
 
     .globl user_terminate
@@ -173,9 +187,14 @@ user_terminate:
 );
 
 unsafe extern "C" {
-    fn user_enter(entry: u64, ustack: u64, pml4: u64);
     fn user_terminate() -> !;
     fn syscall_entry();
+    /// Resume a task ctx: cr3 = pml4, rsp = ctx, pop GPRs, iretq.
+    /// Never returns — the caller's stack is abandoned.
+    pub fn sched_iret(ctx: *const user::UCtx, pml4: u64) -> !;
+    /// First scheduler entry — saves the kernel continuation the
+    /// final exit unwinds to. Returns only via user_terminate.
+    pub fn sched_launch(ctx: *const user::UCtx, pml4: u64);
 }
 
 /// Address the LSTAR MSR should point at.
@@ -183,10 +202,10 @@ pub fn entry_addr() -> u64 {
     syscall_entry as *const () as u64
 }
 
-/// Drop to ring 3: switch to the process page table and iretq into
-/// the image's entry point. Returns only via sys_exit's unwind path.
-pub fn enter(entry: u64, sp: u64, pml4: u64) {
-    unsafe { user_enter(entry, sp, pml4) }
+/// Unwind to the kernel frame sched_launch saved — the last task's
+/// exit path back to main. Never returns to its caller's frame.
+pub fn terminate() -> ! {
+    unsafe { user_terminate() }
 }
 
 // Linux syscall numbers.
@@ -337,12 +356,17 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
         Ok(t) => log::printk(format_args!("{t}")),
         Err(_) => log::printk(format_args!("rustux: user write: {len}B non-utf8")),
     }
+    // Flush now — main is parked in sched_launch for the whole task
+    // phase, so without a syscall-side drain the small ring wraps and
+    // user output is lost before it reaches the console.
+    log::drain_task();
     len
 }
 
-/// exit(code): unwind to the kernel frame user_enter saved; never
-/// returns to the user image.
+/// exit(code): hand off to the scheduler — resume the next Runnable
+/// task's ctx, or unwind to the saved kernel frame when none remain.
 fn sys_exit(code: u64) -> ! {
     log::printk(format_args!("rustux: user: exit({code})"));
-    unsafe { user_terminate() }
+    log::drain_task();
+    user::task_exit()
 }

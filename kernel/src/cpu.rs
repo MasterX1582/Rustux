@@ -294,7 +294,72 @@ stub_err!(stub_cp, 21);
 stub_err!(stub_vc, 29);
 stub!(stub_ud, 6);
 stub!(stub_bp, 3);
-stub!(stub_irq_timer, "0xf0");
+
+/// Timer IRQ — the only vector that may switch tasks, so it can't
+/// share `dispatch`: that path only saves caller-saved registers,
+/// but a preempted task needs its ENTIRE register file captured to
+/// be resumable. sched_dispatch pushes all 15 GPRs so the image it
+/// hands the scheduler is a complete UCtx.
+#[unsafe(naked)]
+extern "C" fn stub_irq_timer() {
+    core::arch::naked_asm!("jmp {d}", d = sym sched_dispatch);
+}
+
+/// Full-context IRQ tail for the timer: push the 15 GPRs (forming a
+/// UCtx with the hardware frame), let Rust pick which ctx to resume,
+/// then pop + iretq. `mov rbp/rsp` + `and rsp,-16` keeps the call
+/// 16-aligned without disturbing the image pointer in rcx.
+#[unsafe(naked)]
+extern "C" fn sched_dispatch() -> ! {
+    core::arch::naked_asm!(
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push rbx",
+        "push rbp",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        "mov rcx, rsp",
+        "and rsp, -16",
+        "call {t}",
+        "mov rsp, rax",
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop rbp",
+        "pop rbx",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+        "iretq",
+        t = sym sched_tick_frame,
+    );
+}
+
+/// Rust half of the timer path: tick accounting, then the scheduler
+/// picks which ctx the stub resumes. rcx = &mut UCtx (Windows x64).
+extern "C" fn sched_tick_frame(
+    f: &mut crate::user::UCtx,
+) -> *const crate::user::UCtx {
+    crate::apic::timer_tick();
+    crate::user::tick(f)
+}
+
 stub!(stub_irq_pit, "0xf1");
 stub!(stub_irq_kbd, "0xf2");
 stub!(stub_irq_net, "0xf3");

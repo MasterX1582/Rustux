@@ -39,6 +39,70 @@ const KSTACK_SIZE: usize = 8192;
 /// Maximum distinct user VA ranges recorded for syscall validation.
 const MAX_RANGES: usize = 8;
 
+/// Max resident tasks — a hard bound so spawn can't exhaust the
+/// kernel heap by enqueueing forever.
+const MAX_TASKS: usize = 16;
+
+/// A resumable user-mode context: the 15 GPRs in sched_dispatch's
+/// push order plus the iret frame. Every task transition — first
+/// launch, timer preemption, exit — is the same operation: point
+/// rsp at a UCtx, pop, iretq.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UCtx {
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rax: u64,
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
+
+impl UCtx {
+    const ZERO: UCtx = UCtx {
+        r15: 0, r14: 0, r13: 0, r12: 0, rbp: 0, rbx: 0,
+        r11: 0, r10: 0, r9: 0, r8: 0,
+        rdi: 0, rsi: 0, rdx: 0, rcx: 0, rax: 0,
+        rip: 0, cs: 0, rflags: 0, rsp: 0, ss: 0,
+    };
+    /// The fabricated ctx of a never-run task: clean GPRs, user
+    /// segments, IF set, entry + fresh stack — same shape a timer
+    /// IRQ snapshot would leave.
+    fn launch(rip: u64, rsp: u64) -> UCtx {
+        UCtx {
+            rip,
+            cs: 0x33,
+            rflags: 0x202,
+            rsp,
+            ss: 0x2b,
+            ..UCtx::ZERO
+        }
+    }
+}
+
+/// The scheduler's entire state model: Runnable tasks can be picked;
+/// Exited ones are reaped by the next pick (never the running one —
+/// its kstack may be underfoot).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TaskState {
+    Runnable,
+    Exited,
+}
+
 /// Max fds per task — a hard bound so a hostile process cannot
 /// exhaust kernel space by opening forever or force the table to
 /// grow by a user-chosen size (the CVE-2025-39756 class: dup2 must
@@ -89,6 +153,10 @@ pub struct Task {
     fds: [Option<u8>; MAX_FDS],
     /// Open file descriptions shared across dup'd slots.
     ofds: [Option<OpenFile>; MAX_FDS],
+    /// Saved user context for switches — fabricated at spawn, then
+    /// snapshotted by the timer IRQ on every preemption.
+    ctx: UCtx,
+    state: TaskState,
 }
 
 impl Task {
@@ -148,8 +216,13 @@ impl Task {
     }
 }
 
-/// The resident task — none until run() loads an image.
-static mut CUR: Option<Task> = None;
+/// The task table — the scheduler's world. Tasks are never moved
+/// once slotted: ctx pointers handed to the asm must stay stable.
+static mut TASKS: [Option<Task>; MAX_TASKS] = [const { None }; MAX_TASKS];
+
+/// Index of the running task; usize::MAX when the scheduler isn't
+/// running (before launch / after the last exit unwound to main).
+static mut CUR_I: usize = usize::MAX;
 
 /// The initrd archive as a flat read-only filesystem — set once at
 /// boot before the first task runs. It names LOADER_DATA pages the
@@ -169,10 +242,11 @@ pub fn fs_lookup(name: &[u8]) -> Option<&'static [u8]> {
     crate::cpio::find(arc, name)
 }
 
-/// Borrow the resident task mutably — syscall-context accessor.
+/// Borrow the running task mutably — syscall-context accessor.
 fn cur_mut() -> Option<&'static mut Task> {
-    // SAFETY: sole accessor — single-task model, syscall context.
-    unsafe { (*core::ptr::addr_of_mut!(CUR)).as_mut() }
+    // SAFETY: single CPU, IF-masked syscall path — sole accessor.
+    let i = unsafe { *core::ptr::addr_of!(CUR_I) };
+    unsafe { (*core::ptr::addr_of_mut!(TASKS)).get_mut(i)?.as_mut() }
 }
 
 fn rd64(p: u64) -> u64 {
@@ -335,6 +409,8 @@ fn load(img: &[u8]) -> Option<Task> {
             o[2] = Some(OpenFile { kind: FdKind::Console, pos: 0, refs: 1 });
             o
         },
+        ctx: UCtx::ZERO,
+        state: TaskState::Runnable,
     };
     if !load_inner(&mut t, &e, img) {
         t.reap();
@@ -360,9 +436,10 @@ fn range_check(va: u64, len: u64, need_write: bool) -> bool {
     let Some(end) = va.checked_add(len) else {
         return false;
     };
-    // SAFETY: read-only walk of the resident-task table.
-    let cur = unsafe { &*core::ptr::addr_of!(CUR) };
-    cur.as_ref().is_some_and(|p| {
+    // SAFETY: read-only walk of the task table.
+    let i = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let cur = unsafe { (*core::ptr::addr_of!(TASKS)).get(i).and_then(|s| s.as_ref()) };
+    cur.is_some_and(|p| {
         p.ranges[..p.nranges]
             .iter()
             .any(|&(lo, hi, w)| va >= lo && end <= hi && (!need_write || w))
@@ -661,27 +738,133 @@ pub fn exec(img: &[u8]) -> bool {
     true
 }
 
-/// Load `img` as a task and enter it on ring 3. Returns false if the
-/// image is malformed or memory runs out. After the image's exit
-/// syscall unwinds back here the task is reaped — every frame it
-/// owned returns to the buddy.
-pub fn run(img: &[u8]) -> bool {
-    let Some(t) = load(img) else {
+// --- scheduler ----------------------------------------------------
+// Round-robin over TASKS, driven by the LAPIC timer's dedicated
+// dispatch path. Every switch is a UCtx resume; syscall context is
+// non-preemptible (IF is masked on entry, and a tick landing on
+// kernel CS never switches).
+
+/// Enqueue `img` as a Runnable task — fabricate its launch ctx and
+/// take the first free table slot. False on bad image or full table.
+pub fn spawn(img: &[u8]) -> bool {
+    let Some(mut t) = load(img) else {
         return false;
     };
-    crate::log::printk(format_args!("rustux: user: image loaded, entering ring 3"));
-    cpu::init_syscall(syscall::entry_addr());
-    // SAFETY: sole writer — run() is a main-context operation.
-    unsafe { *core::ptr::addr_of_mut!(CUR) = Some(t) };
-    let p = unsafe { &*core::ptr::addr_of!(CUR) }.as_ref();
-    let Some(p) = p else { return false };
-    syscall::set_kstack(p.kstack_top);
-    syscall::enter(p.entry, p.stack_top, p.pml4);
-    // Back in kernel context: reap the finished task so the next one
-    // starts from a clean ledger — sequential tasks, zero residue.
-    let mut done = unsafe { (*core::ptr::addr_of_mut!(CUR)).take() };
-    if let Some(t) = done.as_mut() {
-        t.reap();
+    t.ctx = UCtx::launch(t.entry, t.stack_top);
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        if s.is_none() {
+            *s = Some(t);
+            return true;
+        }
     }
-    true
+    t.reap(); // table full — drop the task cleanly
+    false
+}
+
+/// Reap every Exited task except the running one (its kstack may be
+/// underfoot), then round-robin for the next Runnable index.
+fn pick_next() -> Option<usize> {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for (i, s) in tasks.iter_mut().enumerate() {
+        if i != cur && s.as_ref().is_some_and(|t| t.state == TaskState::Exited) {
+            s.as_mut().unwrap().reap();
+            *s = None;
+        }
+    }
+    for k in 1..=MAX_TASKS {
+        let i = if cur == usize::MAX {
+            k - 1
+        } else {
+            (cur + k) % MAX_TASKS
+        };
+        if tasks[i].as_ref().is_some_and(|t| t.state == TaskState::Runnable) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Enter the scheduler: pick the first task and resume its ctx.
+/// Returns only when the run queue is empty — the last task's exit
+/// unwinds to the kernel context sched_launch saved.
+pub fn launch() {
+    let Some(n) = pick_next() else {
+        return;
+    };
+    unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
+    cpu::init_syscall(syscall::entry_addr());
+    let (ctx, pml4, kst) = {
+        let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
+        (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
+    };
+    syscall::set_kstack(kst);
+    unsafe { syscall::sched_launch(ctx, pml4) };
+}
+
+/// The running task exited: mark it and resume the next Runnable
+/// task's ctx — a direct task-to-task switch that abandons the dead
+/// task's kstack (freed at reap). When nothing remains, unwind to
+/// sched_launch's saved kernel context — i.e. back to main.
+pub fn task_exit() -> ! {
+    if let Some(t) = cur_mut() {
+        t.state = TaskState::Exited;
+    }
+    if let Some(n) = pick_next() {
+        unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
+        let (ctx, pml4, kst) = {
+            let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
+            (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
+        };
+        syscall::set_kstack(kst);
+        unsafe { syscall::sched_iret(ctx, pml4) }
+    }
+    syscall::terminate()
+}
+
+/// Timer IRQ — called from the sched dispatch stub with the full
+/// context image it pushed. A kernel frame (cs&3==0 — mid-syscall,
+/// where IF is masked anyway, or any kernel context) just ticks.
+/// A CPL3 frame is a preemptible task: snapshot its ctx and round-
+/// robin. Returns the ctx the stub should resume.
+pub fn tick(img: &mut UCtx) -> *const UCtx {
+    if img.cs & 3 != 3 {
+        return img;
+    }
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if cur == usize::MAX {
+        return img;
+    }
+    // Snapshot the preempted task for a later resume.
+    if let Some(t) = unsafe { (*core::ptr::addr_of_mut!(TASKS))[cur].as_mut() } {
+        t.ctx = *img;
+    }
+    let Some(n) = pick_next() else {
+        return img;
+    };
+    if n == cur {
+        return img;
+    }
+    unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
+    let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
+    syscall::set_kstack(t.kstack_top);
+    // Switch address space before returning the new task's ctx —
+    // shared kernel slots make the swap safe mid-function.
+    // SAFETY: pml4 is a live task-owned PML4.
+    unsafe { core::arch::asm!("mov cr3, {}", in(reg) t.pml4) };
+    &t.ctx
+}
+
+/// End of the scheduling run: reap whatever tasks remain — the last
+/// Exited task and anything left unrunnable by a failed spawn.
+pub fn reap_all() {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        if let Some(t) = s.as_mut() {
+            t.reap();
+        }
+        *s = None;
+    }
+    unsafe { *core::ptr::addr_of_mut!(CUR_I) = usize::MAX };
 }

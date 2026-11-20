@@ -166,6 +166,19 @@ pub fn drain(con: &mut Console) {
     }
 }
 
+/// Drain pending records from task/syscall context — needed now that
+/// the scheduler keeps main parked inside sched_launch for the whole
+/// task phase. Safe there: syscall entry masks IF (the LAPIC tick
+/// can't interleave) and no main-context drainer exists meanwhile.
+pub fn drain_task() {
+    let con = unsafe { *core::ptr::addr_of!(PANIC_CON) };
+    if con.is_null() {
+        return;
+    }
+    // SAFETY: sole drainer by the argument above; con outlives tasks.
+    unsafe { drain(&mut *con) };
+}
+
 /// Append + flush — the drop-in replacement for `writeln!(con, ...)`.
 /// IRQ code should call `crate::log::printk` alone (never drain).
 #[macro_export]
