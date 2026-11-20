@@ -17,6 +17,7 @@ mod acpi;
 mod apic;
 mod cpu;
 mod e1000;
+mod net;
 mod fbcon;
 mod kalloc;
 mod kbd;
@@ -909,6 +910,10 @@ fn main() -> Status {
         if tx_ok {
             let rx_ok = e1000::arp_selftest(e_base, e_mac);
             kprintln!(con, "rustux: e1000: rx round-trip (ARP) {rx_ok}");
+            if rx_ok {
+                let ping_ok = e1000::ping_selftest(e_base, e_mac);
+                kprintln!(con, "rustux: e1000: IPv4/ICMP ping {ping_ok}");
+            }
         }
     } else {
         kprintln!(con, "rustux: e1000: no 82574L on the bus");

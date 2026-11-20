@@ -75,6 +75,13 @@ pub static IRQS: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 static MMIO: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
+/// Gateway MAC captured from the ARP reply (packed big-endian in the
+/// low 48 bits) — the first entry of our ARP cache.
+static GW_MAC: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+/// Gateway IPv4 captured with it (network byte order as u32).
+static GW_IP: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
 
 /// Legacy RX descriptor (16 bytes). The NIC writes len/sta back when a
 /// frame lands in the buffer we posted.
@@ -491,6 +498,17 @@ pub fn arp_selftest(base: usize, mac: [u8; 6]) -> bool {
                         core::slice::from_raw_parts(p.add(28), 4),
                     )
                 };
+                // Cache the responder — ARP cache entry #1.
+                GW_MAC.store(
+                    u64::from_be_bytes([
+                        0, 0, sha[0], sha[1], sha[2], sha[3], sha[4], sha[5],
+                    ]),
+                    Ordering::Relaxed,
+                );
+                GW_IP.store(
+                    u32::from_be_bytes([spa[0], spa[1], spa[2], spa[3]]),
+                    Ordering::Relaxed,
+                );
                 printk(format_args!(
                     "rustux: e1000: rx ARP op{op} from {}.{}.{}.{} \
                      mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ({len}B desc{d})",
@@ -516,6 +534,110 @@ pub fn arp_selftest(base: usize, mac: [u8; 6]) -> bool {
         i += 1;
         if i == 20_000_000 {
             printk(format_args!("rustux: e1000: rx poll timed out"));
+            return false;
+        }
+    }
+}
+
+/// IPv4/ICMP round-trip: ping the slirp gateway we learned via ARP.
+/// First real protocol proof — the request is checksummed by us, and
+/// every field of the reply is validated by net:: (length, version,
+/// checksum, non-fragment, echo-reply type, id/seq match, source IP).
+pub fn ping_selftest(base: usize, mac: [u8; 6]) -> bool {
+    let gw = GW_MAC.load(Ordering::Relaxed);
+    let gw_ip_raw = GW_IP.load(Ordering::Relaxed);
+    if gw == 0 || gw_ip_raw == 0 {
+        printk(format_args!("rustux: e1000: ping: no ARP cache entry"));
+        return false;
+    }
+    let gw_mac: [u8; 6] = gw.to_be_bytes()[2..8].try_into().unwrap();
+    let gw_ip: [u8; 4] = gw_ip_raw.to_be_bytes();
+    let our_ip = [10, 0, 2, 15u8];
+    let peer = crate::net::NetAddr { mac: gw_mac, ip: gw_ip };
+    let us = crate::net::NetAddr { mac, ip: our_ip };
+
+    let Some((ring, bufs)) = rx_init(base) else {
+        return false;
+    };
+
+    const ID: u16 = 0x7278; // "rx"
+    const SEQ: u16 = 1;
+    let mut f = [0u8; 128];
+    let flen = crate::net::build_echo_request(
+        &mut f, &peer, &us, ID, SEQ, b"rustux ping",
+    );
+    if flen == 0 {
+        return false;
+    }
+    // Pad to the 60-byte TX minimum; the pad isn't in IP total_len.
+    if !tx_once(base, &f[..flen.max(60)]) {
+        return false;
+    }
+
+    let mut i = 0u32;
+    loop {
+        for d in 0..N_RX {
+            // SAFETY: as in arp_selftest — NIC writes sta/len, buffer
+            // is ours.
+            let (sta, len) = unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+            if sta & RXD_STA_DD == 0 {
+                continue;
+            }
+            if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                }
+                continue;
+            }
+            let buf = unsafe {
+                core::slice::from_raw_parts(bufs.add(d * RX_BUF), len as usize)
+            };
+            let et = u16::from_be_bytes([buf[12], buf[13]]);
+            let mut done = false;
+            if et == 0x0800 {
+                if let Some(ip) = crate::net::parse_ipv4(&buf[14..]) {
+                    if ip.proto == 1 && ip.src == gw_ip && ip.dst == our_ip {
+                        if let Some(m) = crate::net::parse_icmp(ip.payload) {
+                            if m.ty == 0 && m.code == 0
+                                && m.id == ID && m.seq == SEQ
+                            {
+                                printk(format_args!(
+                                    "rustux: e1000: ping reply \
+                                     {}.{}.{}.{} seq={} id={:#06x} \
+                                     {}B icmp_rest={}B",
+                                    ip.src[0], ip.src[1], ip.src[2],
+                                    ip.src[3], m.seq, m.id, len,
+                                    m.rest.len()
+                                ));
+                                return true;
+                            }
+                            printk(format_args!(
+                                "rustux: e1000: rx icmp ty{} id{:#06x} \
+                                 seq{} (not ours)",
+                                m.ty, m.id, m.seq
+                            ));
+                        }
+                    }
+                }
+                done = true;
+            }
+            if done || et != 0x0806 {
+                printk(format_args!(
+                    "rustux: e1000: rx {len}B frame et{et:#06x} desc{d} \
+                     (ping wait)"
+                ));
+            }
+            // Not our reply — repost and keep waiting.
+            // SAFETY: reposting a consumed descriptor.
+            unsafe {
+                (*ring.add(d)).sta = 0;
+                wr(base, RDT, ((d + 1) % N_RX) as u32);
+            }
+        }
+        i += 1;
+        if i == 20_000_000 {
+            printk(format_args!("rustux: e1000: ping timed out"));
             return false;
         }
     }
