@@ -2345,6 +2345,11 @@ fn resume_ctx(n: usize) -> *const UCtx {
     // shared kernel slots make the swap safe mid-function.
     // SAFETY: pml4 is a live task-owned PML4.
     unsafe { core::arch::asm!("mov cr3, {}", in(reg) t.pml4) };
+    // The tick saved the outgoing task's live FPU state before the
+    // pick — restore the incoming task's image or it resumes with
+    // the previous task's xmm registers. switch_to/launch do the
+    // same; this path was missing it.
+    fxrstor(&t.fx);
     &t.ctx
 }
 
