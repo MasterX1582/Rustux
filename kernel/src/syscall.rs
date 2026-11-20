@@ -143,13 +143,17 @@ pub fn enter(entry: u64, sp: u64, pml4: u64) {
 }
 
 // Linux syscall numbers.
+const NR_READ: u64 = 0;
 const NR_WRITE: u64 = 1;
+const NR_OPEN: u64 = 2;
+const NR_CLOSE: u64 = 3;
 const NR_EXIT: u64 = 60;
 
 // errno values (negative returns per the kernel ABI).
 const EBADF: u64 = (-9i64) as u64;
 const EFAULT: u64 = (-14i64) as u64;
 const EINVAL: u64 = (-22i64) as u64;
+const ENAMETOOLONG: u64 = (-36i64) as u64;
 const ENOSYS: u64 = (-38i64) as u64;
 
 /// Longest single copy from user space — a hostile len can't stall
@@ -162,17 +166,60 @@ const MAX_COPY: u64 = 4096;
 #[no_mangle]
 extern "C" fn handle_syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
     match nr {
+        // fd_read validates the write-target range itself because only
+        // it knows how many bytes the source will actually produce;
+        // the transfer cap is enforced here exactly like sys_write.
+        NR_READ => {
+            if a3 > MAX_COPY {
+                EINVAL
+            } else {
+                user::fd_read(a1, a2, a3)
+            }
+        }
         NR_WRITE => sys_write(a1, a2, a3),
+        NR_OPEN => sys_open(a1, a2, a3),
+        NR_CLOSE => user::fd_close(a1),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
     }
 }
 
-/// write(fd, buf, len): fd 1/2 only, buffer fully validated against
-/// the process's mapped user ranges before a single byte is read —
-/// this is the trust boundary, not a convenience check.
+/// open(path, flags, mode): O_RDONLY only, path is a NUL-terminated
+/// user string copied byte-by-byte under the pointer gate — the
+/// getname discipline (CVE-2025-68814 class): bounded, EFAULT on
+/// unmapped bytes, ENAMETOOLONG past the cap.
+fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
+    if flags != 0 {
+        return EINVAL;
+    }
+    let mut name = [0u8; 257];
+    let mut n = 0usize;
+    loop {
+        if n == 256 {
+            return ENAMETOOLONG;
+        }
+        if !user::range_ok(path + n as u64, 1) {
+            return EFAULT;
+        }
+        // SAFETY: range_ok proved this byte is inside a mapped range.
+        let b = unsafe { *((path + n as u64) as *const u8) };
+        if b == 0 {
+            break;
+        }
+        name[n] = b;
+        n += 1;
+    }
+    // Tolerate the conventional leading '/' — the archive namespace
+    // is flat and root-relative.
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    user::fd_open(name)
+}
+
+/// write(fd, buf, len): console fds only, buffer fully validated
+/// against the process's mapped user ranges before a single byte is
+/// read — this is the trust boundary, not a convenience check.
 fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
-    if fd != 1 && fd != 2 {
+    if !user::fd_is_console(fd) {
         return EBADF;
     }
     if len == 0 {

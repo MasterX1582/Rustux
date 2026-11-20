@@ -86,24 +86,21 @@ pub fn entries(img: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
     let mut off = 0usize;
     let mut steps = 0usize;
     core::iter::from_fn(move || {
-        loop {
-            if steps == MAX_ENTRIES {
-                return None;
-            }
-            steps += 1;
-            let e = entry_at(img, off)?;
-            off = e.next;
-            if e.trailer {
-                return None;
-            }
-            return Some((e.name, e.data));
+        if steps == MAX_ENTRIES {
+            return None;
         }
+        steps += 1;
+        let e = entry_at(img, off)?;
+        off = e.next;
+        if e.trailer {
+            return None;
+        }
+        Some((e.name, e.data))
     })
 }
 
 /// Look up `want` (exact filename, no leading /) and return its data
 /// bytes. Returns None on any malformed entry or a missing file.
-#[allow(dead_code)]
 pub fn find<'a>(img: &'a [u8], want: &[u8]) -> Option<&'a [u8]> {
     entries(img).find(|(n, _)| *n == want).map(|(_, d)| d)
 }

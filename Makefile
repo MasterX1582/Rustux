@@ -35,17 +35,18 @@ demo: $(ESP_IMG)
 FORCE:
 
 # Ring-3 milestone images: static ELF64s loaded by kernel/src/elf.rs.
-USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf
+USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf
 INITRD    := initrd.cpio
 
 kernel/user/%.elf: kernel/user/%.S
 	as -o kernel/user/$*.o $<
 	ld -nostdlib -e _start -Ttext 0x555500000000 -o $@ kernel/user/$*.o
 
-# The initrd: a newc cpio archive carrying the user images as `init`
-# and `selftest`, read from the ESP by the kernel before ExitBootServices.
-$(INITRD): $(USER_ELFS) tools/mkinitrd.py
-	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest > $@
+# The initrd: a newc cpio archive carrying the user images plus a data
+# file, read from the ESP by the kernel before ExitBootServices. The
+# archive doubles as the fd layer's read-only root filesystem.
+$(INITRD): $(USER_ELFS) kernel/user/motd.txt tools/mkinitrd.py
+	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/motd.txt motd.txt > $@
 
 $(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml kernel/user/hello.elf FORCE
 	cargo build --release --target $(TARGET) -p kernel

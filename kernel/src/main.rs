@@ -1026,8 +1026,17 @@ fn main() -> Status {
     let before = kalloc::free_frames();
     let mut ran = 0u32;
     if let Some(arc) = arc {
+        // The archive doubles as the read-only root filesystem — fd
+        // ops resolve paths against it for the kernel's lifetime.
+        // SAFETY: `arc` names LOADER_DATA pages that are never freed,
+        // so a 'static slice over them is sound.
+        user::set_initrd(unsafe { core::slice::from_raw_parts(arc.as_ptr(), arc.len()) });
         for (name, img) in cpio::entries(arc) {
             let nm = core::str::from_utf8(name).unwrap_or("?");
+            if !img.starts_with(b"\x7fELF") {
+                kprintln!(con, "rustux: task {nm}: skipped (data file)");
+                continue;
+            }
             kprintln!(con, "rustux: task {nm}: spawning");
             let ok = user::run(img);
             kprintln!(con, "rustux: task {nm}: {}", if ok { "done" } else { "FAILED" });

@@ -39,6 +39,22 @@ const KSTACK_SIZE: usize = 8192;
 /// Maximum distinct user VA ranges recorded for syscall validation.
 const MAX_RANGES: usize = 8;
 
+/// Max fds per task — a hard bound so a hostile process cannot
+/// exhaust kernel space by opening forever (fd-exhaustion class).
+const MAX_FDS: usize = 16;
+
+/// What an fd refers to. File borrows the initrd archive — LOADER_DATA
+/// lives forever, so no refcount is needed; when files become heap
+/// objects the close/teardown refcount discipline kicks in.
+enum Fd {
+    /// fd 0: reads return EOF, writes fail EBADF.
+    Stdin,
+    /// fds 1/2: writes go to the serial ring, reads fail EBADF.
+    Console,
+    /// Initrd-backed read-only file with a seek position.
+    File { data: &'static [u8], pos: usize },
+}
+
 /// A resident task: every resource it owns, in one owned bundle.
 pub struct Task {
     /// Physical base of the process PML4.
@@ -48,10 +64,14 @@ pub struct Task {
     /// kmalloc'd syscall stack; top is the rsp the entry stub loads.
     kstack_base: u64,
     kstack_top: u64,
-    /// [lo, hi) address ranges user pointers may legally reference.
-    /// The syscall layer's user-pointer gate walks exactly this table.
-    ranges: [(u64, u64); MAX_RANGES],
+    /// [lo, hi, writable) address ranges user pointers may legally
+    /// reference. The syscall layer's user-pointer gate walks exactly
+    /// this table; writable marks ranges the kernel may write INTO
+    /// (read() target buffers must be user-writable, like Linux).
+    ranges: [(u64, u64, bool); MAX_RANGES],
     nranges: usize,
+    /// Open file descriptors; 0/1/2 are pre-seeded std streams.
+    fds: [Option<Fd>; MAX_FDS],
 }
 
 impl Task {
@@ -104,6 +124,23 @@ impl Task {
 
 /// The resident task — none until run() loads an image.
 static mut CUR: Option<Task> = None;
+
+/// The initrd archive as a flat read-only filesystem — set once at
+/// boot before the first task runs. It names LOADER_DATA pages the
+/// buddy never pools, so the slice is valid for the kernel's life.
+static mut INITRD: Option<&'static [u8]> = None;
+
+/// Point fd_open at the archive. Called once from main context.
+pub fn set_initrd(img: &'static [u8]) {
+    // SAFETY: sole writer, before any task exists.
+    unsafe { *core::ptr::addr_of_mut!(INITRD) = Some(img) };
+}
+
+/// Borrow the resident task mutably — syscall-context accessor.
+fn cur_mut() -> Option<&'static mut Task> {
+    // SAFETY: sole accessor — single-task model, syscall context.
+    unsafe { (*core::ptr::addr_of_mut!(CUR)).as_mut() }
+}
 
 fn rd64(p: u64) -> u64 {
     // SAFETY: callers only name page-table frames inside the identity
@@ -218,7 +255,7 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
             v += PAGE;
         }
         if t.nranges < MAX_RANGES {
-            t.ranges[t.nranges] = (p.va, mend);
+            t.ranges[t.nranges] = (p.va, mend, p.flags & elf::PF_W != 0);
             t.nranges += 1;
         }
     }
@@ -229,7 +266,7 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
     }
     t.stack_top = USTACK_VA + USTACK_PAGES * PAGE;
     if t.nranges < MAX_RANGES {
-        t.ranges[t.nranges] = (USTACK_VA, t.stack_top);
+        t.ranges[t.nranges] = (USTACK_VA, t.stack_top, true);
         t.nranges += 1;
     }
     true
@@ -245,8 +282,17 @@ fn load(img: &[u8]) -> Option<Task> {
         stack_top: 0,
         kstack_base: 0,
         kstack_top: 0,
-        ranges: [(0, 0); MAX_RANGES],
+        ranges: [(0, 0, false); MAX_RANGES],
         nranges: 0,
+        // std streams pre-seeded: 0=stdin (EOF), 1/2=serial console.
+        fds: {
+            const NONE: Option<Fd> = None;
+            let mut f = [NONE; MAX_FDS];
+            f[0] = Some(Fd::Stdin);
+            f[1] = Some(Fd::Console);
+            f[2] = Some(Fd::Console);
+            f
+        },
     };
     if !load_inner(&mut t, &e, img) {
         t.reap();
@@ -264,7 +310,8 @@ fn load(img: &[u8]) -> Option<Task> {
 
 /// Is `[va, va+len)` wholly inside a mapped user range? This is THE
 /// user-pointer gate for the syscall layer — checked arithmetic only.
-pub fn range_ok(va: u64, len: u64) -> bool {
+/// `need_write` restricts to ranges the kernel may write into.
+fn range_check(va: u64, len: u64, need_write: bool) -> bool {
     if len == 0 {
         return false;
     }
@@ -276,8 +323,104 @@ pub fn range_ok(va: u64, len: u64) -> bool {
     cur.as_ref().is_some_and(|p| {
         p.ranges[..p.nranges]
             .iter()
-            .any(|&(lo, hi)| va >= lo && end <= hi)
+            .any(|&(lo, hi, w)| va >= lo && end <= hi && (!need_write || w))
     })
+}
+
+/// Read-side gate: [va, va+len) inside a mapped user range.
+pub fn range_ok(va: u64, len: u64) -> bool {
+    range_check(va, len, false)
+}
+
+/// Write-side gate: same range check, but the range must be
+/// user-writable — the Linux rule for read()-target buffers.
+pub fn range_ok_w(va: u64, len: u64) -> bool {
+    range_check(va, len, true)
+}
+
+// --- fd layer -----------------------------------------------------
+// errno values are returned to syscall.rs as negative u64s.
+const EBADF: u64 = (-9i64) as u64;
+const EFAULT: u64 = (-14i64) as u64;
+const ENOENT: u64 = (-2i64) as u64;
+const EMFILE: u64 = (-24i64) as u64;
+
+/// May `fd` be a write() target? Only the console streams.
+pub fn fd_is_console(fd: u64) -> bool {
+    matches!(
+        cur_mut().and_then(|t| t.fds.get(fd as usize)).and_then(|s| s.as_ref()),
+        Some(Fd::Console)
+    )
+}
+
+/// read(fd, buf, len): File yields up to `len` bytes from its position;
+/// Stdin yields EOF; Console and closed slots are EBADF. The kernel
+/// validates that [buf, buf+n) is user-writable before copying —
+/// checked arithmetic, no partial writes past the gate.
+pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(slot) = t.fds.get_mut(fd as usize) else {
+        return EBADF;
+    };
+    let Some(f) = slot.as_mut() else { return EBADF };
+    match f {
+        Fd::Stdin => 0,
+        Fd::Console => EBADF,
+        Fd::File { data, pos } => {
+            let avail = data.len() - *pos;
+            let n = core::cmp::min(len as usize, avail);
+            if n == 0 {
+                return 0;
+            }
+            if !range_ok_w(buf, n as u64) {
+                return EFAULT;
+            }
+            // SAFETY: range_ok_w proved [buf, buf+n) lies in a writable
+            // user range under the current (task) page table.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(*pos),
+                    buf as *mut u8,
+                    n,
+                )
+            };
+            *pos += n;
+            n as u64
+        }
+    }
+}
+
+/// open(path, O_RDONLY): look `path` up in the initrd archive and
+/// install an Fd::File in the first free slot. ENOENT when absent,
+/// EMFILE at the table bound — both deterministic errnos.
+pub fn fd_open(path: &[u8]) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
+        return ENOENT;
+    };
+    let Some(data) = crate::cpio::find(arc, path) else {
+        return ENOENT;
+    };
+    for (i, slot) in t.fds.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(Fd::File { data, pos: 0 });
+            return i as u64;
+        }
+    }
+    EMFILE
+}
+
+/// close(fd): clears the slot. Linux lets you close std streams, so
+/// we do too — the next use gets EBADF, which is correct.
+pub fn fd_close(fd: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    match t.fds.get_mut(fd as usize) {
+        Some(slot @ Some(_)) => {
+            *slot = None;
+            0
+        }
+        _ => EBADF,
+    }
 }
 
 /// Load `img` as a task and enter it on ring 3. Returns false if the
