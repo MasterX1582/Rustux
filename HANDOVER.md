@@ -105,3 +105,20 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
   0 confirmed, NV-47-1/2/3/4 (SMAP/SMEP, per-task stacks, FS/GS, frame
   reclaim — all gated on the future task model).
 
+
+## 2026-07-17 — initrd/cpio loader (run-48)
+- `kernel/src/cpio.rs`: hostile-input newc (070701/070702) parser, fail-closed.
+  Verified-NUL filename terminator (CVE-2024-53142 class), bounded fields,
+  checked extents, 256-entry cap, TRAILER!!! stop. 10-case hostile test suite
+  (rustc --test, standalone) all pass — incl. a nuance case proving trailing-pad
+  truncation is legal while data truncation is rejected.
+- `load_initrd()`: reads `initrd.cpio` from the ESP via SimpleFS before
+  ExitBootServices into LOADER_DATA pages (never pooled -> survives EBS
+  identity-mapped). Cap 1 MiB.
+- `tools/mkinitrd.py` packs `kernel/user/hello.elf` as arcname `init`; Makefile
+  mcopy's it onto the ESP root. user::run now sources `init` from the archive
+  with embedded-ELF fallback. PROOF: `initrd: 5000B`, no fallback line,
+  ring-3 hello+exit PASS.
+- Audit run-48 (standard, deserialization boundary): 0 confirmed; NV-48-1
+  (re-audit if buddy ever pools LOADER_DATA), NV-48-2 (unsigned archive =
+  boot-config trust), NV-48-3 (exact-1MiB cap edge).
