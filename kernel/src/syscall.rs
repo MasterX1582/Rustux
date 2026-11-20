@@ -180,6 +180,7 @@ const NR_READ: u64 = 0;
 const NR_WRITE: u64 = 1;
 const NR_OPEN: u64 = 2;
 const NR_CLOSE: u64 = 3;
+const NR_PIPE: u64 = 22;
 const NR_LSEEK: u64 = 8;
 const NR_DUP: u64 = 32;
 const NR_DUP2: u64 = 33;
@@ -189,11 +190,11 @@ const NR_EXECVE: u64 = 59;
 const NR_EXIT: u64 = 60;
 const NR_WAIT4: u64 = 61;
 const NR_GETPPID: u64 = 110;
+const NR_PIPE2: u64 = 293;
 const NR_GETDENTS: u64 = 217;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
-const EBADF: u64 = (-9i64) as u64;
 const EFAULT: u64 = (-14i64) as u64;
 const EINVAL: u64 = (-22i64) as u64;
 const ENAMETOOLONG: u64 = (-36i64) as u64;
@@ -222,10 +223,12 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
             if a3 > MAX_COPY {
                 EINVAL
             } else {
-                user::fd_read(a1, a2, a3)
+                user::fd_read(ctx, a1, a2, a3)
             }
         }
-        NR_WRITE => sys_write(a1, a2, a3),
+        NR_WRITE => sys_write(ctx, a1, a2, a3),
+        NR_PIPE => user::fd_pipe(a1, 0),
+        NR_PIPE2 => user::fd_pipe(a1, a2),
         NR_OPEN => sys_open(a1, a2, a3),
         NR_CLOSE => user::fd_close(a1),
         // off arrives as u64; the fd layer interprets it as i64 —
@@ -316,9 +319,9 @@ fn sys_execve(ctx: &mut user::UCtx, path: u64, _argv: u64, _envp: u64) -> u64 {
 /// write(fd, buf, len): console fds only, buffer fully validated
 /// against the process's mapped user ranges before a single byte is
 /// read — this is the trust boundary, not a convenience check.
-fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
+fn sys_write(ctx: &mut user::UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     if !user::fd_is_console(fd) {
-        return EBADF;
+        return user::fd_write(ctx, fd, buf, len);
     }
     if len == 0 {
         return 0;

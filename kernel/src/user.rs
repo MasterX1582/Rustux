@@ -105,6 +105,22 @@ enum TaskState {
     Blocked,
 }
 
+/// What a Blocked task sleeps on — wait4's child, or a pipe's
+/// read/write side. The waker writes the syscall result into
+/// `ctx.rax` and marks the task Runnable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WaitOn {
+    None,
+    /// wait4(-1): any child of this task.
+    Any,
+    /// wait4 on a specific child pid.
+    Child(u64),
+    /// read() on an empty pipe: `wait_ptr/len` is the user buffer.
+    PipeRead(usize),
+    /// write() on a full pipe: `wait_ptr/len` is the user buffer.
+    PipeWrite(usize),
+}
+
 /// Max fds per task — a hard bound so a hostile process cannot
 /// exhaust kernel space by opening forever or force the table to
 /// grow by a user-chosen size (the CVE-2025-39756 class: dup2 must
@@ -124,7 +140,34 @@ enum FdKind {
     /// entry getdents64 should emit — Linux dir offsets are opaque
     /// cookies, ours just happens to be an index.
     Dir,
+    /// One end of a pipe — the ring lives in PIPES[id], shared by
+    /// whatever tasks inherited the fds. `write` selects the end.
+    Pipe { id: usize, write: bool },
 }
+
+/// Max concurrent pipes — a hard bound on kernel frame pressure,
+/// same discipline as the fd/OFD tables.
+const MAX_PIPES: usize = 8;
+/// Ring capacity: one frame per pipe, exactly PIPE_BUF — writes of
+/// up to this size are atomic (the Linux promise).
+const PIPE_SIZE: usize = 4096;
+
+/// A pipe's shared state: a kernel-owned frame used as a ring with
+/// monotonic head/tail (data = tail-head, offset = pos % PIPE_SIZE).
+/// Endpoint counts are tracked here, NOT in OFD refs — dup'd fds
+/// share one endpoint, so only the LAST close of an end decrements.
+struct Pipe {
+    /// phys frame, identity-mapped kernel side. Zeroed at alloc and
+    /// never aliases file/page-cache memory — the Dirty Pipe
+    /// (CVE-2022-0847) uninitialized-flags class doesn't exist here.
+    buf: u64,
+    head: usize,
+    tail: usize,
+    readers: usize,
+    writers: usize,
+}
+
+static mut PIPES: [Option<Pipe>; MAX_PIPES] = [const { None }; MAX_PIPES];
 
 /// An open file description — the Linux `struct file` analog. fds
 /// are only slots pointing here; dup'd slots share one OFD, which is
@@ -162,10 +205,12 @@ pub struct Task {
     ppid: u64,
     /// The exit() argument — consumed by wait4 (status = code<<8).
     exit_code: u64,
-    /// wait4 target while Blocked: -1 = any child, else a pid.
-    wait_target: i64,
-    /// wait4 status user pointer — validated writable before blocking.
-    wait_status_va: u64,
+    /// What this task is Blocked on (None when not Blocked).
+    wait_on: WaitOn,
+    /// wait4 status VA, or the user buffer for a blocked pipe io.
+    wait_ptr: u64,
+    /// Blocked pipe io length (unused by wait4).
+    wait_len: u64,
 }
 
 /// Max open file descriptions system-wide — a hard bound so fd
@@ -235,15 +280,9 @@ impl Task {
     /// exit_files: shared descriptions outlive the task when
     /// another task still points at them.
     fn release_fds(&mut self) {
-        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
         for s in self.fds.iter_mut() {
             if let Some(i) = s.take() {
-                if let Some(o) = ofds.get_mut(i as usize).and_then(|x| x.as_mut()) {
-                    o.refs -= 1;
-                    if o.refs == 0 {
-                        ofds[i as usize] = None;
-                    }
-                }
+                ofd_release(i as usize);
             }
         }
     }
@@ -445,8 +484,9 @@ fn load(img: &[u8]) -> Option<Task> {
         pid: 0,
         ppid: 0,
         exit_code: 0,
-        wait_target: 0,
-        wait_status_va: 0,
+        wait_on: WaitOn::None,
+        wait_ptr: 0,
+        wait_len: 0,
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
     // global OFD, like separate opens of /dev/console.
@@ -537,7 +577,7 @@ pub fn fd_is_console(fd: u64) -> bool {
 /// position; Stdin yields EOF; Console and closed slots are EBADF.
 /// The kernel validates that [buf, buf+n) is user-writable before
 /// copying — checked arithmetic, no partial writes past the gate.
-pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
+pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
     match &o.kind {
@@ -566,7 +606,180 @@ pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
             o.pos += n;
             n as u64
         }
+        FdKind::Pipe { id, write } => {
+            let (id, write) = (*id, *write);
+            if write {
+                return EBADF; // wrong end
+            }
+            let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+            let Some(p) = pipes.get_mut(id).and_then(|s| s.as_mut()) else {
+                return EBADF;
+            };
+            let avail = p.tail - p.head;
+            if avail == 0 {
+                if p.writers == 0 {
+                    return 0; // EOF — every writer is gone
+                }
+                if len == 0 {
+                    return 0;
+                }
+                // Block until a writer delivers. The waker copies
+                // through OUR tables and deposits the count in
+                // ctx.rax; wait_ptr's validity was verified now.
+                if !range_ok_w(buf, 1) {
+                    return EFAULT;
+                }
+                t.wait_on = WaitOn::PipeRead(id);
+                t.wait_ptr = buf;
+                t.wait_len = len;
+                t.ctx = *ctx;
+                t.state = TaskState::Blocked;
+                block_switch()
+            }
+            let n = core::cmp::min(len as usize, avail);
+            if !range_ok_w(buf, n as u64) {
+                return EFAULT;
+            }
+            for i in 0..n {
+                // SAFETY: ring index wraps inside the pipe-owned frame;
+                // buf is validated user memory under the current cr3.
+                unsafe {
+                    let b = ((p.buf + ((p.head + i) % PIPE_SIZE) as u64) as *const u8).read();
+                    ((buf + i as u64) as *mut u8).write(b);
+                }
+            }
+            p.head += n;
+            pipe_wake(id); // freed space may unblock writers
+            n as u64
+        }
     }
+}
+
+/// write(fd, buf, len) for non-console fds — pipes only; everything
+/// else (initrd files are read-only, dirs, stdin, read-end) is EBADF.
+/// Blocks when the ring can't take the write atomically.
+pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
+    const EPIPE: u64 = (-32i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    let FdKind::Pipe { id, write } = &o.kind else {
+        return EBADF;
+    };
+    let (id, write) = (*id, *write);
+    if !write {
+        return EBADF; // wrong end
+    }
+    if len > PIPE_SIZE as u64 {
+        return EINVAL; // single-frame ring; larger writes rejected
+    }
+    let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+    let Some(p) = pipes.get_mut(id).and_then(|s| s.as_mut()) else {
+        return EBADF;
+    };
+    if p.readers == 0 {
+        return EPIPE; // SIGPIPE would fire here once signals exist
+    }
+    if PIPE_SIZE - (p.tail - p.head) < len as usize {
+        // Doesn't fit — <=PIPE_BUF writes are atomic, so block until
+        // the ring drains enough. The waker pulls our buffer through
+        // OUR tables and deposits the count in ctx.rax.
+        if len > 0 && !range_ok(buf, 1) {
+            return EFAULT;
+        }
+        t.wait_on = WaitOn::PipeWrite(id);
+        t.wait_ptr = buf;
+        t.wait_len = len;
+        t.ctx = *ctx;
+        t.state = TaskState::Blocked;
+        block_switch()
+    }
+    if !range_ok(buf, len) {
+        return EFAULT;
+    }
+    for i in 0..len as usize {
+        // SAFETY: buf is validated user memory under the current cr3;
+        // the ring index wraps inside the pipe-owned frame.
+        unsafe {
+            let b = ((buf + i as u64) as *const u8).read();
+            ((p.buf + ((p.tail + i) % PIPE_SIZE) as u64) as *mut u8).write(b);
+        }
+    }
+    p.tail += len as usize;
+    pipe_wake(id); // new data may unblock readers
+    len
+}
+
+/// pipe2(fds, flags): a kernel ring with a read end and a write end,
+/// each an OFD so the pair can be dup'd and fork-shared. flags must
+/// be 0 (no O_NONBLOCK/O_CLOEXEC yet — flagged NV). ENFILE at the
+/// pool bound, EMFILE at the fd/OFD bounds.
+pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
+    const ENFILE_: u64 = (-23i64) as u64;
+    if flags != 0 {
+        return EINVAL;
+    }
+    if !range_ok_w(fdptr, 8) {
+        return EFAULT;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(pi) = (unsafe { &*core::ptr::addr_of!(PIPES) })
+        .iter()
+        .position(Option::is_none)
+    else {
+        return ENFILE_;
+    };
+    let Some(buf) = kalloc::alloc_frame() else {
+        return (-12i64) as u64;
+    };
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    // Need two OFD slots and two fd slots — collect before committing.
+    let mut ois = ofds
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_none())
+        .map(|(i, _)| i);
+    let (Some(ro), Some(wo)) = (ois.next(), ois.next()) else {
+        kalloc::free_frame(buf);
+        return EMFILE;
+    };
+    let mut fis = t
+        .fds
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_none())
+        .map(|(i, _)| i);
+    let (Some(rf), Some(wf)) = (fis.next(), fis.next()) else {
+        kalloc::free_frame(buf);
+        return EMFILE;
+    };
+    {
+        let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+        pipes[pi] = Some(Pipe {
+            buf,
+            head: 0,
+            tail: 0,
+            readers: 1,
+            writers: 1,
+        });
+    }
+    ofds[ro] = Some(OpenFile {
+        kind: FdKind::Pipe { id: pi, write: false },
+        pos: 0,
+        refs: 1,
+    });
+    ofds[wo] = Some(OpenFile {
+        kind: FdKind::Pipe { id: pi, write: true },
+        pos: 0,
+        refs: 1,
+    });
+    t.fds[rf] = Some(ro as u8);
+    t.fds[wf] = Some(wo as u8);
+    // SAFETY: fdptr validated writable for 8 bytes above.
+    unsafe {
+        (fdptr as *mut u32).write_unaligned(rf as u32);
+        ((fdptr + 4) as *mut u32).write_unaligned(wf as u32);
+    }
+    0
 }
 
 /// open(path, O_RDONLY): "" and "." name the archive root (a Dir
@@ -670,15 +883,10 @@ pub fn fd_dup2(old: u64, new: u64) -> u64 {
         return new;
     }
     // Release whatever `new` held, then point it at old's OFD.
-    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     if let Some(prev) = t.fds[new as usize].take() {
-        if let Some(o) = ofds.get_mut(prev as usize).and_then(|s| s.as_mut()) {
-            o.refs -= 1;
-            if o.refs == 0 {
-                ofds[prev as usize] = None;
-            }
-        }
+        ofd_release(prev as usize);
     }
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs += 1;
     }
@@ -695,14 +903,174 @@ pub fn fd_close(fd: u64) -> u64 {
         return EBADF;
     };
     let Some(oi) = slot.take() else { return EBADF };
+    ofd_release(oi as usize);
+    0
+}
+
+/// Drop one reference on OFD `oi`; at zero, retire it — pipe ends
+/// then run endpoint accounting (a dup'd end only counts once).
+fn ofd_release(oi: usize) {
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
-    if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
-        o.refs -= 1;
-        if o.refs == 0 {
-            ofds[oi as usize] = None;
+    let Some(o) = ofds.get_mut(oi).and_then(|s| s.as_mut()) else {
+        return;
+    };
+    o.refs -= 1;
+    if o.refs > 0 {
+        return;
+    }
+    // Take the kind out before clearing so endpoint teardown runs
+    // after the OFD is already gone.
+    let kind = core::mem::replace(&mut o.kind, FdKind::Stdin);
+    ofds[oi] = None;
+    if let FdKind::Pipe { id, write } = kind {
+        pipe_end_closed(id, write);
+    }
+}
+
+/// The last fd naming one pipe end went away. Decrement the endpoint
+/// count; free the ring when both ends are gone; otherwise wake the
+/// opposite side — writers see EPIPE with no readers left, readers
+/// see EOF (0) when the writers are all gone.
+fn pipe_end_closed(id: usize, write: bool) {
+    let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+    let Some(p) = pipes.get_mut(id).and_then(|s| s.as_mut()) else {
+        return;
+    };
+    if write {
+        p.writers -= 1;
+    } else {
+        p.readers -= 1;
+    }
+    let gone = if write { p.writers == 0 } else { p.readers == 0 };
+    if p.readers == 0 && p.writers == 0 {
+        kalloc::free_frame(p.buf);
+        pipes[id] = None;
+        return;
+    }
+    if gone {
+        // EOF to readers / EPIPE to writers.
+        wake_pipe_waiters(
+            if write {
+                WaitOn::PipeRead(id)
+            } else {
+                WaitOn::PipeWrite(id)
+            },
+            if write { 0 } else { (-32i64) as u64 },
+        );
+    }
+}
+
+/// Wake every task blocked on `on` with `ret` as its syscall result
+/// — the endpoint-teardown wake (EOF/EPIPE), no data moves.
+fn wake_pipe_waiters(on: WaitOn, ret: u64) {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        if let Some(t) = s.as_mut() {
+            if t.state == TaskState::Blocked && t.wait_on == on {
+                t.ctx.rax = ret;
+                t.wait_on = WaitOn::None;
+                t.state = TaskState::Runnable;
+            }
         }
     }
-    0
+}
+
+/// Feed blocked readers from pipe `id`'s ring, greedily: each waiter
+/// gets min(its len, available) bytes copied through its own page
+/// tables (per-byte translate — the sleeping task's space isn't
+/// mapped under the waker's cr3). Returns how many tasks woke.
+fn wake_pipe_readers(id: usize) -> usize {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+    let mut woke = 0;
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state != TaskState::Blocked || t.wait_on != WaitOn::PipeRead(id) {
+            continue;
+        }
+        let Some(p) = pipes.get_mut(id).and_then(|x| x.as_mut()) else {
+            break;
+        };
+        let avail = p.tail - p.head;
+        if avail == 0 {
+            break; // nothing left to hand out
+        }
+        let n = core::cmp::min(t.wait_len as usize, avail);
+        let mut done = 0usize;
+        while done < n {
+            // SAFETY: ring frame is pipe-owned, index wraps in bounds.
+            let b = unsafe {
+                ((p.buf + ((p.head + done) % PIPE_SIZE) as u64) as *const u8).read()
+            };
+            match translate(t.pml4, t.wait_ptr + done as u64) {
+                // SAFETY: pa is a present user frame in t's tables.
+                Some(pa) => unsafe { (pa as *mut u8).write(b) },
+                None => break,
+            }
+            done += 1;
+        }
+        p.head += done;
+        t.ctx.rax = if done == 0 { (-14i64) as u64 } else { done as u64 };
+        t.wait_on = WaitOn::None;
+        t.state = TaskState::Runnable;
+        woke += 1;
+    }
+    woke
+}
+
+/// Drain blocked writers into pipe `id`'s ring. A writer unblocks
+/// only when its whole len fits — writes <= PIPE_BUF are atomic,
+/// and len is capped at the frame size, so full-space means empty.
+/// Returns how many tasks woke.
+fn wake_pipe_writers(id: usize) -> usize {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+    let mut woke = 0;
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state != TaskState::Blocked || t.wait_on != WaitOn::PipeWrite(id) {
+            continue;
+        }
+        let Some(p) = pipes.get_mut(id).and_then(|x| x.as_mut()) else {
+            break;
+        };
+        if PIPE_SIZE - (p.tail - p.head) < t.wait_len as usize {
+            continue; // still doesn't fit — stays blocked
+        }
+        let len = t.wait_len as usize;
+        let mut done = 0usize;
+        while done < len {
+            match translate(t.pml4, t.wait_ptr + done as u64) {
+                // SAFETY: pa is a present user frame in t's tables;
+                // the ring index wraps inside our frame.
+                Some(pa) => unsafe {
+                    let b = (pa as *const u8).read();
+                    ((p.buf + ((p.tail + done) % PIPE_SIZE) as u64) as *mut u8)
+                        .write(b)
+                },
+                None => break,
+            }
+            done += 1;
+        }
+        p.tail += done;
+        t.ctx.rax = if done == 0 { (-14i64) as u64 } else { done as u64 };
+        t.wait_on = WaitOn::None;
+        t.state = TaskState::Runnable;
+        woke += 1;
+    }
+    woke
+}
+
+/// After a pipe's fill level changes, settle both wait directions.
+/// A woken reader frees space (writers may fit); a woken writer adds
+/// data (more readers may be fed). Every wake clears wait_on, so
+/// this loop is monotonically terminating within MAX_TASKS.
+fn pipe_wake(id: usize) {
+    loop {
+        if wake_pipe_readers(id) + wake_pipe_writers(id) == 0 {
+            break;
+        }
+    }
 }
 
 /// getdents64(fd, dirp, count): emit linux_dirent64 records for the
@@ -914,13 +1282,13 @@ pub fn task_exit(code: u64) -> ! {
         let Some(p) = s else { continue };
         if p.state == TaskState::Blocked
             && p.pid == cppid
-            && (p.wait_target == -1 || p.wait_target == cpid as i64)
+            && (p.wait_on == WaitOn::Any || p.wait_on == WaitOn::Child(cpid))
         {
             // wait4 returns the child's pid; its status was already
             // validated writable when the parent blocked.
             p.ctx.rax = cpid;
-            if p.wait_status_va != 0 {
-                if let Some(pa) = translate(p.pml4, p.wait_status_va) {
+            if p.wait_ptr != 0 {
+                if let Some(pa) = translate(p.pml4, p.wait_ptr) {
                     // SAFETY: pa is a translated, present user frame.
                     unsafe {
                         ((pa) as *mut u32)
@@ -929,8 +1297,8 @@ pub fn task_exit(code: u64) -> ! {
                 }
             }
             p.state = TaskState::Runnable;
-            p.wait_target = 0;
-            p.wait_status_va = 0;
+            p.wait_on = WaitOn::None;
+            p.wait_ptr = 0;
             collected = true;
         }
     }
@@ -1120,8 +1488,9 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         pid: next_pid(),
         ppid: p.pid,
         exit_code: 0,
-        wait_target: 0,
-        wait_status_va: 0,
+        wait_on: WaitOn::None,
+        wait_ptr: 0,
+        wait_len: 0,
     };
     // Either failure frees the (possibly partial) user page-table
     // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs
@@ -1194,8 +1563,8 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
     }
     {
         let t = tasks[cur].as_mut().unwrap();
-        t.wait_target = pid;
-        t.wait_status_va = status_va;
+        t.wait_on = if pid == -1 { WaitOn::Any } else { WaitOn::Child(pid as u64) };
+        t.wait_ptr = status_va;
         t.ctx = *ctx;
         t.state = TaskState::Blocked;
     }
