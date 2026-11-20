@@ -8,3 +8,4 @@ __pycache__/
 ports/lib-hash/libhash.so
 kernel/user/*.o
 kernel/user/*.elf
+initrd.cpio

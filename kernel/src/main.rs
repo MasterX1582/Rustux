@@ -16,6 +16,7 @@ use uefi::prelude::*;
 mod acpi;
 mod apic;
 mod cpu;
+mod cpio;
 mod e1000;
 mod elf;
 mod net;
@@ -731,6 +732,16 @@ fn main() -> Status {
         }
     }
 
+    // Load the initrd from the ESP while boot services are still
+    // legal — \initrd.cpio sits next to BOOTX64.EFI. The pages come
+    // back as LOADER_DATA, which our buddy deliberately does not
+    // claim, so the buffer survives EBS under the identity map.
+    let initrd = load_initrd();
+    match initrd {
+        Some((a, l)) => kprintln!(con, "rustux: initrd: {l}B at {a:#x}"),
+        None => kprintln!(con, "rustux: initrd: none found"),
+    }
+
     kprintln!(con, "rustux: exiting boot services...");
     // SAFETY: every firmware call this program makes happens before this
     // point; nothing afterwards touches boot or runtime services.
@@ -1004,11 +1015,25 @@ fn main() -> Status {
     unsafe { core::arch::asm!("ud2", options(nomem, nostack)) };
     kprintln!(con, "rustux: cpu: IDT caught #UD and resumed");
 
-    // Userspace milestone: parse the embedded ELF64, build a process
-    // page table (kernel entries copied supervisor-only), drop to
-    // ring 3 with user segments, and let the image write+exit through
-    // the SYSCALL path — exit unwinds back here.
-    let user_ok = user::run(include_bytes!("../user/hello.elf"));
+    // Userspace milestone: pull the ELF64 out of the initrd cpio
+    // (falling back to the embedded image when no initrd was loaded),
+    // build a process page table (kernel entries copied
+    // supervisor-only), drop to ring 3 with user segments, and let the
+    // image write+exit through the SYSCALL path — exit unwinds back.
+    let img = initrd
+        .and_then(|(a, l)| {
+            // SAFETY: a..a+l names LOADER_DATA pages we allocated
+            // pre-EBS; they are identity-mapped and still owned.
+            cpio::find(unsafe { core::slice::from_raw_parts(a as *const u8, l) }, b"init")
+        })
+        .map_or_else(
+            || {
+                kprintln!(con, "rustux: initrd: no init entry, using embedded ELF");
+                include_bytes!("../user/hello.elf") as &[u8]
+            },
+            |d| d,
+        );
+    let user_ok = user::run(img);
     kprintln!(con, "rustux: user: ring-3 ELF run {}", if user_ok { "done" } else { "FAILED" });
     kprintln!(
         con,
@@ -1022,3 +1047,52 @@ fn main() -> Status {
 }
 
 
+
+/// Load `\initrd.cpio` from the ESP via the Simple File System
+/// protocol. Boot-services-only: allocate LOADER_DATA pages (our buddy
+/// ignores that type, so the buffer survives EBS identity-mapped) and
+/// read the file into them. Returns (phys_addr, len) or None.
+fn load_initrd() -> Option<(u64, usize)> {
+    use uefi::proto::media::file::{File, FileAttribute, FileMode, RegularFile};
+
+    /// Largest initrd we accept — a guard against a corrupt ESP
+    /// handing us something absurd.
+    const MAX_INITRD: usize = 1 << 20;
+
+    let mut sfs =
+        uefi::boot::get_image_file_system(uefi::boot::image_handle()).ok()?;
+    let mut root = sfs.open_volume().ok()?;
+    let mut f = unsafe {
+        // SAFETY: we just opened it as a plain file.
+        RegularFile::new(
+            root.open(
+                uefi::cstr16!("initrd.cpio"),
+                FileMode::Read,
+                FileAttribute::empty(),
+            )
+            .ok()?,
+        )
+    };
+    let pages = MAX_INITRD / 4096;
+    let base = uefi::boot::allocate_pages(
+        uefi::boot::AllocateType::AnyPages,
+        MemoryType::LOADER_DATA,
+        pages,
+    )
+    .ok()?;
+    // SAFETY: base names `pages` freshly allocated pages.
+    let buf =
+        unsafe { core::slice::from_raw_parts_mut(base.as_ptr(), MAX_INITRD) };
+    let mut off = 0usize;
+    loop {
+        let n = f.read(&mut buf[off..]).ok()?;
+        if n == 0 {
+            break;
+        }
+        off += n;
+        if off == MAX_INITRD {
+            return None;
+        }
+    }
+    Some((base.as_ptr() as u64, off))
+}

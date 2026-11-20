@@ -36,20 +36,27 @@ FORCE:
 
 # Ring-3 milestone image: a static ELF64 loaded by kernel/src/elf.rs.
 USER_ELF := kernel/user/hello.elf
+INITRD   := initrd.cpio
 
 $(USER_ELF): kernel/user/hello.S
 	as -o kernel/user/hello.o $<
 	ld -nostdlib -e _start -Ttext 0x555500000000 -o $@ kernel/user/hello.o
 
+# The initrd: a newc cpio archive carrying the user image as `init`,
+# read from the ESP by the kernel before ExitBootServices.
+$(INITRD): $(USER_ELF) tools/mkinitrd.py
+	python3 tools/mkinitrd.py $(USER_ELF) init > $@
+
 $(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml $(USER_ELF) FORCE
 	cargo build --release --target $(TARGET) -p kernel
 
-$(ESP_IMG): $(KERNEL)
+$(ESP_IMG): $(KERNEL) $(INITRD)
 	dd if=/dev/zero of=$@ bs=1M count=64
 	mformat -i $@ ::
 	mmd -i $@ ::/EFI
 	mmd -i $@ ::/EFI/BOOT
 	mcopy -i $@ $(KERNEL) ::/EFI/BOOT/BOOTX64.EFI
+	mcopy -i $@ $(INITRD) ::/initrd.cpio
 
 run: build
 	$(QEMU) \
