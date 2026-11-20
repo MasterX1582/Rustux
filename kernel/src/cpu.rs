@@ -17,10 +17,57 @@ use crate::uart::{Uart16550, COM1};
 
 const KCODE: u16 = 0x08;
 const KDATA: u16 = 0x10;
+/// Selector of the TSS descriptor (GDT slots 3-4; a 64-bit TSS descriptor
+/// is 16 bytes wide).
+const TSS_SEL: u16 = 0x18;
 
 // Flat 64-bit segments: base/limit ignored by the CPU in long mode.
 // code: P|DPL0|S|Exec|Read|L   data: P|DPL0|S|Write
-static GDT: [u64; 3] = [0, 0x00af_9a00_0000_ffff, 0x00af_9200_0000_ffff];
+// Slots 3-4 hold the TSS descriptor, filled at init (needs the runtime base).
+static mut GDT: [u64; 5] = [0, 0x00af_9a00_0000_ffff, 0x00af_9200_0000_ffff, 0, 0];
+
+/// x86_64 task state segment. Only the IST entries matter today: no
+/// privilege transitions exist yet, so the rsp fields stay zeroed. iopb
+/// past the struct end disables the I/O bitmap.
+#[repr(C, packed)]
+struct Tss {
+    _r0: u32,
+    _rsp: [u64; 3],
+    _r1: u64,
+    ist: [u64; 7],
+    _r2: u64,
+    _r3: u16,
+    iopb: u16,
+}
+
+/// Dedicated double-fault stack (IST1). Without it a #DF raised on an
+/// already-corrupt stack triple-faults the machine — the vector-8 gate
+/// below switches here first, so the handler always has room to report.
+#[repr(align(16))]
+struct DfStack(#[allow(dead_code)] [u8; 8192]);
+
+static mut TSS: Tss = Tss {
+    _r0: 0,
+    _rsp: [0; 3],
+    _r1: 0,
+    ist: [0; 7],
+    _r2: 0,
+    _r3: 0,
+    iopb: 0,
+};
+
+static mut DF_STACK: DfStack = DfStack([0; 8192]);
+
+/// Build the 16-byte system descriptor for a 64-bit available TSS.
+fn tss_descriptor(base: u64, limit: u64) -> (u64, u64) {
+    let low = (limit & 0xffff)
+        | ((base & 0x00ff_ffff) << 16)
+        | (0b1001_u64 << 40) // type: 64-bit TSS (available)
+        | (1_u64 << 47) // present
+        | (((limit >> 16) & 0xf) << 48)
+        | (((base >> 24) & 0xff) << 56);
+    (low, base >> 32)
+}
 
 #[repr(C, packed)]
 struct TablePtr {
@@ -55,13 +102,13 @@ const EMPTY: IdtEntry = IdtEntry {
 
 static mut IDT: Idt = Idt([EMPTY; 256]);
 
-fn set_gate(v: usize, handler: u64) {
+fn set_gate(v: usize, handler: u64, ist: u8) {
     // SAFETY: single-threaded early boot; writes stay inside the static IDT.
     unsafe {
         (*core::ptr::addr_of_mut!(IDT)).0.as_mut_ptr().add(v).write(IdtEntry {
             off_lo: handler as u16,
             sel: KCODE,
-            ist: 0,
+            ist,
             attr: 0x8e, // present, DPL0, 64-bit interrupt gate (clears IF)
             off_mid: (handler >> 16) as u16,
             off_hi: (handler >> 32) as u32,
@@ -226,13 +273,28 @@ stub!(stub_bp, 3);
 stub!(stub_irq_timer, "0xf0");
 stub!(stub_irq_spurious, "0xff");
 
-/// Install our GDT (reload CS via far return, data segments via ax) and IDT
-/// (all 256 vectors, incl. IRQ stubs for the LAPIC timer and spurious
-/// vectors). Interrupts stay masked — apic::init + `sti` come later.
+/// Install our GDT (reload CS via far return, data segments via ax), TSS
+/// (#DF gets a dedicated IST stack), and IDT (all 256 vectors, incl. IRQ
+/// stubs for the LAPIC timer and spurious vectors). Interrupts stay
+/// masked — apic::init + `sti` come later.
 pub fn init() {
+    // Fill the TSS descriptor and the DF IST stack before lgdt — the base
+    // address only exists at runtime.
+    // SAFETY: single-threaded; the statics are written once, before ltr.
+    unsafe {
+        let tss = core::ptr::addr_of_mut!(TSS);
+        (*tss).iopb = core::mem::size_of::<Tss>() as u16;
+        (*tss).ist[0] = core::ptr::addr_of!(DF_STACK) as u64 + 8192;
+        let (lo, hi) =
+            tss_descriptor(tss as u64, core::mem::size_of::<Tss>() as u64 - 1);
+        let gdt = core::ptr::addr_of_mut!(GDT);
+        (*gdt)[3] = lo;
+        (*gdt)[4] = hi;
+    }
+
     let gdtr = TablePtr {
-        limit: (GDT.len() * 8 - 1) as u16,
-        base: GDT.as_ptr() as u64,
+        limit: (5 * 8 - 1) as u16,
+        base: core::ptr::addr_of!(GDT) as u64,
     };
     // SAFETY: gdtr points at our valid flat GDT; CS reload uses a far return
     // to the next instruction; running code/data remain reachable under the
@@ -261,28 +323,31 @@ pub fn init() {
             out("rax") _,
             options(nostack),
         );
+        // Load the task register so the IST mechanism is armed; #DF gates
+        // reference IST1 below.
+        core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nostack, preserves_flags));
     }
 
-    let gates: [(usize, u64); 13] = [
-        (3, stub_bp as *const () as u64),
-        (6, stub_ud as *const () as u64),
-        (8, stub_df as *const () as u64),
-        (10, stub_ts as *const () as u64),
-        (11, stub_np as *const () as u64),
-        (12, stub_ss as *const () as u64),
-        (13, stub_gp as *const () as u64),
-        (14, stub_pf as *const () as u64),
-        (17, stub_ac as *const () as u64),
-        (21, stub_cp as *const () as u64),
-        (29, stub_vc as *const () as u64),
-        (0xf0, stub_irq_timer as *const () as u64),
-        (0xff, stub_irq_spurious as *const () as u64),
+    let gates: [(usize, u64, u8); 13] = [
+        (3, stub_bp as *const () as u64, 0),
+        (6, stub_ud as *const () as u64, 0),
+        (8, stub_df as *const () as u64, 1), // IST1: dedicated DF stack
+        (10, stub_ts as *const () as u64, 0),
+        (11, stub_np as *const () as u64, 0),
+        (12, stub_ss as *const () as u64, 0),
+        (13, stub_gp as *const () as u64, 0),
+        (14, stub_pf as *const () as u64, 0),
+        (17, stub_ac as *const () as u64, 0),
+        (21, stub_cp as *const () as u64, 0),
+        (29, stub_vc as *const () as u64, 0),
+        (0xf0, stub_irq_timer as *const () as u64, 0),
+        (0xff, stub_irq_spurious as *const () as u64, 0),
     ];
     for v in 0..256 {
-        set_gate(v, stub_default as *const () as u64);
+        set_gate(v, stub_default as *const () as u64, 0);
     }
-    for (v, h) in gates {
-        set_gate(v, h);
+    for (v, h, ist) in gates {
+        set_gate(v, h, ist);
     }
 
     let idtr = TablePtr {

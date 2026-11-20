@@ -792,9 +792,10 @@ fn main() -> Status {
         carve
     );
 
-    // Seed the frame allocator with every conventional frame outside the
-    // carve, then prove alloc/write/free on real frames.
-    let mut fa = mm::FrameAlloc::new();
+    // Seed the buddy allocator with every conventional frame outside the
+    // carve, then prove alloc/write/free on real frames — including an
+    // order-2 block, which must be physically contiguous by definition.
+    let mut fa = mm::Buddy::new();
     let reserved = [(carve, carve_end)];
     for d in mmap.entries() {
         if d.ty == MemoryType::CONVENTIONAL {
@@ -808,7 +809,7 @@ fn main() -> Status {
     let free0 = fa.free_count();
     let (mut ok, mut got) = (true, [0u64; 3]);
     for (i, g) in got.iter_mut().enumerate() {
-        match fa.alloc() {
+        match fa.alloc(0) {
             Some(a) => {
                 *g = a;
                 // SAFETY: `a` is an owned free frame inside the identity map.
@@ -818,24 +819,35 @@ fn main() -> Status {
         }
     }
     for (i, &a) in got.iter().enumerate() {
-        // SAFETY: frames still owned until free_frame below.
+        // SAFETY: frames still owned until free_pages below.
         if a == 0 || unsafe { (a as *const u64).read_volatile() } != 0xdeadbeef + i as u64 {
             ok = false;
         }
     }
+    let mut big_ok = false;
+    if let Some(b) = fa.alloc(2) {
+        // SAFETY: b..b+16K is owned contiguous memory in the identity map.
+        big_ok = unsafe {
+            for i in 0..4u64 {
+                ((b + i * mm::PAGE) as *mut u64).write_volatile(0xb16 + i);
+            }
+            (0..4u64).all(|i| ((b + i * mm::PAGE) as *const u64).read_volatile() == 0xb16 + i)
+        };
+        fa.free_pages(b, 2);
+    }
     for &a in &got {
         if a != 0 {
-            fa.free_frame(a);
+            fa.free_pages(a, 0);
         }
     }
     let _ = writeln!(
         con,
-        "linux-rust: klib::mm: {} frames free ({} MiB), alloc/rw/free proof {}",
+        "linux-rust: klib::mm: buddy {} frames free ({} MiB), order0+order2 alloc/rw/free proof {}",
         free0,
         free0 / 256,
-        ok
+        ok && big_ok
     );
-    assert!(ok && fa.free_count() == free0 && free0 > 0);
+    assert!(ok && big_ok && fa.free_count() == free0 && free0 > 0);
 
     // Interrupt layer step 1: mask the legacy PIC, arm the LAPIC periodic
     // timer (calibrated against the PIT), then take real IRQs through our
