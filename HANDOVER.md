@@ -223,3 +223,28 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
   reasons; NV-52-1..3 (OFD share policy for fork — replaces NV-51-3,
   OFD flags for O_APPEND/cloexec, atomic refs under scheduler).
   cve.now: CVE-2025-39756 was the design input for the fixed bound.
+
+## getdents64 + Dir OFD — run-53
+- `kernel/src/user.rs`: `FdKind::Dir` — `open("/")` (or ".") yields a
+  directory OFD whose pos is the index of the next archive entry
+  (Linux's opaque-cookie semantics; ours is just an index). `read`
+  on a Dir -> EISDIR; `lseek` allows SEEK_SET 0 only (rewind).
+- `fd_getdents`: emits linux_dirent64 records (ino/off/reclen/type/
+  name). The whole user buffer is validated writable first, then each
+  record's reclen is checked against the remaining space BEFORE any
+  byte lands — no partial records ever. Pad bytes between the name
+  NUL and reclen end are zeroed — the uninitialized-padding infoleak
+  class closed by construction. EINVAL when count can't hold one
+  record, count capped at 4096, 0 at EOF.
+- `kernel/user/lstest.S`: 11 checks — open("/") gives a Dir, EISDIR
+  on read, a full reclen-chain walk counting exactly 5 archive
+  entries (init/selftest/fstest/lstest/motd.txt), DT_REG + 'init'
+  first-name verification, EOF, rewind-and-reread, ENOTDIR on a
+  console fd, EBADF on a bad fd. exit(0) first boot.
+- cve.now: getdents/filldir queries returned no entries — the bounds
+  and padding disciplines were applied anyway (no match is not
+  evidence of absence).
+- Audit run-53 (standard): 0 confirmed; RC-53-1..4 rejected;
+  NV-53-1..2 (O(n) re-parse per call — fine at initrd scale;
+  synthetic ino/off until a real inode table exists).
+- 4 tasks, zero-leak streak unbroken: frames 18346 -> 18346.
