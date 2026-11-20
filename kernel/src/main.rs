@@ -13,6 +13,7 @@ use core::fmt::Write;
 use uefi::mem::memory_map::{MemoryMap, MemoryType};
 use uefi::prelude::*;
 
+mod cpu;
 mod fbcon;
 mod mm;
 mod uart;
@@ -733,6 +734,13 @@ fn main() -> Status {
     // SAFETY: every firmware call this program makes happens before this
     // point; nothing afterwards touches boot or runtime services.
     let mmap = unsafe { uefi::boot::exit_boot_services(None) };
+
+    // Own the CPU state the firmware still lent us. This must happen after
+    // exit_boot_services: firmware code can reload GDTR/IDTR and raise
+    // interrupts internally, and a stray IRQ vectoring through our IDT whose
+    // selector doesn't exist in a firmware GDT would triple-fault the boot.
+    cpu::init();
+    let _ = writeln!(con, "linux-rust: cpu: own GDT+IDT active");
     let (mut n, mut conv, mut bsvc, mut largest) = (0usize, 0u64, 0u64, (0u64, 0u64));
     for d in mmap.entries() {
         n += 1;
@@ -825,6 +833,12 @@ fn main() -> Status {
         ok
     );
     assert!(ok && fa.free_count() == free0 && free0 > 0);
+
+    // Prove the new IDT: the #UD handler reports on COM1, bumps rip past the
+    // 2-byte ud2, and execution resumes here.
+    // SAFETY: ud2 always raises #UD; our handler makes it survivable.
+    unsafe { core::arch::asm!("ud2", options(nomem, nostack)) };
+    let _ = writeln!(con, "linux-rust: cpu: IDT caught #UD and resumed");
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
