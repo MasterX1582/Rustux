@@ -862,6 +862,7 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     let mut sent = false;
     let mut rounds = 0u32;
     let mut seen = 0u32;
+    let mut dbg6 = 0u32;
 
     if role == 0x01 {
         printk(format_args!("rustux: ipv6: initiator up, resolving peer ll"));
@@ -890,6 +891,22 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
             let et = u16::from_be_bytes([buf[12], buf[13]]);
             if et == crate::net::ET_IPV6 && buf.len() >= 54 {
                 let src_mac: [u8; 6] = buf[6..12].try_into().unwrap();
+                if dbg6 < 4 {
+                    if let Some(ip) = crate::net::parse_ipv6(&buf[14..]) {
+                        let c = crate::net::csum6(&ip.src, &ip.dst,
+                            ip.payload.len() as u32, ip.next, ip.payload);
+                        crate::log::printk(format_args!(
+                            "rustux: ipv6: dbg nx={} hop={} pl={} ck={c:#x}                              ty={} len={len}", ip.next, ip.hop,
+                            ip.payload.len(),
+                            if ip.payload.len() >= 1 { ip.payload[0] } else { 0 }));
+                        crate::log::drain(con);
+                    } else {
+                        crate::log::printk(format_args!(
+                            "rustux: ipv6: dbg parse-fail len={len}"));
+                        crate::log::drain(con);
+                    }
+                    dbg6 += 1;
+                }
                 if let Some(ip) = crate::net::parse_ipv6(&buf[14..]) {
                     if ip.next == crate::net::NH_ICMPV6
                         && crate::net::csum6(
