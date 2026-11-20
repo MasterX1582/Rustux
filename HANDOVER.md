@@ -45,7 +45,7 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 
 ## Next steps
 
-1. Kernel runtime: GDT/IDT + own page tables over the reclaimed memory (we still run on OVMF's tables post-EBS), then a buddy/slab page allocator from the largest ConventionalMemory region.
+1. Kernel runtime: GDT/IDT + exception handlers (page tables + frame allocator DONE in `e8946f8` — `kernel/src/mm.rs`: 4-level identity map w/ multi-PDPT, intrusive freelist FrameAlloc; we still run on OVMF's GDT/IDT). Then buddy/slab allocator on top of FrameAlloc.
 2. Interrupt/timer + early printk drain into `klib::prb`, panic path → both consoles.
 3. Queue next lib units per `docs/roadmap.md` (Wave-1 remainder or Wave-2 core services: timer wheels, workqueues, sched math — needs userspace shims).
 4. Zorin acceptance ladder (see `test/zorin/README.md`): M0 fixtures done → next rungs are boot our kernel under the real grub cmdline, initrd cpio/gzip readers, eventually casper init (M6 desktop = drop-in milestone).
