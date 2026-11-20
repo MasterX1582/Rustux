@@ -9,6 +9,7 @@
 
 use core::fmt::Write;
 
+use uefi::mem::memory_map::{MemoryMap, MemoryType};
 use uefi::prelude::*;
 
 mod fbcon;
@@ -720,6 +721,46 @@ fn main() -> Status {
         assert!(ok && rd && ri.text_len == 5);
         assert_eq!(&rbuf[..5], b"hello");
     }
+
+    // Claim the machine from the firmware. ExitBootServices hands back the
+    // final memory map and marks every BootServices* range free for our use.
+    // From here no UEFI boot-services call is legal; the console keeps working
+    // because it is pure port I/O + framebuffer memory, both of which survive
+    // the transition.
+    let _ = writeln!(con, "linux-rust: exiting boot services...");
+    // SAFETY: every firmware call this program makes happens before this
+    // point; nothing afterwards touches boot or runtime services.
+    let mmap = unsafe { uefi::boot::exit_boot_services(None) };
+    let (mut n, mut conv, mut bsvc, mut largest) = (0usize, 0u64, 0u64, (0u64, 0u64));
+    for d in mmap.entries() {
+        n += 1;
+        match d.ty {
+            MemoryType::CONVENTIONAL => {
+                conv += d.page_count;
+                if d.page_count > largest.1 {
+                    largest = (d.phys_start, d.page_count);
+                }
+            }
+            MemoryType::BOOT_SERVICES_CODE | MemoryType::BOOT_SERVICES_DATA => {
+                bsvc += d.page_count;
+            }
+            _ => {}
+        }
+    }
+    let _ = writeln!(
+        con,
+        "linux-rust: boot services exited -- {} mmap entries, {} MiB usable, {} KiB reclaimable",
+        n,
+        conv / 256,
+        bsvc * 4
+    );
+    let _ = writeln!(
+        con,
+        "linux-rust: largest free region {:#010x}..{:#010x} ({} MiB)",
+        largest.0,
+        largest.0 + largest.1 * 4096,
+        largest.1 / 256
+    );
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
