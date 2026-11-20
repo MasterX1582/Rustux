@@ -1294,12 +1294,13 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     // timestamp under the per-boot CSPRNG key — unpredictable to
     // an off-path observer, stable across connections.
     let t = unsafe { core::arch::x86_64::_rdtsc() } as u32;
-    let isn = klib::hash::siphash_3u32(
+    let mut isn = klib::hash::siphash_3u32(
         u32::from_be_bytes(us_ip) ^ u32::from_be_bytes(peer_ip),
         ((our_port as u32) << 16) | SRV_PORT as u32,
         t,
         crate::rand::isn_key(),
     ) as u32;
+    let mut conns = 0u32; // initiator: connections completed
     let Some((ring, bufs)) = rx_init(base) else {
         return;
     };
@@ -1414,6 +1415,21 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                                     }
                                     peer_mac = frm_mac;
                                     rcv_nxt = t.seq.wrapping_add(1);
+                                    // fresh ISN per connection
+                                    let t2 = unsafe {
+                                        core::arch::x86_64::_rdtsc()
+                                    } as u32;
+                                    isn = klib::hash::siphash_3u32(
+                                        u32::from_be_bytes(us_ip)
+                                            ^ u32::from_be_bytes(
+                                                ip.src,
+                                            ),
+                                        ((t.sport as u32) << 16)
+                                            | SRV_PORT as u32,
+                                        t2,
+                                        crate::rand::isn_key(),
+                                    ) as u32;
+                                    snd_nxt = isn.wrapping_add(1);
                                     let n = crate::net::build_tcp4(
                                         &mut f, peer_mac, mac, us_ip,
                                         ip.src, SRV_PORT, t.sport, isn,
@@ -1523,10 +1539,14 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                                     && t.ack == snd_nxt
                                 {
                                     printk(format_args!(
-                                        "rustux: tcp: closed clean"
+                                        "rustux: tcp: closed clean \
+                                         -> re-listening"
                                     ));
                                     crate::log::drain(con);
-                                    return;
+                                    // persistent server: back to
+                                    // LISTEN for the next SYN
+                                    phase = 0;
+                                    peer_mac = [0; 6];
                                 }
                             } else {
                                 // initiator: 0 wait SYN|ACK,
@@ -1639,11 +1659,42 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                                             base, &f[..n.max(60)],
                                         );
                                     }
-                                    printk(format_args!(
-                                        "rustux: tcp: closed clean"
-                                    ));
-                                    crate::log::drain(con);
-                                    return;
+                                    conns += 1;
+                                    if conns < 2 {
+                                        // persistent-server proof:
+                                        // open a second connection
+                                        let t2 = unsafe {
+                                            core::arch::x86_64::_rdtsc()
+                                        } as u32;
+                                        isn = klib::hash::siphash_3u32(
+                                            u32::from_be_bytes(us_ip)
+                                                ^ u32::from_be_bytes(
+                                                    peer_ip,
+                                                ),
+                                            ((our_port as u32) << 16)
+                                                | SRV_PORT as u32,
+                                            t2,
+                                            crate::rand::isn_key(),
+                                        ) as u32;
+                                        snd_nxt = isn.wrapping_add(1);
+                                        rcv_nxt = 0;
+                                        phase = 0;
+                                        printk(format_args!(
+                                            "rustux: tcp: conn \
+                                             {conns} closed -> \
+                                             reconnect (isn {isn:#x})"
+                                        ));
+                                        crate::log::drain(con);
+                                    } else {
+                                        printk(format_args!(
+                                            "rustux: tcp: conn \
+                                             {conns} closed clean \
+                                             (persistent server \
+                                             verified)"
+                                        ));
+                                        crate::log::drain(con);
+                                        return;
+                                    }
                                 }
                             }
                         }
