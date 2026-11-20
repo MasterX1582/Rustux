@@ -11,7 +11,7 @@
 //! the caller of user::run — a one-shot process model until a real
 //! task scheduler exists.
 
-use crate::{log, user};
+use crate::{elf, log, user};
 use core::arch::global_asm;
 
 /// Kernel stack top for the CURRENT task's syscall entries, set by
@@ -38,12 +38,39 @@ pub fn set_kstack(top: u64) {
     unsafe { *core::ptr::addr_of_mut!(CUR_KSTACK) = top };
 }
 
+/// Saved user rip — normally the rcx SYSCALL captured, but execve
+/// redirects it to the new image's entry. The stub reloads rcx from
+/// here instead of the pushed slot, so a syscall CAN replace where
+/// the user resumes — that is exactly what exec is.
+#[no_mangle]
+static mut SAVED_UIP: u64 = 0;
+
+/// When nonzero the stub zeroes every user-visible GPR before sysret
+/// — an exec'd program must not inherit the caller's registers
+/// (Linux zeroes them; also keeps a stale fd/path pointer out of a
+/// fresh image's hands).
+#[no_mangle]
+static mut ZERO_CTX: u64 = 0;
+
+/// Redirect the pending syscall return: rip/rsp replace what sysret
+/// restores, and user registers are zeroed. Only ever called from
+/// exec while the task's address space has already been rebuilt.
+pub fn exec_return(rip: u64, rsp: u64) {
+    // SAFETY: syscall context — the stub consumes these on its way out.
+    unsafe {
+        *core::ptr::addr_of_mut!(SAVED_UIP) = rip;
+        *core::ptr::addr_of_mut!(USER_RSP) = rsp;
+        *core::ptr::addr_of_mut!(ZERO_CTX) = 1;
+    }
+}
+
 global_asm!(
     "
     .globl syscall_entry
 syscall_entry:
     // rcx=user rip, r11=user rflags; rsp is still the USER stack.
     mov qword ptr [rip + USER_RSP], rsp
+    mov qword ptr [rip + SAVED_UIP], rcx
     mov rsp, qword ptr [rip + CUR_KSTACK]
     and rsp, -16               // kstack top is 16-aligned; belt&braces
     // Linux ABI: syscall may clobber only rax (ret), rcx and r11 —
@@ -74,8 +101,28 @@ syscall_entry:
     pop rsi
     pop rdi
     pop r11
-    pop rcx
+    add rsp, 8                 // saved user rip: reload from SAVED_UIP —
+    mov rcx, qword ptr [rip + SAVED_UIP]  // exec may have redirected it
     mov rsp, qword ptr [rip + USER_RSP]
+    // execve asks for a clean register file in the new image.
+    cmp qword ptr [rip + ZERO_CTX], 0
+    je 1f
+    mov qword ptr [rip + ZERO_CTX], 0
+    xor eax, eax
+    xor ebx, ebx
+    xor ebp, ebp
+    xor edi, edi
+    xor esi, esi
+    xor edx, edx
+    xor r8d, r8d
+    xor r9d, r9d
+    xor r10d, r10d
+    xor r12d, r12d
+    xor r13d, r13d
+    xor r14d, r14d
+    xor r15d, r15d
+    mov r11d, 0x202            // sane user rflags
+1:
     sysretq
 
     .globl user_enter
@@ -151,13 +198,16 @@ const NR_LSEEK: u64 = 8;
 const NR_DUP: u64 = 32;
 const NR_DUP2: u64 = 33;
 const NR_GETDENTS: u64 = 217;
+const NR_EXECVE: u64 = 59;
 const NR_EXIT: u64 = 60;
 
 // errno values (negative returns per the kernel ABI).
+const ENOENT: u64 = (-2i64) as u64;
 const EBADF: u64 = (-9i64) as u64;
 const EFAULT: u64 = (-14i64) as u64;
 const EINVAL: u64 = (-22i64) as u64;
 const ENAMETOOLONG: u64 = (-36i64) as u64;
+const ENOEXEC: u64 = (-8i64) as u64;
 const ENOSYS: u64 = (-38i64) as u64;
 
 /// Longest single copy from user space — a hostile len can't stall
@@ -189,27 +239,24 @@ extern "C" fn handle_syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         NR_DUP => user::fd_dup(a1),
         NR_DUP2 => user::fd_dup2(a1, a2),
         NR_GETDENTS => user::fd_getdents(a1, a2, a3),
+        NR_EXECVE => sys_execve(a1, a2, a3),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
     }
 }
 
-/// open(path, flags, mode): O_RDONLY only, path is a NUL-terminated
-/// user string copied byte-by-byte under the pointer gate — the
-/// getname discipline (CVE-2025-68814 class): bounded, EFAULT on
-/// unmapped bytes, ENAMETOOLONG past the cap.
-fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
-    if flags != 0 {
-        return EINVAL;
-    }
-    let mut name = [0u8; 257];
+/// Copy a NUL-terminated user pathname into `name` under the pointer
+/// gate — the getname discipline (CVE-2025-68814 class): byte-wise
+/// validation, bounded, EFAULT on unmapped bytes, ENAMETOOLONG past
+/// the cap. Returns the name length (excluding the NUL) or an errno.
+fn copy_user_path(path: u64, name: &mut [u8; 257]) -> Result<usize, u64> {
     let mut n = 0usize;
     loop {
         if n == 256 {
-            return ENAMETOOLONG;
+            return Err(ENAMETOOLONG);
         }
         if !user::range_ok(path + n as u64, 1) {
-            return EFAULT;
+            return Err(EFAULT);
         }
         // SAFETY: range_ok proved this byte is inside a mapped range.
         let b = unsafe { *((path + n as u64) as *const u8) };
@@ -219,10 +266,52 @@ fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
         name[n] = b;
         n += 1;
     }
+    Ok(n)
+}
+
+/// open(path, flags, mode): O_RDONLY only, path is a NUL-terminated
+/// user string.
+fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
+    if flags != 0 {
+        return EINVAL;
+    }
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
     // Tolerate the conventional leading '/' — the archive namespace
     // is flat and root-relative.
     let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
     user::fd_open(name)
+}
+
+/// execve(path, argv, envp): resolve the name in the initrd, verify it
+/// is a loadable ELF BEFORE touching the address space, then let
+/// user::exec rebuild it. argv/envp are accepted for ABI shape but
+/// not yet consumed — a stack-args rung will land with fork
+/// (CVE-2022-49264's argv==NULL discipline applies then).
+fn sys_execve(path: u64, _argv: u64, _envp: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    let Some(img) = user::fs_lookup(name) else {
+        return ENOENT;
+    };
+    // Parse before reset: a bad image must not cost the task its
+    // address space — Linux returns ENOEXEC and the process lives.
+    if elf::parse(img).is_none() {
+        return ENOEXEC;
+    }
+    if !user::exec(img) {
+        // The address space is already torn down; the task cannot
+        // safely resume. Kill it — the run() loop reaps as usual.
+        sys_exit(127);
+    }
+    0 // unreachable on success — sysret lands in the new image
 }
 
 /// write(fd, buf, len): console fds only, buffer fully validated

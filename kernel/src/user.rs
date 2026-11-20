@@ -98,7 +98,11 @@ impl Task {
     /// teardown freeing is designed in). Slots 0..128 are shared
     /// kernel mappings and must NOT be freed; slots 128..256 are the
     /// user window, entirely task-owned.
-    fn reap(&mut self) {
+    /// Free every frame under user PML4 slots 128..256 — leaf, PT,
+    /// PD, PDPT — and clear the slots so the address space can be
+    /// reused (exec) or the table freed (reap). Shared kernel slots
+    /// 0..127 are never touched.
+    fn free_user_mappings(&mut self) {
         for i in 128..256u64 {
             let e = rd64(self.pml4 + 8 * i);
             if e & PRESENT == 0 {
@@ -128,7 +132,12 @@ impl Task {
                 kalloc::free_frame(pd);
             }
             kalloc::free_frame(pdpt);
+            wr64(self.pml4 + 8 * i, 0);
         }
+    }
+
+    fn reap(&mut self) {
+        self.free_user_mappings();
         kalloc::free_frame(self.pml4);
         if self.kstack_base != 0 {
             // SAFETY: kstack_base came from kmalloc, freed once here.
@@ -151,6 +160,13 @@ static mut INITRD: Option<&'static [u8]> = None;
 pub fn set_initrd(img: &'static [u8]) {
     // SAFETY: sole writer, before any task exists.
     unsafe { *core::ptr::addr_of_mut!(INITRD) = Some(img) };
+}
+
+/// Resolve a flat name to archive bytes — the filesystem lookup used
+/// by open and execve alike.
+pub fn fs_lookup(name: &[u8]) -> Option<&'static [u8]> {
+    let arc = unsafe { *core::ptr::addr_of!(INITRD) }?;
+    crate::cpio::find(arc, name)
 }
 
 /// Borrow the resident task mutably — syscall-context accessor.
@@ -617,6 +633,32 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
     }
     o.pos = idx;
     off as u64
+}
+
+/// execve: replace the resident task's image. Frees every user
+/// mapping (the SAME pml4/kstack/fds persist — fds surviving exec is
+/// the Linux semantic), reloads from `img`, and redirects the saved
+/// syscall-return context so sysret lands on the new entry with a
+/// clean register file. The caller parses the ELF first, so the only
+/// post-reset failure is allocator exhaustion — treated as fatal by
+/// the caller since the old program's code pages are already gone.
+pub fn exec(img: &[u8]) -> bool {
+    let Some(t) = cur_mut() else { return false };
+    let Some(e) = elf::parse(img) else { return false };
+    t.free_user_mappings();
+    t.nranges = 0;
+    t.stack_top = 0;
+    if !load_inner(t, &e, img) {
+        return false;
+    }
+    t.entry = e.entry;
+    // The pml4 address is unchanged but its contents are entirely
+    // new — the TLB still caches the OLD user translations and must
+    // be flushed or user code could run on freed frames.
+    // SAFETY: reloading the current cr3 only flushes the TLB.
+    unsafe { core::arch::asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _) };
+    syscall::exec_return(t.entry, t.stack_top);
+    true
 }
 
 /// Load `img` as a task and enter it on ring 3. Returns false if the
