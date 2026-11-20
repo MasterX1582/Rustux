@@ -980,6 +980,14 @@ fn main() -> Status {
         if let Some((e_base, e_mac)) = e1000_dev {
             let msi_ok = e1000::irq_selftest(e_base, e_mac);
             kprintln!(con, "rustux: e1000: MSI receive path {msi_ok}");
+            // Hand the NIC to the socket layer — the last rx_init
+            // wins the device, so this runs after every selftest.
+            let live = e1000::net_live(e_base, e_mac);
+            let ip = e1000::our_ip();
+            kprintln!(con,
+                "rustux: e1000: live rx {live} ip {}.{}.{}.{}",
+                ip[0], ip[1], ip[2], ip[3]
+            );
         }
 
         // The interactive payoff: a bounded window where every IRQ1

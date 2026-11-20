@@ -197,6 +197,10 @@ const NR_PIPE2: u64 = 293;
 const NR_GETDENTS: u64 = 217;
 const NR_NEWFSTATAT: u64 = 262;
 const NR_POLL: u64 = 7;
+const NR_SOCKET: u64 = 41;
+const NR_SENDTO: u64 = 44;
+const NR_RECVFROM: u64 = 45;
+const NR_BIND: u64 = 49;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -220,6 +224,9 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
     // SAFETY: the stub built this UCtx on the current task's kstack.
     let ctx = unsafe { &mut *c };
     let (nr, a1, a2, a3) = (ctx.rax, ctx.rdi, ctx.rsi, ctx.rdx);
+    // Args 4-6 ride r10/r8/r9 per the syscall ABI (arg4 is r10,
+    // never rcx — that's the CPU-clobbered return address).
+    let (a4, a5, a6) = (ctx.r10, ctx.r8, ctx.r9);
     ctx.rax = match nr {
         // fd_read validates the write-target range itself because only
         // it knows how many bytes the source will actually produce;
@@ -235,6 +242,10 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_PIPE => user::fd_pipe(a1, 0),
         NR_PIPE2 => user::fd_pipe(a1, a2),
         NR_POLL => user::fd_poll(ctx, a1, a2, a3 as i64),
+        NR_SOCKET => user::fd_socket(a1, a2, a3),
+        NR_BIND => user::fd_bind(a1, a2, a3),
+        NR_SENDTO => user::fd_sendto(a1, a2, a3, a4, a5, a6),
+        NR_RECVFROM => user::fd_recvfrom(ctx, a1, a2, a3, a4, a5, a6),
         NR_OPEN => sys_open(a1, a2, a3),
         NR_CLOSE => user::fd_close(a1),
         // off arrives as u64; the fd layer interprets it as i64 —

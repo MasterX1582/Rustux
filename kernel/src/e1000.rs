@@ -82,6 +82,22 @@ static GW_MAC: core::sync::atomic::AtomicU64 =
 /// Gateway IPv4 captured with it (network byte order as u32).
 static GW_IP: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);
+/// Our DHCP-leased IPv4 and netmask (network order as u32) — written
+/// when the ACK lands in dhcp_selftest, read by the socket layer.
+static OUR_IP: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+static OUR_MASK: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+/// Our MAC (packed be48) plus the live RX ring — programmed by
+/// net_live once the selftests are done; rx_drain consumes it.
+static OUR_MAC: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static LIVE_BASE: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+static LIVE_RING: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+static LIVE_BUFS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 /// Legacy RX descriptor (16 bytes). The NIC writes len/sta back when a
 /// frame lands in the buffer we posted.
@@ -191,15 +207,26 @@ fn reset(base: usize) -> bool {
     i < 1_000_000
 }
 
+/// The TX ring's page — allocated once, reused every transmit.
+/// tx_once reprograms the entire ring on each call, so a persistent
+/// page is correct and closes the per-frame kmalloc leak.
+static TX_PAGE: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
 /// Transmit one frame through the legacy TX ring. `frame` is the raw
 /// Ethernet frame. Returns true when the NIC reports DD (done).
 pub fn tx_once(base: usize, frame: &[u8]) -> bool {
     // One page: [TxDesc x N_TX][packet buffer]. Buddy pages are
     // physically contiguous and identity-mapped, so addr == phys.
-    let page = kalloc::kmalloc(4096);
+    // Single-CPU: the load-then-store race can't run concurrently.
+    let mut page = TX_PAGE.load(Ordering::Relaxed) as *mut u8;
     if page.is_null() {
-        printk(format_args!("rustux: e1000: tx page alloc failed"));
-        return false;
+        page = kalloc::kmalloc(4096);
+        if page.is_null() {
+            printk(format_args!("rustux: e1000: tx page alloc failed"));
+            return false;
+        }
+        TX_PAGE.store(page as usize, Ordering::Relaxed);
     }
     let ring = page as *mut TxDesc;
     // SAFETY: page names 4096 owned bytes; N_TX*16 fits the front half,
@@ -1233,6 +1260,17 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
                                             l.router[1], l.router[2],
                                             l.router[3], l.secs
                                         ));
+                                        // Persist the lease — the
+                                        // socket layer sources its
+                                        // src-ip/mask from these.
+                                        OUR_IP.store(
+                                            u32::from_be_bytes(l.ip),
+                                            Ordering::Relaxed,
+                                        );
+                                        OUR_MASK.store(
+                                            u32::from_be_bytes(l.mask),
+                                            Ordering::Relaxed,
+                                        );
                                         return true;
                                     }
                                 }
@@ -1789,4 +1827,228 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
             }
         }
     }
+}
+
+// ---- live RX path: the socket layer's packet source ----------------
+
+/// Bring up the persistent RX ring the socket layer drains. Must run
+/// after the selftests — every rx_init reprograms RDBAL, so the last
+/// one wins the device. Returns false when the ring can't allocate.
+pub fn net_live(base: usize, mac: [u8; 6]) -> bool {
+    let Some((ring, bufs)) = rx_init(base) else {
+        return false;
+    };
+    OUR_MAC.store(
+        u64::from_be_bytes([0, 0, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]]),
+        Ordering::Relaxed,
+    );
+    LIVE_BASE.store(base, Ordering::Relaxed);
+    LIVE_RING.store(ring as usize, Ordering::Relaxed);
+    LIVE_BUFS.store(bufs as usize, Ordering::Relaxed);
+    true
+}
+
+/// The leased address — [0;4] until DHCP ACKs.
+pub fn our_ip() -> [u8; 4] {
+    OUR_IP.load(Ordering::Relaxed).to_be_bytes()
+}
+
+/// The leased netmask.
+pub fn our_mask() -> [u8; 4] {
+    OUR_MASK.load(Ordering::Relaxed).to_be_bytes()
+}
+
+/// Live socket path up: ring programmed and an address leased.
+pub fn net_up() -> bool {
+    LIVE_BASE.load(Ordering::Relaxed) != 0 && OUR_IP.load(Ordering::Relaxed) != 0
+}
+
+/// The cached gateway MAC (None until the boot ARP reply).
+pub fn gw_mac() -> Option<[u8; 6]> {
+    let m = GW_MAC.load(Ordering::Relaxed);
+    if m == 0 {
+        None
+    } else {
+        Some(m.to_be_bytes()[2..8].try_into().unwrap())
+    }
+}
+
+
+/// Is `dst` addressed to us: our address, limited broadcast, or the
+/// subnet's directed broadcast.
+fn for_us(dst: [u8; 4], our: [u8; 4], mask: [u8; 4]) -> bool {
+    if dst == our || dst == [0xff; 4] {
+        return true;
+    }
+    let mut host = true;
+    let mut net = true;
+    for i in 0..4 {
+        if dst[i] | mask[i] != 0xff {
+            host = false;
+        }
+        if dst[i] & mask[i] != our[i] & mask[i] {
+            net = false;
+        }
+    }
+    host && net
+}
+
+/// Handle one received descriptor on the live ring: ARP requests for
+/// our address get a reply, ARP replies surface to the caller (for
+/// arp_resolve), IPv4/UDP datagrams for us feed the socket demux.
+/// The descriptor is always reposted. Returns the responder's
+/// (ip, mac) when an ARP reply arrived.
+fn drain_desc(d: usize) -> Option<([u8; 4], [u8; 6])> {
+    let base = LIVE_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    let ring = LIVE_RING.load(Ordering::Relaxed) as *const RxDesc;
+    let bufs = LIVE_BUFS.load(Ordering::Relaxed) as *const u8;
+    // SAFETY: same contract as the selftest drains — the NIC writes
+    // sta/len, the frame lands in the posted buffer.
+    let (sta, len) = unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+    if sta & RXD_STA_DD == 0 {
+        return None;
+    }
+    let mut out = None;
+    if sta & RXD_STA_EOP != 0 && len >= 14 && len as usize <= RX_BUF {
+        let p = unsafe { bufs.add(d * RX_BUF) };
+        let et = unsafe { u16::from_be_bytes([*p.add(12), *p.add(13)]) };
+        if et == 0x0806 && len >= 42 {
+            // SAFETY: bounds checked — the ARP body spans eth+14..42.
+            let (op, sha, spa, tpa) = unsafe {
+                (
+                    u16::from_be_bytes([*p.add(20), *p.add(21)]),
+                    core::slice::from_raw_parts(p.add(22), 6),
+                    core::slice::from_raw_parts(p.add(28), 4),
+                    core::slice::from_raw_parts(p.add(38), 4),
+                )
+            };
+            let our = our_ip();
+            let mac64 = OUR_MAC.load(Ordering::Relaxed);
+            let mac = mac64.to_be_bytes();
+            if op == 1 && tpa == our && our != [0; 4] {
+                // Who-has us? Answer: swap sender/target, oper=2.
+                let mut f = [0u8; 60];
+                f[..6].copy_from_slice(sha);
+                f[6..12].copy_from_slice(&mac[2..8]);
+                f[12] = 0x08;
+                f[13] = 0x06;
+                f[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 2]);
+                f[22..28].copy_from_slice(&mac[2..8]);
+                f[28..32].copy_from_slice(&our);
+                f[32..38].copy_from_slice(sha);
+                f[38..42].copy_from_slice(spa);
+                let _ = tx_once(base, &f);
+            } else if op == 2 {
+                let mut m = [0u8; 6];
+                m.copy_from_slice(sha);
+                let mut ip = [0u8; 4];
+                ip.copy_from_slice(spa);
+                out = Some((ip, m));
+            }
+        } else if et == 0x0800 {
+            let buf = unsafe {
+                core::slice::from_raw_parts(p.add(14), len as usize - 14)
+            };
+            if let Some(ip) = crate::net::parse_ipv4(buf) {
+                let our = our_ip();
+                if ip.proto == crate::net::NH_UDP
+                    && for_us(ip.dst, our, our_mask())
+                {
+                    if let Some(u) = crate::net::parse_udp(ip.payload) {
+                        if u.cksum_field == 0
+                            || crate::net::csum6_ok(crate::net::csum4(
+                                ip.src,
+                                ip.dst,
+                                crate::net::NH_UDP,
+                                &ip.payload[..8 + u.payload.len()],
+                            ))
+                        {
+                            crate::user::udp_rx(
+                                ip.src, u.sport, u.dport, u.payload,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Repost: the consumed slot becomes the new one-descriptor gap.
+    // SAFETY: reposting a consumed descriptor.
+    unsafe {
+        (*(ring as *mut RxDesc).add(d)).sta = 0;
+        wr(base, RDT, d as u32);
+    }
+    out
+}
+
+/// Drain every posted descriptor once — called from the timer tick
+/// and before a socket recv blocks, so a datagram already in the
+/// ring never waits for the next tick.
+pub fn rx_drain() {
+    if LIVE_BASE.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    for d in 0..N_RX {
+        drain_desc(d);
+    }
+}
+
+/// Resolve an on-link IPv4 to a MAC: gateway is cached from boot;
+/// otherwise broadcast a who-has and spin the live ring for the
+/// reply (other traffic keeps demuxing during the spin).
+pub fn arp_resolve(target: [u8; 4]) -> Option<[u8; 6]> {
+    let base = LIVE_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    let gw = GW_IP.load(Ordering::Relaxed);
+    if target == gw.to_be_bytes() {
+        let m = GW_MAC.load(Ordering::Relaxed);
+        if m != 0 {
+            return Some(m.to_be_bytes()[2..8].try_into().unwrap());
+        }
+    }
+    let our = our_ip();
+    let mac64 = OUR_MAC.load(Ordering::Relaxed);
+    let mac = mac64.to_be_bytes();
+    let mut f = [0u8; 60];
+    f[..6].copy_from_slice(&[0xff; 6]);
+    f[6..12].copy_from_slice(&mac[2..8]);
+    f[12] = 0x08;
+    f[13] = 0x06;
+    f[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 1]);
+    f[22..28].copy_from_slice(&mac[2..8]);
+    f[28..32].copy_from_slice(&our);
+    f[38..42].copy_from_slice(&target);
+    if !tx_once(base, &f) {
+        return None;
+    }
+    for _ in 0..4_000_000u32 {
+        for d in 0..N_RX {
+            if let Some((spa, sha)) = drain_desc(d) {
+                if spa == target {
+                    return Some(sha);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Transmit one UDP datagram through the live ring — checksums
+/// computed by build_udp4, our leased address as the source.
+pub fn udp_tx(dst_mac: [u8; 6], dst_ip: [u8; 4], sport: u16, dport: u16, payload: &[u8]) -> bool {
+    let base = LIVE_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return false;
+    }
+    let mac = OUR_MAC.load(Ordering::Relaxed).to_be_bytes();
+    let mut m = [0u8; 6];
+    m.copy_from_slice(&mac[2..8]);
+    let mut f = [0u8; 1600];
+    let n = crate::net::build_udp4(&mut f, dst_mac, m, our_ip(), dst_ip, sport, dport, payload);
+    n != 0 && tx_once(base, &f[..n.max(60)])
 }

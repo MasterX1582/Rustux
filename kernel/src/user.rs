@@ -123,6 +123,9 @@ enum WaitOn {
     /// fd count. Any pipe-state change re-scans it; wait_deadline
     /// ticks (0 = none) bounds the sleep.
     Poll,
+    /// recvfrom() on an empty UDP socket: `wait_ptr` is the user
+    /// buffer, `wait_len` its cap, `wait_ptr2` the sockaddr out ptr.
+    UdpRecv(usize),
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -147,6 +150,9 @@ enum FdKind {
     /// One end of a pipe — the ring lives in PIPES[id], shared by
     /// whatever tasks inherited the fds. `write` selects the end.
     Pipe { id: usize, write: bool },
+    /// An AF_INET/SOCK_DGRAM socket — the state lives in UDPSOCKS[id],
+    /// dup'd/fork'd fds share the one endpoint like pipe ends.
+    Udp(usize),
 }
 
 /// Max concurrent pipes — a hard bound on kernel frame pressure,
@@ -400,6 +406,7 @@ pub fn kill(pid: u64, sig: u64) -> u64 {
         t.wait_ptr = 0;
         t.wait_len = 0;
         t.wait_deadline = 0;
+        t.wait_ptr2 = 0;
         t.state = TaskState::Runnable;
     }
     0
@@ -517,6 +524,8 @@ pub struct Task {
     wait_ptr: u64,
     /// Blocked pipe io length (unused by wait4).
     wait_len: u64,
+    /// Second wait pointer — recvfrom's sockaddr out VA (0 = none).
+    wait_ptr2: u64,
     /// apic::TICKS deadline for a timed Poll wait — 0 means none.
     wait_deadline: u64,
     /// Pending signal bitmask — bit (sig-1), sigs 1..=31.
@@ -802,6 +811,7 @@ fn load(img: &[u8]) -> Option<Task> {
         exit_status: 0,
         wait_on: WaitOn::None,
         wait_ptr: 0,
+        wait_ptr2: 0,
         wait_len: 0,
         wait_deadline: 0,
         pending: 0,
@@ -905,6 +915,7 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
         FdKind::Stdin => 0,
         FdKind::Console => EBADF,
         FdKind::Dir => EISDIR,
+        FdKind::Udp(i) => udp_recv_or_block(ctx, *i, buf, len, 0),
         FdKind::File(data) => {
             // pos may sit past EOF after lseek — saturating, not panicking.
             let avail = data.len().saturating_sub(o.pos);
@@ -1297,6 +1308,12 @@ fn ofd_release(oi: usize) {
     if let FdKind::Pipe { id, write } = kind {
         pipe_end_closed(id, write);
     }
+    if let FdKind::Udp(i) = kind {
+        // The endpoint dies with its last fd — queued dgrams free
+        // with it. A blocked recvfrom on this socket can't exist:
+        // the blocker's own fd pins the endpoint alive.
+        unsafe { (*core::ptr::addr_of_mut!(UDPSOCKS))[i] = None };
+    }
 }
 
 /// The last fd naming one pipe end went away. Decrement the endpoint
@@ -1464,7 +1481,7 @@ const MAX_POLL: u64 = 32;
 fn read_task_u(pml4: u64, va: u64, len: u64) -> Option<u64> {
     let mut v = 0u64;
     for i in 0..len {
-        let pa = translate(pml4, va + i)?;
+        let pa = translate_r(pml4, va + i)?;
         // SAFETY: pa is a present user frame in pml4.
         v |= (unsafe { (pa as *const u8).read() } as u64) << (i * 8);
     }
@@ -1503,6 +1520,15 @@ fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
         FdKind::Console => POLLOUT,
         // File and dir reads never block (EOF reads return 0).
         FdKind::File(_) | FdKind::Dir => POLLIN,
+        // UDP: readable when a datagram queues; send never blocks.
+        FdKind::Udp(i) => {
+            let socks = unsafe { &*core::ptr::addr_of!(UDPSOCKS) };
+            let mut r = POLLOUT;
+            if socks.get(*i).and_then(|s| s.as_ref()).is_some_and(|k| k.q.is_some()) {
+                r |= POLLIN;
+            }
+            r
+        }
         FdKind::Pipe { id, write } => {
             match pipes.get(*id).and_then(|s| s.as_ref()) {
                 None => POLLERR, // peer's frame freed — torn down
@@ -1635,6 +1661,370 @@ pub fn fd_poll(ctx: &mut UCtx, fds: u64, nfds: u64, timeout_ms: i64) -> u64 {
     t.ctx = *ctx;
     t.state = TaskState::Blocked;
     block_switch()
+}
+
+// ---- UDP sockets ---------------------------------------------------
+// AF_INET/SOCK_DGRAM over the e1000 live ring. One datagram queue per
+// socket — honest UDP: excess drops. The blocking recvfrom borrows the
+// pipe-wait machinery: the waker (rx demux on the live ring) copies
+// payload + sockaddr through the SLEEPER's page tables.
+
+/// Max UDP sockets — same fixed-table discipline as MAX_PIPES.
+const MAX_SOCKS: usize = 8;
+/// A datagram payload cap: fits a full-size ethernet frame.
+const MAX_DGRAM: usize = 1600;
+/// First ephemeral port, Linux's default range start.
+const EPHEM_BASE: u16 = 49152;
+
+/// One queued datagram: payload + sender sockaddr for recvfrom.
+struct Dgram {
+    src: [u8; 4],
+    sport: u16,
+    len: u16,
+    data: [u8; MAX_DGRAM],
+}
+
+/// A UDP endpoint: the bound local port (0 = unbound, assigned on
+/// first send/bind) plus a one-deep receive queue.
+struct UdpSock {
+    port: u16,
+    q: Option<Dgram>,
+}
+
+static mut UDPSOCKS: [Option<UdpSock>; MAX_SOCKS] = [const { None }; MAX_SOCKS];
+
+/// Linux struct sockaddr_in, all 16 bytes initialized before the
+/// copy (the CVE-2021-47597 uninit-struct copy_to_user class).
+fn sockaddr_in(port: u16, ip: [u8; 4]) -> [u8; 16] {
+    let mut s = [0u8; 16];
+    s[0..2].copy_from_slice(&2u16.to_ne_bytes()); // AF_INET
+    s[2..4].copy_from_slice(&port.to_be_bytes());
+    s[4..8].copy_from_slice(&ip);
+    s
+}
+
+/// Parse the first 8 bytes of a sockaddr_in at `sa` in pml4's space:
+/// (port, ip). None on untranslatable or non-INET input.
+fn parse_sockaddr(pml4: u64, sa: u64) -> Option<(u16, [u8; 4])> {
+    let v = read_task_u(pml4, sa, 8)?;
+    if v & 0xffff != 2 {
+        return None; // sin_family must be AF_INET
+    }
+    let port = u16::from_be(((v >> 16) & 0xffff) as u16);
+    let ip = ((v >> 32) as u32).to_le_bytes();
+    Some((port, ip))
+}
+
+/// Lowest unbound local port >= EPHEM_BASE.
+fn ephemeral_port() -> Option<u16> {
+    let socks = unsafe { &*core::ptr::addr_of!(UDPSOCKS) };
+    (EPHEM_BASE..=u16::MAX)
+        .find(|&p| !socks.iter().flatten().any(|s| s.port == p))
+}
+
+/// RX-side demux, called from e1000::drain_desc on the live ring.
+/// A blocked recvfrom gets the datagram copied straight into its
+/// buffer (through ITS tables); otherwise it queues one deep —
+/// a second arrival displaces it, honest UDP loss.
+pub fn udp_rx(src_ip: [u8; 4], sport: u16, dport: u16, p: &[u8]) {
+    let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+    let Some(si) = socks.iter().position(|s| {
+        s.as_ref().is_some_and(|k| k.port == dport)
+    }) else {
+        return; // nobody bound to this port — drop
+    };
+    // A blocked receiver first: payload + sockaddr straight through
+    // the sleeper's tables, count into its rax — same wake shape as
+    // the pipe paths.
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state == TaskState::Blocked && t.wait_on == WaitOn::UdpRecv(si) {
+            let n = core::cmp::min(p.len(), t.wait_len as usize);
+            write_task_bytes(t.pml4, t.wait_ptr, &p[..n]);
+            if t.wait_ptr2 != 0 {
+                write_task_bytes(
+                    t.pml4,
+                    t.wait_ptr2,
+                    &sockaddr_in(sport, src_ip),
+                );
+            }
+            t.ctx.rax = n as u64;
+            t.wait_on = WaitOn::None;
+            t.wait_deadline = 0;
+            t.wait_ptr2 = 0;
+            t.state = TaskState::Runnable;
+            return;
+        }
+    }
+    // Queue one deep — an occupied slot drops the new datagram.
+    let Some(sock) = socks[si].as_mut() else { return };
+    if sock.q.is_none() {
+        let mut d = Dgram {
+            src: src_ip,
+            sport,
+            len: 0,
+            data: [0; MAX_DGRAM],
+        };
+        let n = core::cmp::min(p.len(), MAX_DGRAM);
+        d.data[..n].copy_from_slice(&p[..n]);
+        d.len = n as u16;
+        sock.q = Some(d);
+    }
+    wake_pollers(); // POLLIN may have just become true
+}
+
+/// Shared recv path for recvfrom() and read() on a socket fd —
+/// `sa` is the sockaddr_out VA (0 = none). Queued dgram or block;
+/// the waker fills buf/sa through our tables.
+fn udp_recv_or_block(
+    ctx: &mut UCtx,
+    si: usize,
+    buf: u64,
+    len: u64,
+    sa: u64,
+) -> u64 {
+    const EINTR_: u64 = (-4i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    // A datagram already in the ring? Drain once before looking.
+    crate::e1000::rx_drain();
+    let take = {
+        let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+        socks.get_mut(si).and_then(|s| s.as_mut()).and_then(|k| k.q.take())
+    };
+    if let Some(d) = take {
+        let n = core::cmp::min(len as usize, d.len as usize);
+        if n > 0 && !range_ok_w(buf, n as u64) {
+            return EFAULT;
+        }
+        if sa != 0 && !range_ok_w(sa, 16) {
+            return EFAULT;
+        }
+        // SAFETY: both ranges validated writable under the current
+        // (this task's) page table.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                d.data.as_ptr(),
+                buf as *mut u8,
+                n,
+            );
+        }
+        if sa != 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    sockaddr_in(d.sport, d.src).as_ptr(),
+                    sa as *mut u8,
+                    16,
+                );
+            }
+        }
+        return n as u64;
+    }
+    // Empty queue — validate the targets BEFORE sleeping, then
+    // block: the demux writes through OUR tables on arrival.
+    if !range_ok_w(buf, len.min(MAX_DGRAM as u64).max(1)) {
+        return EFAULT;
+    }
+    if sa != 0 && !range_ok_w(sa, 16) {
+        return EFAULT;
+    }
+    if t.pending != 0 {
+        return EINTR_; // a signal landed before we slept
+    }
+    t.wait_on = WaitOn::UdpRecv(si);
+    t.wait_ptr = buf;
+    t.wait_len = len.min(MAX_DGRAM as u64);
+    t.wait_ptr2 = sa;
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// socket(AF_INET, SOCK_DGRAM): a kernel UDP endpoint behind an OFD,
+/// so it dups/fork-shares like every other fd.
+pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
+    const EAFNOSUPPORT: u64 = (-97i64) as u64;
+    const ENFILE_: u64 = (-23i64) as u64;
+    if domain != 2 || ty != 2 {
+        return EAFNOSUPPORT;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+    let Some(si) = socks.iter().position(Option::is_none) else {
+        return ENFILE_;
+    };
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    let (Some(oi), Some(fi)) = (
+        ofds.iter().position(Option::is_none),
+        t.fds.iter().position(Option::is_none),
+    ) else {
+        return EMFILE;
+    };
+    socks[si] = Some(UdpSock { port: 0, q: None });
+    ofds[oi] = Some(OpenFile {
+        kind: FdKind::Udp(si),
+        pos: 0,
+        refs: 1,
+    });
+    t.fds[fi] = Some(oi as u8);
+    fi as u64
+}
+
+/// bind(fd, sockaddr_in, len): claim a local port for a socket —
+/// required before its datagrams demux. Port 0 picks an ephemeral.
+pub fn fd_bind(fd: u64, sa: u64, len: u64) -> u64 {
+    const EAFNOSUPPORT: u64 = (-97i64) as u64;
+    const EADDRINUSE: u64 = (-98i64) as u64;
+    const EADDRNOTAVAIL: u64 = (-99i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    if len < 8 {
+        return EINVAL;
+    }
+    if !range_ok(sa, 8) {
+        return EFAULT;
+    }
+    let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Udp(i)) => Some(*i),
+        _ => None,
+    }) else {
+        return EBADF;
+    };
+    let Some((port, _ip)) = parse_sockaddr(t.pml4, sa) else {
+        return EAFNOSUPPORT;
+    };
+    let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+    if socks[si].as_ref().is_none_or(|k| k.port != 0) {
+        // None can't happen (the OFD pins the slot); a nonzero port
+        // is a re-bind, which Linux refuses with EINVAL.
+        return EINVAL;
+    }
+    let p = if port == 0 {
+        let Some(e) = ephemeral_port() else {
+            return EADDRNOTAVAIL;
+        };
+        e
+    } else {
+        if socks.iter().flatten().any(|s| s.port == port) {
+            return EADDRINUSE;
+        }
+        port
+    };
+    if let Some(k) = socks[si].as_mut() {
+        k.port = p;
+    }
+    0
+}
+
+/// sendto(fd, buf, len, flags, sockaddr_in, alen): one datagram out —
+/// the destination MAC resolves via the ARP cache/gateway.
+pub fn fd_sendto(
+    fd: u64,
+    buf: u64,
+    len: u64,
+    _flags: u64,
+    sa: u64,
+    alen: u64,
+) -> u64 {
+    const EAFNOSUPPORT: u64 = (-97i64) as u64;
+    const EHOSTUNREACH: u64 = (-113i64) as u64;
+    const EADDRNOTAVAIL: u64 = (-99i64) as u64;
+    const EMSGSIZE: u64 = (-90i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Udp(i)) => Some(*i),
+        _ => None,
+    }) else {
+        return EBADF;
+    };
+    if sa == 0 || alen < 8 {
+        return EINVAL;
+    }
+    if !range_ok(sa, 8) {
+        return EFAULT;
+    }
+    if len == 0 {
+        return EINVAL;
+    }
+    // One ethernet frame: 14 + 20 + 8 + payload must fit a 1600B
+    // staging buffer in udp_tx.
+    if len > 1400 {
+        return EMSGSIZE;
+    }
+    if !range_ok(buf, len) {
+        return EFAULT;
+    }
+    let Some((dport, dip)) = parse_sockaddr(t.pml4, sa) else {
+        return EAFNOSUPPORT;
+    };
+    if !crate::e1000::net_up() {
+        return EHOSTUNREACH;
+    }
+    // Auto-bind on first send, like Linux.
+    let sport = {
+        let socks = unsafe { &mut *core::ptr::addr_of_mut!(UDPSOCKS) };
+        let Some(k) = socks[si].as_mut() else { return EBADF };
+        if k.port == 0 {
+            let Some(e) = ephemeral_port() else {
+                return EADDRNOTAVAIL;
+            };
+            k.port = e;
+        }
+        k.port
+    };
+    // Stage the payload kernel-side — the user buffer is read once.
+    let mut pay = [0u8; 1400];
+    // SAFETY: buf validated readable for len bytes under the
+    // current page table.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            buf as *const u8,
+            pay.as_mut_ptr(),
+            len as usize,
+        );
+    }
+    // Resolve the link-layer target: broadcast -> ff:ff; on-subnet
+    // -> ARP the host; off-subnet or unresolved -> the gateway.
+    let our = crate::e1000::our_ip();
+    let mask = crate::e1000::our_mask();
+    let mac = if dip == [0xff; 4] {
+        Some([0xff; 6])
+    } else {
+        let on_link = (0..4).all(|i| dip[i] & mask[i] == our[i] & mask[i]);
+        let r = if on_link {
+            crate::e1000::arp_resolve(dip)
+        } else {
+            None
+        };
+        r.or_else(crate::e1000::gw_mac)
+    };
+    let Some(mac) = mac else { return EHOSTUNREACH };
+    if !crate::e1000::udp_tx(mac, dip, sport, dport, &pay[..len as usize]) {
+        return (-5i64) as u64; // EIO — tx ring rejected
+    }
+    len
+}
+
+/// recvfrom(fd, buf, len, flags, sockaddr_out, alen): the next queued
+/// datagram, or block until the demux wakes us. alen is accepted for
+/// ABI shape — the sockaddr is always written at full 16 bytes when
+/// requested.
+pub fn fd_recvfrom(
+    ctx: &mut UCtx,
+    fd: u64,
+    buf: u64,
+    len: u64,
+    _flags: u64,
+    sa: u64,
+    _alen: u64,
+) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(si) = (match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Udp(i)) => Some(*i),
+        _ => None,
+    }) else {
+        return EBADF;
+    };
+    udp_recv_or_block(ctx, si, buf, len, sa)
 }
 
 /// getdents64(fd, dirp, count): emit linux_dirent64 records for the
@@ -1980,6 +2370,7 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
     }
     deliver_for(cur);
     poll_expire(); // timed poll waits age one tick
+    crate::e1000::rx_drain(); // feed socket queues from the live ring
     let Some(n) = pick_ready() else {
         // Nothing else runnable: if cur survived delivery it's the
         // only task — resume its (possibly redirected) ctx. If a
@@ -2014,6 +2405,25 @@ fn translate(pml4: u64, va: u64) -> Option<u64> {
     }
     let e = rd64(tab + 8 * ((va >> 12) & 0x1ff));
     if e & PRESENT == 0 || e & WRITE == 0 {
+        return None;
+    }
+    Some((e & PHYS_MASK) | (va & 0xfff))
+}
+
+/// Read-side translate: same walk without the WRITE leaf gate —
+/// for kernel reads of user memory (a read-only page is a legal
+/// read source even though no write path may touch it).
+fn translate_r(pml4: u64, va: u64) -> Option<u64> {
+    let mut tab = pml4;
+    for shift in [39u64, 30, 21] {
+        let e = rd64(tab + 8 * ((va >> shift) & 0x1ff));
+        if e & PRESENT == 0 || e & (1 << 7) != 0 {
+            return None;
+        }
+        tab = e & PHYS_MASK;
+    }
+    let e = rd64(tab + 8 * ((va >> 12) & 0x1ff));
+    if e & PRESENT == 0 {
         return None;
     }
     Some((e & PHYS_MASK) | (va & 0xfff))
@@ -2120,6 +2530,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         exit_status: 0,
         wait_on: WaitOn::None,
         wait_ptr: 0,
+        wait_ptr2: 0,
         wait_len: 0,
         wait_deadline: 0,
         // Dispositions inherit across fork (the Linux semantic);
