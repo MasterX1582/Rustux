@@ -147,6 +147,9 @@ const NR_READ: u64 = 0;
 const NR_WRITE: u64 = 1;
 const NR_OPEN: u64 = 2;
 const NR_CLOSE: u64 = 3;
+const NR_LSEEK: u64 = 8;
+const NR_DUP: u64 = 32;
+const NR_DUP2: u64 = 33;
 const NR_EXIT: u64 = 60;
 
 // errno values (negative returns per the kernel ABI).
@@ -179,6 +182,11 @@ extern "C" fn handle_syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         NR_WRITE => sys_write(a1, a2, a3),
         NR_OPEN => sys_open(a1, a2, a3),
         NR_CLOSE => user::fd_close(a1),
+        // off arrives as u64; the fd layer interprets it as i64 —
+        // negative seeks are how SEEK_CUR/END move backwards.
+        NR_LSEEK => user::fd_lseek(a1, a2 as i64, a3),
+        NR_DUP => user::fd_dup(a1),
+        NR_DUP2 => user::fd_dup2(a1, a2),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
     }

@@ -83,6 +83,142 @@ _start:
     je 7f
     inc %r15d
 7:
+    # fd3 is closed now — reopen motd.txt for the OFD section
+    mov $2, %eax
+    lea path(%rip), %rdi
+    xor %esi, %esi
+    xor %edx, %edx
+    syscall
+    cmp $3, %rax
+    je 71f
+    inc %r15d
+71:
+    mov %rax, %r14              # fresh fd3
+
+    # lseek(fd, 0, SEEK_END) -> filesize (51, trailing CRLF)
+    mov %r14, %rdi
+    xor %esi, %esi
+    mov $2, %edx
+    mov $8, %eax
+    syscall
+    cmp $51, %rax
+    je 8f
+    inc %r15d
+8:
+    # lseek(fd, 0, SEEK_SET) -> 0
+    mov %r14, %rdi
+    xor %esi, %esi
+    xor %edx, %edx
+    mov $8, %eax
+    syscall
+    test %rax, %rax
+    je 9f
+    inc %r15d
+9:
+    # read(fd, buf, 1) -> 1 byte 'M' at offset 0
+    mov %r14, %rdi
+    lea -256(%rsp), %rsi
+    mov $1, %edx
+    xor %eax, %eax
+    syscall
+    cmp $1, %rax
+    jne 91f
+    cmpb $0x4d, -256(%rsp)
+    je 10f
+91: inc %r15d
+10:
+    # dup(fd3) -> fd4, the shared OFD
+    mov %r14, %rdi
+    mov $32, %eax
+    syscall
+    cmp $4, %rax
+    je 11f
+    inc %r15d
+11:
+    mov %rax, %r13              # fd4
+    # read(fd4, buf, 1) -> 'O' — the dup shares pos (the real proof)
+    mov %r13, %rdi
+    lea -256(%rsp), %rsi
+    mov $1, %edx
+    xor %eax, %eax
+    syscall
+    cmp $1, %rax
+    jne 92f
+    cmpb $0x4f, -256(%rsp)
+    je 12f
+92: inc %r15d
+12:
+    # lseek(1, 0, SEEK_SET) -> ESPIPE — console is not seekable
+    mov $1, %edi
+    xor %esi, %esi
+    xor %edx, %edx
+    mov $8, %eax
+    syscall
+    cmp $-29, %rax
+    je 13f
+    inc %r15d
+13:
+    # dup2(fd3, 9) -> 9
+    mov %r14, %rdi
+    mov $9, %esi
+    mov $33, %eax
+    syscall
+    cmp $9, %rax
+    je 14f
+    inc %r15d
+14:
+    # close(fd4) then read(fd9,1) -> 'T': OFD survives with its
+    # remaining refs and still shares the offset
+    mov %r13, %rdi
+    mov $3, %eax
+    syscall
+    mov $9, %edi
+    lea -256(%rsp), %rsi
+    mov $1, %edx
+    xor %eax, %eax
+    syscall
+    cmp $1, %rax
+    jne 93f
+    cmpb $0x54, -256(%rsp)
+    je 15f
+93: inc %r15d
+15:
+    # lseek(fd, 100, SEEK_SET) -> 100 (past EOF is legal);
+    # read -> 0 (EOF)
+    mov %r14, %rdi
+    mov $100, %esi
+    xor %edx, %edx
+    mov $8, %eax
+    syscall
+    cmp $100, %rax
+    je 16f
+    inc %r15d
+16:
+    mov %r14, %rdi
+    lea -256(%rsp), %rsi
+    mov $1, %edx
+    xor %eax, %eax
+    syscall
+    test %rax, %rax
+    je 17f
+    inc %r15d
+17:
+    # dup(99) -> EBADF; dup2(fd3, 9999) -> EBADF (table never grows)
+    mov $99, %edi
+    mov $32, %eax
+    syscall
+    cmp $-9, %rax
+    je 18f
+    inc %r15d
+18:
+    mov %r14, %rdi
+    mov $9999, %esi
+    mov $33, %eax
+    syscall
+    cmp $-9, %rax
+    je 19f
+    inc %r15d
+19:
     # report + exit(failures)
     mov $1, %eax
     mov $1, %edi

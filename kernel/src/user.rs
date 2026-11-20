@@ -40,19 +40,30 @@ const KSTACK_SIZE: usize = 8192;
 const MAX_RANGES: usize = 8;
 
 /// Max fds per task — a hard bound so a hostile process cannot
-/// exhaust kernel space by opening forever (fd-exhaustion class).
+/// exhaust kernel space by opening forever or force the table to
+/// grow by a user-chosen size (the CVE-2025-39756 class: dup2 must
+/// never size an allocation from its target fd number).
 const MAX_FDS: usize = 16;
 
-/// What an fd refers to. File borrows the initrd archive — LOADER_DATA
-/// lives forever, so no refcount is needed; when files become heap
-/// objects the close/teardown refcount discipline kicks in.
-enum Fd {
+/// The object an fd slot names — Linux's inode-level identity.
+enum FdKind {
     /// fd 0: reads return EOF, writes fail EBADF.
     Stdin,
     /// fds 1/2: writes go to the serial ring, reads fail EBADF.
     Console,
-    /// Initrd-backed read-only file with a seek position.
-    File { data: &'static [u8], pos: usize },
+    /// Initrd-backed read-only file. Borrows LOADER_DATA — immortal,
+    /// so no refcount on the backing bytes is needed.
+    File(&'static [u8]),
+}
+
+/// An open file description — the Linux `struct file` analog. fds
+/// are only slots pointing here; dup'd slots share one OFD, which is
+/// why the seek offset lives here and not in the slot.
+struct OpenFile {
+    kind: FdKind,
+    pos: usize,
+    /// fd slots pointing at this OFD; freed at zero.
+    refs: usize,
 }
 
 /// A resident task: every resource it owns, in one owned bundle.
@@ -70,8 +81,10 @@ pub struct Task {
     /// (read() target buffers must be user-writable, like Linux).
     ranges: [(u64, u64, bool); MAX_RANGES],
     nranges: usize,
-    /// Open file descriptors; 0/1/2 are pre-seeded std streams.
-    fds: [Option<Fd>; MAX_FDS],
+    /// fd slots -> OFD indices; 0/1/2 pre-seeded std streams.
+    fds: [Option<u8>; MAX_FDS],
+    /// Open file descriptions shared across dup'd slots.
+    ofds: [Option<OpenFile>; MAX_FDS],
 }
 
 impl Task {
@@ -284,14 +297,23 @@ fn load(img: &[u8]) -> Option<Task> {
         kstack_top: 0,
         ranges: [(0, 0, false); MAX_RANGES],
         nranges: 0,
-        // std streams pre-seeded: 0=stdin (EOF), 1/2=serial console.
+        // std streams pre-seeded: 0=stdin (EOF), 1/2=serial console —
+        // each gets its own OFD, like separate opens of /dev/console.
         fds: {
-            const NONE: Option<Fd> = None;
+            const NONE: Option<u8> = None;
             let mut f = [NONE; MAX_FDS];
-            f[0] = Some(Fd::Stdin);
-            f[1] = Some(Fd::Console);
-            f[2] = Some(Fd::Console);
+            f[0] = Some(0);
+            f[1] = Some(1);
+            f[2] = Some(2);
             f
+        },
+        ofds: {
+            const NONE: Option<OpenFile> = None;
+            let mut o = [NONE; MAX_FDS];
+            o[0] = Some(OpenFile { kind: FdKind::Stdin, pos: 0, refs: 1 });
+            o[1] = Some(OpenFile { kind: FdKind::Console, pos: 0, refs: 1 });
+            o[2] = Some(OpenFile { kind: FdKind::Console, pos: 0, refs: 1 });
+            o
         },
     };
     if !load_inner(&mut t, &e, img) {
@@ -343,31 +365,35 @@ pub fn range_ok_w(va: u64, len: u64) -> bool {
 const EBADF: u64 = (-9i64) as u64;
 const EFAULT: u64 = (-14i64) as u64;
 const ENOENT: u64 = (-2i64) as u64;
+const EINVAL: u64 = (-22i64) as u64;
 const EMFILE: u64 = (-24i64) as u64;
+const ESPIPE: u64 = (-29i64) as u64;
+
+/// Resolve an fd slot to its OFD.
+fn ofd(t: &mut Task, fd: u64) -> Option<&mut OpenFile> {
+    let i = *t.fds.get(fd as usize)?.as_ref()?;
+    t.ofds.get_mut(i as usize)?.as_mut()
+}
 
 /// May `fd` be a write() target? Only the console streams.
 pub fn fd_is_console(fd: u64) -> bool {
-    matches!(
-        cur_mut().and_then(|t| t.fds.get(fd as usize)).and_then(|s| s.as_ref()),
-        Some(Fd::Console)
-    )
+    let Some(t) = cur_mut() else { return false };
+    matches!(ofd(t, fd).map(|o| &o.kind), Some(FdKind::Console))
 }
 
-/// read(fd, buf, len): File yields up to `len` bytes from its position;
-/// Stdin yields EOF; Console and closed slots are EBADF. The kernel
-/// validates that [buf, buf+n) is user-writable before copying —
-/// checked arithmetic, no partial writes past the gate.
+/// read(fd, buf, len): File yields up to `len` bytes from its shared
+/// position; Stdin yields EOF; Console and closed slots are EBADF.
+/// The kernel validates that [buf, buf+n) is user-writable before
+/// copying — checked arithmetic, no partial writes past the gate.
 pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
-    let Some(slot) = t.fds.get_mut(fd as usize) else {
-        return EBADF;
-    };
-    let Some(f) = slot.as_mut() else { return EBADF };
-    match f {
-        Fd::Stdin => 0,
-        Fd::Console => EBADF,
-        Fd::File { data, pos } => {
-            let avail = data.len() - *pos;
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    match &o.kind {
+        FdKind::Stdin => 0,
+        FdKind::Console => EBADF,
+        FdKind::File(data) => {
+            // pos may sit past EOF after lseek — saturating, not panicking.
+            let avail = data.len().saturating_sub(o.pos);
             let n = core::cmp::min(len as usize, avail);
             if n == 0 {
                 return 0;
@@ -379,20 +405,20 @@ pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
             // user range under the current (task) page table.
             unsafe {
                 core::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(*pos),
+                    data.as_ptr().add(o.pos),
                     buf as *mut u8,
                     n,
                 )
             };
-            *pos += n;
+            o.pos += n;
             n as u64
         }
     }
 }
 
 /// open(path, O_RDONLY): look `path` up in the initrd archive and
-/// install an Fd::File in the first free slot. ENOENT when absent,
-/// EMFILE at the table bound — both deterministic errnos.
+/// install a fresh OFD + fd slot. ENOENT when absent, EMFILE when
+/// either table is full — deterministic errnos, no allocation growth.
 pub fn fd_open(path: &[u8]) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
     let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
@@ -401,26 +427,110 @@ pub fn fd_open(path: &[u8]) -> u64 {
     let Some(data) = crate::cpio::find(arc, path) else {
         return ENOENT;
     };
-    for (i, slot) in t.fds.iter_mut().enumerate() {
-        if slot.is_none() {
-            *slot = Some(Fd::File { data, pos: 0 });
-            return i as u64;
-        }
-    }
-    EMFILE
+    let Some(oi) = t.ofds.iter().position(Option::is_none) else {
+        return EMFILE;
+    };
+    let Some(fi) = t.fds.iter().position(Option::is_none) else {
+        return EMFILE;
+    };
+    t.ofds[oi] = Some(OpenFile {
+        kind: FdKind::File(data),
+        pos: 0,
+        refs: 1,
+    });
+    t.fds[fi] = Some(oi as u8);
+    fi as u64
 }
 
-/// close(fd): clears the slot. Linux lets you close std streams, so
-/// we do too — the next use gets EBADF, which is correct.
+/// lseek(fd, off, whence): regular files only — Stdin/Console return
+/// ESPIPE like Linux devices. SEEK_SET/CUR/END with signed arithmetic;
+/// a negative result is EINVAL, seeking past EOF is legal and reads
+/// simply hit EOF (Linux semantics).
+pub fn fd_lseek(fd: u64, off: i64, whence: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    let FdKind::File(data) = &o.kind else {
+        return ESPIPE;
+    };
+    let base = match whence {
+        0 => 0i64,                       // SEEK_SET
+        1 => o.pos as i64,               // SEEK_CUR
+        2 => data.len() as i64,          // SEEK_END
+        _ => return EINVAL,
+    };
+    let Some(np) = base.checked_add(off) else {
+        return EINVAL;
+    };
+    if np < 0 {
+        return EINVAL;
+    }
+    o.pos = np as usize;
+    np as u64
+}
+
+/// dup(fd): lowest free slot names the same OFD — shared offset,
+/// exactly like Linux. EMFILE at the table bound.
+pub fn fd_dup(fd: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(&oi) = t.fds.get(fd as usize).and_then(|s| s.as_ref()) else {
+        return EBADF;
+    };
+    let Some(fi) = t.fds.iter().position(Option::is_none) else {
+        return EMFILE;
+    };
+    if let Some(o) = t.ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
+        o.refs += 1;
+    }
+    t.fds[fi] = Some(oi);
+    fi as u64
+}
+
+/// dup2(old, new): `new` names old's OFD, silently closing whatever it
+/// held first. A huge target can't grow the table — the CVE-2025-39756
+/// class is structurally dead here (fixed bound, EBADF).
+pub fn fd_dup2(old: u64, new: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(&oi) = t.fds.get(old as usize).and_then(|s| s.as_ref()) else {
+        return EBADF;
+    };
+    if new as usize >= MAX_FDS {
+        return EBADF;
+    }
+    if old == new {
+        return new;
+    }
+    // Release whatever `new` held, then point it at old's OFD.
+    if let Some(prev) = t.fds[new as usize].take() {
+        if let Some(o) = t.ofds.get_mut(prev as usize).and_then(|s| s.as_mut()) {
+            o.refs -= 1;
+            if o.refs == 0 {
+                t.ofds[prev as usize] = None;
+            }
+        }
+    }
+    if let Some(o) = t.ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
+        o.refs += 1;
+    }
+    t.fds[new as usize] = Some(oi);
+    new
+}
+
+/// close(fd): drops one reference; the OFD dies with its last slot.
+/// Linux lets you close std streams, so we do too — the next use
+/// gets EBADF, which is correct.
 pub fn fd_close(fd: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
-    match t.fds.get_mut(fd as usize) {
-        Some(slot @ Some(_)) => {
-            *slot = None;
-            0
+    let Some(slot) = t.fds.get_mut(fd as usize) else {
+        return EBADF;
+    };
+    let Some(oi) = slot.take() else { return EBADF };
+    if let Some(o) = t.ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
+        o.refs -= 1;
+        if o.refs == 0 {
+            t.ofds[oi as usize] = None;
         }
-        _ => EBADF,
     }
+    0
 }
 
 /// Load `img` as a task and enter it on ring 3. Returns false if the
