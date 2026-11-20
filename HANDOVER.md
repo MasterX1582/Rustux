@@ -723,3 +723,53 @@ the task model now supports fork/clone/wait as the next rung.
   pattern extended to the VM syscalls (functionally safe
   single-CPU, stacked-borrows UB in principle -- the same debt
   already tracked).
+
+## Real-binary ABI: FS base + exec stack + the glibc startup cluster (audit run-67)
+- Task.fs_base + arch_prctl(158): SET_FS validates 0-or-user-window
+  (kernel-space TLS is impossible), GET_FS writes through a gated
+  pointer. fs_base is restored on EVERY resume path -- launch,
+  switch_to, and resume_ctx (the tick path, same slot the fx image
+  needed in run-64a). Fork inherits it (Linux semantics), exec
+  resets it to 0 -- TLS dies with the image. It lives in Task, not
+  UCtx, so the 160B signal-frame layout is untouched (Linux doesn't
+  save fs in sigframes either).
+- exec/spawn build the REAL initial stack: strings top-down, 16B
+  AT_RANDOM (ChaCha20), then [argc][argv*][NULL][envp*][NULL][auxv
+  pairs: AT_PHDR/PHENT/PHNUM/PAGESZ/BASE/FLAGS/ENTRY/UIDs/HWCAP/
+  CLKTCK/SECURE/RANDOM][AT_NULL] -- rsp 16-aligned at entry.
+  sys_execve collects argv/envp into bounded kernel buffers (16/8/
+  256B caps, E2BIG) while the OLD address space is still mapped;
+  argv==NULL gets the binary name as argv0 (the CVE-2022-49264
+  discipline -- never argc<1).
+- ELF gains ET_DYN (static-PIE): a fixed LOAD_BIAS applied at parse
+  (entry + phdr va biased, saturating_add against hostile wrap);
+  glibc self-relocates from its own dynamic section, the kernel just
+  maps + jumps. LOAD_BIAS reuses the 0x5555... test base.
+- VMA truth fix the binary forced: ranges[] stored raw segment
+  bounds (p.va..mend) but pages span the page-aligned va0..va1 --
+  glibc's RELRO mprotect ENOMEM'd on the sub-page slack and aborted
+  ("cannot apply additional memory protection"). VMAs now record
+  the actually-mapped page range, matching Linux's page-aligned VMAs.
+  First real-binary bug caught -- exactly why this rung exists.
+- Syscall cluster: writev/readv (each iovec re-validated inside
+  sys_write/fd_read, cnt<=32), exit_group (= exit, no threads),
+  uname (zeroed 390B utsname), gettid/getpid + uid/gid family (0),
+  set_tid_address, set_robust_list (len==24 check), getrandom
+  (ChaCha20, <=4096B), ioctl -> ENOTTY, prlimit64 (RLIM_INFINITY),
+  clock_gettime/gettimeofday (apic::TICKS 100Hz), nanosleep +
+  clock_nanosleep via WaitOn::Timer + wait_deadline -- EINTR wakes
+  fill rem; clock_nanosleep's positive-errno ABI rides wait_ptr2,
+  TIMER_ABSTIME supported. Dispatch logs ENOSYS numbers (bring-up
+  aid: it surfaced glibc's rseq 334 + readlinkat 267 probes, both
+  tolerated).
+- realbin.c (gcc -static-pie hello): glibc _start consumed our auxv
+  stack, installed TLS via SET_FS, grew the heap via brk+malloc,
+  uname'd us, slept 20ms through nr 230, survived the RELRO
+  mprotect, and exited 42 via exit_group. 18 tasks, zero leak,
+  WSL x3 green.
+- Audit run-67 (scoped on the diff): 0 confirmed after the VMA fix;
+  rejected: 49264 argc0 (handled), 1070-class unchecked reads
+  (bounded collect + extent checks), SET_FS outside user window,
+  ET_DYN va wrap (saturating), UCtx/sigframe growth (not needed),
+  iovec under-validation (per-buffer gates), uname infoleak (zeroed);
+  NV-63-1 reentrant-statics debt extends to the new paths.
