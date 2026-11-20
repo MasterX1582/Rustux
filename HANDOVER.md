@@ -167,3 +167,30 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 - Audit run-50 (standard, privilege boundary + teardown): 1 confirmed
   (F-50-1, fixed in-diff); NV-50-1..5 carried/reframed; closes NV-47-2/3/4
   and NV-49-2.
+
+## fd table + initrd-as-rootfs (read/open/close) — run-51
+- `kernel/src/user.rs`: Task carries a bounded 16-slot fd table —
+  `Fd::{Stdin(EOF), Console(serial), File{initrd slice, pos}}`; slots
+  0/1/2 pre-seeded. Range table gains a writable bit: PT_LOAD PF_W and
+  the stack are writable, so read() targets are gated by range_ok_w —
+  the Linux rule that you can't read() into a read-only mapping.
+- `kernel/src/syscall.rs`: read(0)/open(2)/close(3) added; write now
+  gates on the fd OBJECT (fd_is_console) not the number 1/2 — so a
+  file landed in slot 1 still correctly gets EBADF on write (Linux
+  O_RDONLY semantics). sys_open does getname-style copy: byte-wise
+  under the pointer gate, 256B cap -> ENAMETOOLONG, O_RDONLY only,
+  leading '/' tolerated over the flat archive namespace.
+- `kernel/src/main.rs`: the cpio archive doubles as the read-only
+  rootfs — INITRD static set once (LOADER_DATA lives forever, so
+  Fd::File is a borrow, no refcount); non-ELF entries are data files
+  and skipped as tasks.
+- `kernel/user/fstest.S` + motd.txt prove the path end-to-end from
+  CPL3: open /motd.txt -> fd3, read>0 and echoed, read(1) EBADF,
+  ENOENT on missing, write-to-file EBADF, close 0 then EBADF —
+  exit(0). Third archive entry ran as a task; motd.txt skipped.
+- Frame accounting still exact: frames 18360 -> 18360 after reap.
+- Audit run-51 (standard): 0 confirmed; RC-51-1..4 rejected with
+  reasons (path wrap, TOCTOU, slot reuse, ../ traversal); NV-51-1..3
+  (file refcount when heap-backed, SMAP reliance for copy_to_user,
+  fd-sharing rules for fork/clone). cve.now: CVE-2025-68814 drove the
+  getname/cleanup discipline.
