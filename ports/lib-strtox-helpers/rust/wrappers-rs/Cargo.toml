@@ -19,3 +19,5 @@ lto = true
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[workspace]

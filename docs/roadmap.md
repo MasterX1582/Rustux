@@ -183,9 +183,25 @@ boot-proofed under QEMU. Audit run-16: 14 findings, all fixed at
 generator-script level (extract_*.py assert their replace patterns;
 crafted caller-state degrades to scratch/warn/-errno, all
 pointer-chasing loops carry `MAS_ITER_LIMIT`-style caps).
-In flight (parallel port jobs): `lib/assoc_array.c`,
-`lib/generic-radix-tree.c`+`lib/interval_tree.c`, `lib/siphash.c`,
-`lib/kstrtox.c`+`lib/hexdump.c`+`lib/string_helpers.c`.
+Wave-1 extras (parallel port jobs, delegated): `lib/crypto/siphash.c`
+(4815 cases) — source-faithful package landed as a fixture; `klib::hash`
+already held an identical impl from `ports/lib-hash`.
+`lib/generic-radix-tree.c`+`lib/interval_tree.c` (899 cases) →
+`klib::genradix` + `klib::interval_tree` — genradix via caller-owned
+`GAlloc` arena with an intrusive freelist through `children[0]`;
+interval_tree as klib's first `Augment` consumer on `klib::rbtree`
+(generic-over-`ItData` parallel `&mut [u64]` slices standing in for the
+`INTERVAL_TREE_DEFINE` macro template). Both boot-proofed; audit
+run-18 clean.
+`lib/assoc_array.c` (1383 cases, incl. seed2 alloc-failure mask
+covering every `-ENOMEM` path) → `klib::assoc_array` (keyring edit-script
+state machine; port fixed gen_key modulus, split-node post-increment,
+and destroy_subtree off-by-one vs the model).
+`lib/kstrtox.c`+`lib/hexdump.c`+`lib/string_helpers.c` (11667 cases) —
+diff-green port including the glibc `snprintf(size>PTRDIFF_MAX)` quirk
+in `string_get_size`; adoption pending, with merges into
+`klib::string` (sysfs_streq/match_string/strim/upper/lower) and
+`klib::seqbuf` (hex_dump overlap) to be reconciled, not duplicated.
 
 ### Wave 2 — core services (custom shims needed)
 
