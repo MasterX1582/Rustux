@@ -14,6 +14,7 @@ use uefi::mem::memory_map::{MemoryMap, MemoryType};
 use uefi::prelude::*;
 
 mod fbcon;
+mod mm;
 mod uart;
 
 /// printk-style console fan-out: every write goes to COM1 and, when the GOP
@@ -762,6 +763,68 @@ fn main() -> Status {
         largest.0 + largest.1 * 4096,
         largest.1 / 256
     );
+
+    // Own page tables: carve table frames from the head of the largest
+    // ConventionalMemory region, build a 4-level identity map, switch CR3.
+    // The carve stays reserved so the allocator never hands it out; our image
+    // and stack live in LOADER/BOOT_SERVICES ranges, which are never pooled.
+    let ngib = mm::map_gib(&mmap);
+    let carve = (largest.0 + mm::PAGE - 1) & !(mm::PAGE - 1);
+    let carve_end = carve + mm::table_frames(ngib) * mm::PAGE;
+    let pml4 = mm::build_identity_map(&mmap, carve);
+    mm::load_cr3(pml4);
+    let _ = writeln!(
+        con,
+        "linux-rust: own page tables active (identity map, {} GiB, {} table frames at {:#x})",
+        ngib,
+        mm::table_frames(ngib),
+        carve
+    );
+
+    // Seed the frame allocator with every conventional frame outside the
+    // carve, then prove alloc/write/free on real frames.
+    let mut fa = mm::FrameAlloc::new();
+    let reserved = [(carve, carve_end)];
+    for d in mmap.entries() {
+        if d.ty == MemoryType::CONVENTIONAL {
+            fa.add_range(
+                d.phys_start,
+                d.phys_start + d.page_count * mm::PAGE,
+                &reserved,
+            );
+        }
+    }
+    let free0 = fa.free_count();
+    let (mut ok, mut got) = (true, [0u64; 3]);
+    for (i, g) in got.iter_mut().enumerate() {
+        match fa.alloc() {
+            Some(a) => {
+                *g = a;
+                // SAFETY: `a` is an owned free frame inside the identity map.
+                unsafe { (a as *mut u64).write_volatile(0xdeadbeef + i as u64) };
+            }
+            None => ok = false,
+        }
+    }
+    for (i, &a) in got.iter().enumerate() {
+        // SAFETY: frames still owned until free_frame below.
+        if a == 0 || unsafe { (a as *const u64).read_volatile() } != 0xdeadbeef + i as u64 {
+            ok = false;
+        }
+    }
+    for &a in &got {
+        if a != 0 {
+            fa.free_frame(a);
+        }
+    }
+    let _ = writeln!(
+        con,
+        "linux-rust: klib::mm: {} frames free ({} MiB), alloc/rw/free proof {}",
+        free0,
+        free0 / 256,
+        ok
+    );
+    assert!(ok && fa.free_count() == free0 && free0 > 0);
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
