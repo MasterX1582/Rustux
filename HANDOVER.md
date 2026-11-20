@@ -585,3 +585,43 @@ the task model now supports fork/clone/wait as the next rung.
   clean. Not attributed to poll (fputest's wait4 takes the
   blocked-wake path, not the changed collect path); flagged here
   for the next runs to confirm or chase.
+
+## UDP sockets (commit pending, audit run-64)
+
+- Syscalls: socket(41) AF_INET/SOCK_DGRAM, bind(49) sockaddr_in,
+  sendto(44), recvfrom(45). Args 4-6 now ride r10/r8/r9 out of the
+  saved UCtx (arg4 is r10, never rcx -- the CPU-clobbered ret addr).
+- A socket is an OFD kind (FdKind::Udp -> UDPSOCKS[8]): it dups and
+  fork-shares like every fd; the endpoint dies with its last fd.
+  bind claims a local port (0 -> ephemeral from 49152), re-bind is
+  EINVAL, conflicts EADDRINUSE. First sendto auto-binds like Linux.
+- The NIC got a live path: net_live() programs a persistent RX ring
+  after the selftests (last rx_init wins RDBAL); rx_drain() runs in
+  tick() plus once inside recvfrom before it sleeps. drain_desc
+  answers ARP who-has for our IP, hands ARP replies to arp_resolve,
+  and demuxes verified IPv4/UDP (for_us dst, checksum honored) into
+  user::udp_rx -> socket queue or straight into a blocked recvfrom
+  through the sleeper's tables -- the pipe-wake trick again.
+- sendto resolves the link target: broadcast ff:ff, on-subnet ARPs
+  the host (arp_resolve spins the live ring, other traffic keeps
+  demuxing), off-subnet or unresolved -> the cached gateway MAC.
+  Payload stages through a bounded kernel buffer; len>1400 EMSGSIZE.
+- recvfrom sockaddr_out is a fully-zeroed 16-byte sockaddr_in
+  (CVE-2021-47597 class closed by construction). Socket lifetime is
+  synchronous -- no deferred-cleanup UAF class (CVE-2024-56642).
+- Bug found + fixed by this rung: tx_once kmalloc'd a fresh 4KiB TX
+  ring per frame and never freed it -- invisible while only selftests
+  transmitted (leak inside the boot baseline), exposed the moment
+  socket traffic ran inside the measured window: 8 frames = 8 tx
+  calls. TX_PAGE is now persistent; zero-leak restored.
+- translate split: translate_r drops the WRITE leaf gate for read
+  paths (read_task_u/parse_sockaddr) -- reads of a read-only page
+  must succeed; write paths keep the WRITE requirement.
+- udptest: bind/EADDRINUSE/EAFNOSUPPORT, two real DNS round-trips to
+  QEMU slirp's resolver (10.0.2.3:53) -- one via poll(8s)->POLLIN
+  ->recvfrom, one via blocked recvfrom woken by the demux; txid echo,
+  QR bit, sockaddr family/port all verified. exit(0), zero leak.
+- Audit run-64 (quick): 0 confirmed after self-review fixes
+  (bind re-bind, translate_r, tx page), 6 rejected, NV-64-1..4
+  (one-dgram queue depth, no connect/send/recv aliases or
+  getsockname, no O_NONBLOCK, sequential ephemeral ports).
