@@ -54,6 +54,10 @@ enum FdKind {
     /// Initrd-backed read-only file. Borrows LOADER_DATA — immortal,
     /// so no refcount on the backing bytes is needed.
     File(&'static [u8]),
+    /// The flat archive root. pos is the index of the next archive
+    /// entry getdents64 should emit — Linux dir offsets are opaque
+    /// cookies, ours just happens to be an index.
+    Dir,
 }
 
 /// An open file description — the Linux `struct file` analog. fds
@@ -368,6 +372,8 @@ const ENOENT: u64 = (-2i64) as u64;
 const EINVAL: u64 = (-22i64) as u64;
 const EMFILE: u64 = (-24i64) as u64;
 const ESPIPE: u64 = (-29i64) as u64;
+const ENOTDIR: u64 = (-20i64) as u64;
+const EISDIR: u64 = (-21i64) as u64;
 
 /// Resolve an fd slot to its OFD.
 fn ofd(t: &mut Task, fd: u64) -> Option<&mut OpenFile> {
@@ -391,6 +397,7 @@ pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
     match &o.kind {
         FdKind::Stdin => 0,
         FdKind::Console => EBADF,
+        FdKind::Dir => EISDIR,
         FdKind::File(data) => {
             // pos may sit past EOF after lseek — saturating, not panicking.
             let avail = data.len().saturating_sub(o.pos);
@@ -416,16 +423,22 @@ pub fn fd_read(fd: u64, buf: u64, len: u64) -> u64 {
     }
 }
 
-/// open(path, O_RDONLY): look `path` up in the initrd archive and
-/// install a fresh OFD + fd slot. ENOENT when absent, EMFILE when
-/// either table is full — deterministic errnos, no allocation growth.
+/// open(path, O_RDONLY): "" and "." name the archive root (a Dir
+/// OFD); anything else resolves through cpio::find. ENOENT when
+/// absent, EMFILE when either table is full — deterministic errnos,
+/// no allocation growth.
 pub fn fd_open(path: &[u8]) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
-    let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
-        return ENOENT;
-    };
-    let Some(data) = crate::cpio::find(arc, path) else {
-        return ENOENT;
+    let kind = if path.is_empty() || path == b"." {
+        FdKind::Dir
+    } else {
+        let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
+            return ENOENT;
+        };
+        let Some(data) = crate::cpio::find(arc, path) else {
+            return ENOENT;
+        };
+        FdKind::File(data)
     };
     let Some(oi) = t.ofds.iter().position(Option::is_none) else {
         return EMFILE;
@@ -434,7 +447,7 @@ pub fn fd_open(path: &[u8]) -> u64 {
         return EMFILE;
     };
     t.ofds[oi] = Some(OpenFile {
-        kind: FdKind::File(data),
+        kind,
         pos: 0,
         refs: 1,
     });
@@ -449,6 +462,15 @@ pub fn fd_open(path: &[u8]) -> u64 {
 pub fn fd_lseek(fd: u64, off: i64, whence: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
+    // A directory may only be rewound to the start — dir offsets are
+    // opaque cookies, so a nonzero seek target is meaningless here.
+    if matches!(o.kind, FdKind::Dir) {
+        if whence == 0 && off == 0 {
+            o.pos = 0;
+            return 0;
+        }
+        return EINVAL;
+    }
     let FdKind::File(data) = &o.kind else {
         return ESPIPE;
     };
@@ -531,6 +553,70 @@ pub fn fd_close(fd: u64) -> u64 {
         }
     }
     0
+}
+
+/// getdents64(fd, dirp, count): emit linux_dirent64 records for the
+/// archive entries from `pos` on, filling at most `count` bytes. The
+/// whole user buffer is validated writable up front — a record is
+/// only ever written inside it, and never partially (each record's
+/// reclen is checked against the remaining space before the write).
+/// EINVAL when count can't hold even the next record; 0 at the end.
+pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
+    const MAX: u64 = 4096;
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    if !matches!(o.kind, FdKind::Dir) {
+        return ENOTDIR;
+    }
+    if count == 0 || count > MAX {
+        return EINVAL;
+    }
+    if !range_ok_w(buf, count) {
+        return EFAULT;
+    }
+    let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
+        return 0;
+    };
+    let mut off = 0usize;
+    let mut idx = o.pos;
+    for (name, _data) in crate::cpio::entries(arc).skip(o.pos) {
+        // linux_dirent64: ino@0 u64, off@8 u64, reclen@16 u16,
+        // type@18 u8, name@19 NUL-terminated — padded to 8.
+        let reclen = (19 + name.len() + 1 + 7) & !7;
+        if off + reclen > count as usize {
+            if off == 0 {
+                return EINVAL; // buffer can't hold even one record
+            }
+            break;
+        }
+        let base = buf + off as u64;
+        // SAFETY: [buf, buf+count) is validated writable user memory
+        // and off+reclen <= count. write_unaligned for the packed
+        // fields; the name copy stays inside reclen by construction.
+        unsafe {
+            ((base) as *mut u64).write_unaligned(idx as u64 + 1);
+            ((base + 8) as *mut u64).write_unaligned(idx as u64 + 1);
+            ((base + 16) as *mut u16).write_unaligned(reclen as u16);
+            ((base + 18) as *mut u8).write(8); // DT_REG
+            core::ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                (base + 19) as *mut u8,
+                name.len(),
+            );
+            ((base + 19 + name.len() as u64) as *mut u8).write(0);
+            // Zero the pad tail so kernel stack garbage can't leak.
+            let pad_end = off + reclen;
+            let mut z = off + 19 + name.len() + 1;
+            while z < pad_end {
+                ((buf + z as u64) as *mut u8).write(0);
+                z += 1;
+            }
+        }
+        off += reclen;
+        idx += 1;
+    }
+    o.pos = idx;
+    off as u64
 }
 
 /// Load `img` as a task and enter it on ring 3. Returns false if the

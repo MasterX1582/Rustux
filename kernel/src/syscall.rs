@@ -150,6 +150,7 @@ const NR_CLOSE: u64 = 3;
 const NR_LSEEK: u64 = 8;
 const NR_DUP: u64 = 32;
 const NR_DUP2: u64 = 33;
+const NR_GETDENTS: u64 = 217;
 const NR_EXIT: u64 = 60;
 
 // errno values (negative returns per the kernel ABI).
@@ -187,6 +188,7 @@ extern "C" fn handle_syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         NR_LSEEK => user::fd_lseek(a1, a2 as i64, a3),
         NR_DUP => user::fd_dup(a1),
         NR_DUP2 => user::fd_dup2(a1, a2),
+        NR_GETDENTS => user::fd_getdents(a1, a2, a3),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
     }
