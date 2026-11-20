@@ -169,9 +169,17 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
     }
     let mut u = unsafe { Uart16550::new(COM1) };
     u.init();
+    // A fault from CPL3 is a task bug, not a kernel bug: the task
+    // dies with the signal's bare-signo wait status and the kernel
+    // keeps running. Without this, any user memory error halts the
+    // whole machine — and crafted sigframes/int3/ud2 would be
+    // trivial kernel DoS primitives (the CVE-2018-8897 lesson:
+    // user-controlled exception delivery must never outrun the
+    // kernel's expectations).
+    let user_fault = f.cs & 3 == 3;
     match f.vec {
-        // #UD boot proof: report and skip the 2-byte ud2.
-        6 => {
+        // #UD boot proof: report and skip the 2-byte ud2 (kernel only).
+        6 if !user_fault => {
             let _ = writeln!(
                 u,
                 "rustux: cpu: caught #UD rip={:#x} -- skipping",
@@ -179,8 +187,9 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
             );
             f.rip += 2;
         }
-        // #BP/int3 resumes in place.
-        3 => {
+        // #BP/int3 resumes in place (kernel only — a user int3 would
+        // otherwise re-fault forever).
+        3 if !user_fault => {
             let _ = writeln!(u, "rustux: cpu: caught #BP rip={:#x} -- resuming", f.rip);
         }
         v => {
@@ -194,6 +203,28 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
             let cr2: u64;
             // SAFETY: reading cr2 is always valid at CPL0.
             unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2) };
+            if user_fault {
+                // Map the vector to the Linux signal the task dies
+                // with. Kernel-integrity exceptions (#DF/#MC/#CP,
+                // NMI) still halt — a task-fault teardown is not a
+                // trustworthy answer to a double fault.
+                let signo = match v {
+                    1 | 3 => 5,                      // #DB/#BP -> SIGTRAP
+                    6 => 4,                          // #UD    -> SIGILL
+                    0 | 4 | 7 | 16 | 19 => 8,        // #DE/#OF/#NM/#MF/#XM -> SIGFPE
+                    5 | 17 => 7,                     // #BR/#AC -> SIGBUS
+                    10 | 11 | 12 | 13 | 14 | 20 => 11, // #TS/#NP/#SS/#GP/#PF/#VE -> SIGSEGV
+                    _ => 0,
+                };
+                if signo != 0 {
+                    let _ = writeln!(
+                        u,
+                        "rustux: cpu: user fault {} rip={:#x} err={:#x} cr2={:#x} -> sig {}",
+                        name, f.rip, f.err, cr2, signo
+                    );
+                    crate::user::fault_die(signo);
+                }
+            }
             let _ = writeln!(
                 u,
                 "rustux: cpu: EXCEPTION {} rip={:#x} err={:#x} cs={:#x} cr2={:#x} -- halting",
@@ -292,8 +323,18 @@ stub_err!(stub_pf, 14);
 stub_err!(stub_ac, 17);
 stub_err!(stub_cp, 21);
 stub_err!(stub_vc, 29);
-stub!(stub_ud, 6);
+stub!(stub_de, 0);
+stub!(stub_db, 1);
+stub!(stub_nmi, 2);
 stub!(stub_bp, 3);
+stub!(stub_of, 4);
+stub!(stub_br, 5);
+stub!(stub_ud, 6);
+stub!(stub_nm, 7);
+stub!(stub_mf, 16);
+stub!(stub_mc, 18);
+stub!(stub_xm, 19);
+stub!(stub_ve, 20);
 
 /// Timer IRQ — the only vector that may switch tasks, so it can't
 /// share `dispatch`: that path only saves caller-saved registers,
@@ -423,16 +464,26 @@ pub fn init() {
         core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nostack, preserves_flags));
     }
 
-    let gates: [(usize, u64, u8); 16] = [
+    let gates: [(usize, u64, u8); 26] = [
+        (0, stub_de as *const () as u64, 0),
+        (1, stub_db as *const () as u64, 0),
+        (2, stub_nmi as *const () as u64, 0),
         (3, stub_bp as *const () as u64, 0),
+        (4, stub_of as *const () as u64, 0),
+        (5, stub_br as *const () as u64, 0),
         (6, stub_ud as *const () as u64, 0),
+        (7, stub_nm as *const () as u64, 0),
         (8, stub_df as *const () as u64, 1), // IST1: dedicated DF stack
         (10, stub_ts as *const () as u64, 0),
         (11, stub_np as *const () as u64, 0),
         (12, stub_ss as *const () as u64, 0),
         (13, stub_gp as *const () as u64, 0),
         (14, stub_pf as *const () as u64, 0),
+        (16, stub_mf as *const () as u64, 0),
         (17, stub_ac as *const () as u64, 0),
+        (18, stub_mc as *const () as u64, 0),
+        (19, stub_xm as *const () as u64, 0),
+        (20, stub_ve as *const () as u64, 0),
         (21, stub_cp as *const () as u64, 0),
         (29, stub_vc as *const () as u64, 0),
         (0xf0, stub_irq_timer as *const () as u64, 0),

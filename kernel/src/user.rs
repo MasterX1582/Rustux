@@ -1529,6 +1529,23 @@ fn die_signal(signo: u64) -> ! {
     task_exit_inner()
 }
 
+/// A user-mode CPU fault kills the task instead of halting the
+/// kernel — the signo becomes the wait status. Called from
+/// report_frame on the faulting task's own kstack; never returns —
+/// the whole exception frame is abandoned with the task.
+pub fn fault_die(signo: u64) -> ! {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if cur == usize::MAX {
+        // No task to kill — this can't legitimately happen from
+        // CPL3 code, so treat it as a kernel bug and halt.
+        loop {
+            // SAFETY: terminal halt.
+            unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) }
+        }
+    }
+    die_signal(signo)
+}
+
 /// Shared exit/signal-death teardown: mark Exited, wake a matching
 /// wait4 parent (status + pid), SIGCHLD the parent if it lives,
 /// orphan children, then switch away or unwind.
