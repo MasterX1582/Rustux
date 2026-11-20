@@ -488,3 +488,37 @@ the task model now supports fork/clone/wait as the next rung.
   so hostile user data can never shape an fxrstor pointer;
   CR4.OSXMMEXCPT enables #XM which fault_die already maps to
   SIGFPE).
+
+
+## fault-driven signal delivery (commit pending, audit run-61)
+
+- User exceptions used to die unconditionally via fault_die -- a
+  task with a SIGSEGV handler never got control, which any serious
+  userspace needs (stack-growth handlers, GCs, JITs).
+- The generic exception `dispatch` tail now saves ALL 15 GPRs (was
+  9 caller-saved) and passes a `SavedRegs*` to report_frame; the
+  interrupted rcx/rbp stay in their push slots above the frame.
+  report_frame rebuilds the complete interrupted UCtx and hands it
+  to `user::fault_signal`.
+- fault_signal pends the signo and runs the SAME maybe_deliver
+  frame-push/redirect a kill() gets -- [signo][UCtx] on the task's
+  own stack, all existing sigreturn hardening applies verbatim --
+  then cpu.rs splices (handler rip, frame rsp, signo rdi) into the
+  trap frame so iretq lands in the handler. sigreturn restores the
+  fault-time ctx and re-faults if unfixed, exactly like Linux.
+  DFL/IGN-on-synchronous dies via task_exit_inner (force_sig).
+- sigfault.S proves the whole loop: caught handler runs with
+  rdi=SIGSEGV, patches saved rip past the faulting movb in its own
+  sigframe, sigreturn RESUMES the task; a SIG_DFL-reset fork child
+  still dies bare-11. exit(0), zero leak.
+- Fixed along the way: MAX_TASKS 16->32 (13 queued + accumulated
+  test children intermittently ENOMEM'd sigfault's fork) and a
+  hardcoded live[16] in pick_next that panicked at index 16 --
+  caught by the expanded table, not by tests.
+- Exits now print the pid (`user: pid N exit(c)`) -- anonymous
+  exits made this whole debug cycle blind.
+- Audit run-61 (standard): 0 confirmed, 6 rejected, NV-61-1..3
+  (no si_addr/si_code/siginfo to the handler; a pending lower
+  signal delivers ahead of the fault signal, fault stays pending --
+  acceptable ordering; nested fault frames bounded only by the
+  user stack, as Linux).
