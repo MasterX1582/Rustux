@@ -16,6 +16,7 @@ use uefi::prelude::*;
 mod acpi;
 mod apic;
 mod cpu;
+mod e1000;
 mod fbcon;
 mod kalloc;
 mod kbd;
@@ -891,6 +892,11 @@ fn main() -> Status {
     // This is the table future drivers (e1000, AHCI, virtio) bind on.
     let n_pci = pci::scan();
     kprintln!(con, "rustux: pci: {n_pci} functions on the bus");
+    // Driver binding step 1: the e1000e QEMU attaches — enable the
+    // device and prove BAR0 MMIO by reading its station MAC back.
+    if e1000::probe().is_none() {
+        kprintln!(con, "rustux: e1000: no 82574L on the bus");
+    }
 
     if lapic {
         // SAFETY: IDT gates for 0xf0/0xf1/0xff are installed; dispatch

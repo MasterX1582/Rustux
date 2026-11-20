@@ -25,6 +25,63 @@ pub fn read32(bus: u8, dev: u8, f: u8, off: u8) -> u32 {
     }
 }
 
+pub fn write32(bus: u8, dev: u8, f: u8, off: u8, v: u32) {
+    // SAFETY: CF8/CFC config write; callers pick architected offsets.
+    unsafe {
+        pio::outl(CFG_ADDR, cfg_addr(bus, dev, f, off));
+        pio::outl(CFG_DATA, v);
+    }
+}
+
+fn read16_pub(bus: u8, dev: u8, f: u8, off: u8) -> u16 {
+    read16(bus, dev, f, off)
+}
+
+/// Locate a function by vendor/device ID. Returns (bus, dev, fn).
+pub fn find(vendor: u16, device: u16) -> Option<(u8, u8, u8)> {
+    for bus in 0..=255u8 {
+        for dev in 0..32u8 {
+            let mut f = 0u8;
+            loop {
+                let id = read32(bus, dev, f, 0);
+                if id == vendor as u32 | (device as u32) << 16 {
+                    return Some((bus, dev, f));
+                }
+                let v = id as u16;
+                if v == 0xffff || v == 0 {
+                    break;
+                }
+                let hdr = read8(bus, dev, f, 0x0e);
+                if (f == 0 && hdr & 0x80 == 0) || f == 7 {
+                    break;
+                }
+                f += 1;
+            }
+        }
+    }
+    None
+}
+
+/// Command-register bits the PCI spec defines.
+pub const CMD_MEM_SPACE: u16 = 1 << 1;
+pub const CMD_BUS_MASTER: u16 = 1 << 2;
+
+/// Read-modify-write OR of command-register bits.
+pub fn command_or(bus: u8, dev: u8, f: u8, bits: u16) -> u16 {
+    let v = read16_pub(bus, dev, f, 0x04);
+    let nv = v | bits;
+    if nv != v {
+        let w = read32(bus, dev, f, 0x04) & !(0xffff) | nv as u32;
+        write32(bus, dev, f, 0x04, w);
+    }
+    nv
+}
+
+/// Raw BAR slot value (not decoded).
+pub fn bar_raw(bus: u8, dev: u8, f: u8, slot: u8) -> u32 {
+    read32(bus, dev, f, 0x10 + slot * 4)
+}
+
 fn read16(bus: u8, dev: u8, f: u8, off: u8) -> u16 {
     (read32(bus, dev, f, off) >> ((off as u32 & 2) * 8)) as u16
 }
