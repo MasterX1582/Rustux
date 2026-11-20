@@ -340,6 +340,12 @@ pub fn mcast_mac(addr: &[u8; 16]) -> [u8; 6] {
     [0x33, 0x33, addr[12], addr[13], addr[14], addr[15]]
 }
 
+/// True if the ICMPv6 checksum residual is valid — one's-complement
+/// arithmetic has two zeros; a correct packet can fold to 0xffff.
+pub fn csum6_ok(c: u16) -> bool {
+    c == 0 || c == 0xffff
+}
+
 /// ICMPv6 checksum over pseudo-header + message (RFC 4443).
 pub fn csum6(src: &[u8; 16], dst: &[u8; 16], plen: u32, next: u8, msg: &[u8]) -> u16 {
     let mut tail = [0u8; 8];
@@ -409,8 +415,8 @@ pub fn build_ns(
     us: &[u8; 16],
     target: &[u8; 16],
 ) -> usize {
-    // eth(14) + ip6(40) + icmp(4+4+16) + slla(8) = 82
-    if f.len() < 82 {
+    // eth(14) + ip6(40) + icmp(4+4+16) + slla(8) = 86
+    if f.len() < 86 {
         return 0;
     }
     let mc = solicited_node(target);
@@ -426,7 +432,7 @@ pub fn build_ns(
     f[ic + 25] = 1;
     f[ic + 26..ic + 32].copy_from_slice(&src_mac);
     finish_icmp6(f, us, &mc, ic, 32);
-    82
+    86
 }
 
 /// Ethernet + IPv6 + ICMPv6 Neighbor Advertisement (S|O flags, TLLA option).
@@ -437,7 +443,7 @@ pub fn build_na(
     us: &[u8; 16],
     dst: &[u8; 16],
 ) -> usize {
-    if f.len() < 82 {
+    if f.len() < 86 {
         return 0;
     }
     let at = put_eth_v6(f, dst_mac, src_mac);
@@ -452,7 +458,7 @@ pub fn build_na(
     f[ic + 25] = 1;
     f[ic + 26..ic + 32].copy_from_slice(&src_mac);
     finish_icmp6(f, us, dst, ic, 32);
-    82
+    86
 }
 
 /// Ethernet + IPv6 + ICMPv6 echo (ty 128 request / 129 reply, hop 64).

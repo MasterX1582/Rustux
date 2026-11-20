@@ -895,9 +895,17 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                     if let Some(ip) = crate::net::parse_ipv6(&buf[14..]) {
                         let c = crate::net::csum6(&ip.src, &ip.dst,
                             ip.payload.len() as u32, ip.next, ip.payload);
+                        let fld = if ip.payload.len() >= 4 {
+                            u16::from_be_bytes(
+                                [ip.payload[2], ip.payload[3]])
+                        } else { 0 };
+                        let tw = if ip.payload.len() >= 22 {
+                            u16::from_be_bytes(
+                                [ip.payload[22], ip.payload[23]])
+                        } else { 0 };
                         crate::log::printk(format_args!(
-                            "rustux: ipv6: dbg nx={} hop={} pl={} ck={c:#x}                              ty={} len={len}", ip.next, ip.hop,
-                            ip.payload.len(),
+                            "rustux: ipv6: dbg nx={} hop={} pl={} ck={c:#x}                              fld={fld:#x} tgtlw={tw:#x} ty={} len={len}",
+                            ip.next, ip.hop, ip.payload.len(),
                             if ip.payload.len() >= 1 { ip.payload[0] } else { 0 }));
                         crate::log::drain(con);
                     } else {
@@ -909,10 +917,10 @@ pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 }
                 if let Some(ip) = crate::net::parse_ipv6(&buf[14..]) {
                     if ip.next == crate::net::NH_ICMPV6
-                        && crate::net::csum6(
+                        && crate::net::csum6_ok(crate::net::csum6(
                             &ip.src, &ip.dst,
                             ip.payload.len() as u32, ip.next, ip.payload,
-                        ) == 0
+                        ))
                     {
                         if let Some(m) = crate::net::parse_icmp6(ip.payload)
                         {
