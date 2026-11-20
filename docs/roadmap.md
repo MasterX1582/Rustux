@@ -278,3 +278,36 @@ wire parser):
 - **Rust buys us the memory-safety half of the CVE landscape for free;
   the logic half (validation, locking, arithmetic) still has to be
   engineered** — that's what the per-wave audits are for.
+
+## Licensing
+
+Rustux is **GPL-2.0-only** (`LICENSE`, decided 2026-11): it carries
+line-level ports of GPL-2.0-only kernel code, so the combined work is
+GPL-2.0 regardless — and matching the kernel's designation keeps
+two-way code sharing possible. New file headers should carry
+`SPDX-License-Identifier: GPL-2.0-only`. Where a unit is wholly
+Rustux-original (not a port), `GPL-2.0-only OR Apache-2.0` dual
+licensing is allowed to preserve future relicensing flexibility.
+
+## Upstream-process conventions (kernel.org coding-assistants doc)
+
+If we ever send anything to Linux upstream or kernel-adjacent lists:
+AI agents must never add `Signed-off-by` (only a human certifies the
+DCO); `Co-Authored-By`/tool attribution is fine. Bug-fix protocol per
+docs.kernel.org/process/coding-assistants.html: reproduce first, fix
++ build + verify mandatory, `Fixes:` tag, state explicitly what could
+not be tested, and the assistant never submits anything itself —
+matching our record/diff/gate pipeline.
+
+## IPv8 status (experimental, draft-tracking)
+
+`kernel/src/net.rs` + `e1000::ipv8_demo` implement a reference subset
+of draft-thain-ipv8: version-8 header (IHL>=7), Src/Dst Route Number
++ local IPv4 addresses, EtherType 0x8080, hostile-input parsing.
+Proven end-to-end between two Rustux QEMU guests on a socket netdev
+(echo req -> echo reply, field-validated). Explicitly NOT spec'd:
+ARP8/ICMPv8/DHCP8/routing — the companion drafts were never
+submitted, so those semantics must not be claimed or invented. Gate:
+any future IPv8 work re-checks the draft revision + cve.now first.
+IPv6 remains the compatibility-relevant roadmap item; IPv8 is a
+reference implementation, not a Linux-parity feature.
