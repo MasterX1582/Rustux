@@ -736,7 +736,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
                 }
             }
             rounds += 1;
-            if rounds == 20_000_000 {
+            if rounds == 2_000_000_000 {
                 printk(format_args!("rustux: ipv8: no reply (peer down?)"));
                 return;
             }
