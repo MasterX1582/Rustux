@@ -79,3 +79,29 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 - DrvFs is slow; large tars of the ref tree stall — use scoped tarballs or git bundles (worked well).
 - VM apt mirror must be `mirrors.kernel.org` (default `be.archive.ubuntu.com` is blocked by egress allowlist; github/crates.io/kernel.org/debian/qemu.org all reachable).
 - A stray untracked `nul` file sits in the repo root (Windows artifact) — ignore/delete.
+
+## 2026-07-16 — Ring-3 userspace milestone (run-47)
+
+- : hostile-input-bounded ELF64/EXEC parser (phdr extent
+  checked arithmetic, phnum<=64, entry confined to user VA window).
+- : per-process PML4 (kernel slots copied
+  supervisor-only), PT_LOAD page-permission mapping (W^X via NX),
+  64KiB user stack,  — the deny-by-default user-pointer gate.
+- :  (user-rsp stash + dedicated
+  8KiB kernel stack, Windows-x64 marshal),  (frame save +
+  cr3 switch + iretq),  (sys_exit unwind path).
+  Handlers: write(1/2, range-validated, 4KiB cap) + exit.
+- : user code/data GDT slots (0x33/0x2b), TSS.rsp0 = INTR_STACK
+  for CPL3 interrupts, wrmsr/rdmsr + 
+  (STAR=0x20:0x08 sysret/syscall bases, LSTAR, SFMASK=0x700, EFER SCE|NXE).
+-  — zeroed-page allocator for tables/user pages.
+-  + Makefile: static ELF64 @0x555500000000,
+  embedded via include_bytes; write+exit syscalls proved end-to-end.
+- Debug lesson of record: x86_64-unknown-uefi = **Windows x64 ABI**
+  (args rcx/rdx/r8/r9, NOT SysV) — asm taking args must marshal
+  accordingly; caught because user_enter loaded CR3 with arg2
+  (Windows rdx) instead of SysV rdx. Verified via QEMU -d int.
+- cve.now pre-port check (binfmt/copy_to_user classes); audit run-47:
+  0 confirmed, NV-47-1/2/3/4 (SMAP/SMEP, per-task stacks, FS/GS, frame
+  reclaim — all gated on the future task model).
+
