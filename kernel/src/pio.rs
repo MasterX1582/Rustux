@@ -16,6 +16,22 @@ pub unsafe fn inb(port: u16) -> u8 {
     v
 }
 
+#[inline]
+pub unsafe fn outl(port: u16, v: u32) {
+    unsafe {
+        core::arch::asm!("out dx, eax", in("dx") port, in("eax") v, options(nomem, nostack));
+    }
+}
+
+#[inline]
+pub unsafe fn inl(port: u16) -> u32 {
+    let v: u32;
+    unsafe {
+        core::arch::asm!("in eax, dx", out("eax") v, in("dx") port, options(nomem, nostack));
+    }
+    v
+}
+
 /// Save flags and mask IRQs — the irqsave half of the pair. Returns the
 /// popped rflags; `irq_restore` re-enables IRQs only if they were on.
 #[inline]

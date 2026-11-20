@@ -22,6 +22,7 @@ mod kbd;
 mod log;
 mod logo_data;
 mod mm;
+mod pci;
 mod pio;
 mod uart;
 
@@ -884,6 +885,12 @@ fn main() -> Status {
             }
         }
     }
+
+    // Device discovery step 1: walk the PCI bus firmware configured —
+    // every line lands in the printk ring and flushes on this drain.
+    // This is the table future drivers (e1000, AHCI, virtio) bind on.
+    let n_pci = pci::scan();
+    kprintln!(con, "rustux: pci: {n_pci} functions on the bus");
 
     if lapic {
         // SAFETY: IDT gates for 0xf0/0xf1/0xff are installed; dispatch
