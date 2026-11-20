@@ -145,6 +145,18 @@ pub fn alloc_frame() -> Option<u64> {
     b
 }
 
+/// Free a frame previously returned by alloc_frame. Same contract as
+/// kfree: exactly once per allocation.
+pub fn free_frame(p: u64) {
+    if p == 0 {
+        return;
+    }
+    let f = irq_save();
+    let alloc = unsafe { &mut *core::ptr::addr_of_mut!(ALLOC) };
+    alloc.buddy.free_pages(p, 0);
+    unsafe { irq_restore(f) };
+}
+
 /// kmalloc + zero-fill (Linux kzalloc).
 pub fn kmalloc_zalloc(size: usize) -> *mut u8 {
     let p = kmalloc(size);

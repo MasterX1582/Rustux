@@ -191,10 +191,13 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
             } else {
                 "irq"
             };
+            let cr2: u64;
+            // SAFETY: reading cr2 is always valid at CPL0.
+            unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2) };
             let _ = writeln!(
                 u,
-                "rustux: cpu: EXCEPTION {} rip={:#x} err={:#x} cs={:#x} -- halting",
-                name, f.rip, f.err, f.cs
+                "rustux: cpu: EXCEPTION {} rip={:#x} err={:#x} cs={:#x} cr2={:#x} -- halting",
+                name, f.rip, f.err, f.cs, cr2
             );
             loop {
                 // SAFETY: halting forever is the intended terminal state.
@@ -442,6 +445,9 @@ const MSR_EFER: u32 = 0xc000_0080;
 const MSR_STAR: u32 = 0xc000_0081;
 const MSR_LSTAR: u32 = 0xc000_0082;
 const MSR_SFMASK: u32 = 0xc000_0084;
+const MSR_FS_BASE: u32 = 0xc000_0100;
+const MSR_GS_BASE: u32 = 0xc000_0101;
+const MSR_KGS_BASE: u32 = 0xc000_0102;
 
 /// Enable the SYSCALL/SYSRET path: STAR segment bases, LSTAR entry
 /// point, SFMASK (clear TF/IF/DF on entry), EFER SCE|NXE.
@@ -457,5 +463,11 @@ pub fn init_syscall(lstar: u64) {
         wrmsr(MSR_STAR, (0x20u64 << 48) | (0x08u64 << 32));
         wrmsr(MSR_LSTAR, lstar);
         wrmsr(MSR_SFMASK, 0x700); // TF|IF|DF cleared on syscall entry
+        // The kernel uses no FS/GS state (no swapgs, no percpu), so
+        // all three bases zero cleanly: user code must not inherit
+        // firmware leftovers as its TLS/segment bases.
+        wrmsr(MSR_FS_BASE, 0);
+        wrmsr(MSR_GS_BASE, 0);
+        wrmsr(MSR_KGS_BASE, 0);
     }
 }

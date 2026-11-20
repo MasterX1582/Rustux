@@ -1015,29 +1015,33 @@ fn main() -> Status {
     unsafe { core::arch::asm!("ud2", options(nomem, nostack)) };
     kprintln!(con, "rustux: cpu: IDT caught #UD and resumed");
 
-    // Userspace milestone: pull the ELF64 out of the initrd cpio
-    // (falling back to the embedded image when no initrd was loaded),
-    // build a process page table (kernel entries copied
-    // supervisor-only), drop to ring 3 with user segments, and let the
-    // image write+exit through the SYSCALL path — exit unwinds back.
+    // Userspace milestone: the initrd IS the process table — every
+    // cpio entry loads as its own task (private page tables, private
+    // syscall stack, frames reclaimed on exit) and runs to completion
+    // on ring 3. Falls back to the embedded image when no initrd was
+    // loaded or the archive has no entries.
     // SAFETY: initrd names LOADER_DATA pages we allocated pre-EBS;
     // they are identity-mapped and still owned.
     let arc = initrd.map(|(a, l)| unsafe { core::slice::from_raw_parts(a as *const u8, l) });
-    let img = arc.and_then(|s| cpio::find(s, b"init")).map_or_else(
-        || {
-            kprintln!(con, "rustux: initrd: no init entry, using embedded ELF");
-            include_bytes!("../user/hello.elf") as &[u8]
-        },
-        |d| d,
-    );
-    let user_ok = user::run(img);
-    kprintln!(con, "rustux: user: ring-3 ELF run {}", if user_ok { "done" } else { "FAILED" });
-    // Second initrd entry: the syscall-boundary selftest — verifies
-    // EBADF/EFAULT/EINVAL/ENOSYS and register preservation from CPL3.
-    if let Some(t) = arc.and_then(|s| cpio::find(s, b"selftest")) {
-        let st_ok = user::run(t);
-        kprintln!(con, "rustux: user: selftest run {}", if st_ok { "done" } else { "FAILED" });
+    let before = kalloc::free_frames();
+    let mut ran = 0u32;
+    if let Some(arc) = arc {
+        for (name, img) in cpio::entries(arc) {
+            let nm = core::str::from_utf8(name).unwrap_or("?");
+            kprintln!(con, "rustux: task {nm}: spawning");
+            let ok = user::run(img);
+            kprintln!(con, "rustux: task {nm}: {}", if ok { "done" } else { "FAILED" });
+            ran += 1;
+        }
     }
+    if ran == 0 {
+        kprintln!(con, "rustux: initrd: no entries, using embedded ELF");
+        let ok = user::run(include_bytes!("../user/hello.elf"));
+        kprintln!(con, "rustux: user: ring-3 ELF run {}", if ok { "done" } else { "FAILED" });
+    }
+    let after = kalloc::free_frames();
+    kprintln!(con, "rustux: tasks: {} ran, frames {} -> {} after reap{}", ran, before, after,
+        if after == before { " (zero leak)" } else { " (LEAK)" });
     kprintln!(
         con,
         "rustux: log: {} records through klib::prb ring, {} dropped",

@@ -41,39 +41,71 @@ fn hex8(b: &[u8]) -> Option<u64> {
     Some(v)
 }
 
-/// Look up `want` (exact filename, no leading /) and return its data
-/// bytes. Returns None on any malformed entry or a missing file —
-/// malformed archives abort the walk entirely, never skip-and-pray.
-pub fn find<'a>(img: &'a [u8], want: &[u8]) -> Option<&'a [u8]> {
-    let mut off = 0usize;
-    for _ in 0..MAX_ENTRIES {
-        let hdr = img.get(off..off.checked_add(HDR_LEN)?)?;
-        if hdr[0..6] != *b"070701" && hdr[0..6] != *b"070702" {
-            return None;
-        }
-        let filesize = hex8(&hdr[FILESIZE_OFF..FILESIZE_OFF + 8])? as usize;
-        let namesize = hex8(&hdr[NAMESIZE_OFF..NAMESIZE_OFF + 8])? as usize;
-        if namesize == 0 || namesize > MAX_NAME {
-            return None;
-        }
-        let name = img.get(off + HDR_LEN..off.checked_add(HDR_LEN + namesize)?)?;
-        // The terminator is part of namesize and must be present —
-        // the CVE-2024-53142 discipline, not a convention.
-        if name[namesize - 1] != 0 {
-            return None;
-        }
-        let name = &name[..namesize - 1];
-        let data_off = off.checked_add(align4(HDR_LEN + namesize))?;
-        let data = img.get(data_off..data_off.checked_add(filesize)?)?;
-        if name == want {
-            return Some(data);
-        }
-        if name == b"TRAILER!!!" {
-            return None;
-        }
-        off = data_off.checked_add(align4(filesize))?;
+/// One validated entry: name (NUL stripped) and data.
+struct Entry<'a> {
+    name: &'a [u8],
+    data: &'a [u8],
+    /// Archive offset of the next header.
+    next: usize,
+    /// True for the TRAILER!!! record — ends the archive.
+    trailer: bool,
+}
+
+/// Parse the entry starting at `off`. Returns None on ANY malformed
+/// field — malformed archives abort the walk, never skip-and-pray.
+fn entry_at<'a>(img: &'a [u8], off: usize) -> Option<Entry<'a>> {
+    let hdr = img.get(off..off.checked_add(HDR_LEN)?)?;
+    if hdr[0..6] != *b"070701" && hdr[0..6] != *b"070702" {
+        return None;
     }
-    None
+    let filesize = hex8(&hdr[FILESIZE_OFF..FILESIZE_OFF + 8])? as usize;
+    let namesize = hex8(&hdr[NAMESIZE_OFF..NAMESIZE_OFF + 8])? as usize;
+    if namesize == 0 || namesize > MAX_NAME {
+        return None;
+    }
+    let name = img.get(off + HDR_LEN..off.checked_add(HDR_LEN + namesize)?)?;
+    // The terminator is part of namesize and must be present —
+    // the CVE-2024-53142 discipline, not a convention.
+    if name[namesize - 1] != 0 {
+        return None;
+    }
+    let name = &name[..namesize - 1];
+    let data_off = off.checked_add(align4(HDR_LEN + namesize))?;
+    let data = img.get(data_off..data_off.checked_add(filesize)?)?;
+    Some(Entry {
+        name,
+        data,
+        next: data_off.checked_add(align4(filesize))?,
+        trailer: name == b"TRAILER!!!",
+    })
+}
+
+/// Iterate (name, data) over every well-formed entry until TRAILER!!!,
+/// a malformed entry, or the hard entry bound — whichever comes first.
+pub fn entries(img: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> + '_ {
+    let mut off = 0usize;
+    let mut steps = 0usize;
+    core::iter::from_fn(move || {
+        loop {
+            if steps == MAX_ENTRIES {
+                return None;
+            }
+            steps += 1;
+            let e = entry_at(img, off)?;
+            off = e.next;
+            if e.trailer {
+                return None;
+            }
+            return Some((e.name, e.data));
+        }
+    })
+}
+
+/// Look up `want` (exact filename, no leading /) and return its data
+/// bytes. Returns None on any malformed entry or a missing file.
+#[allow(dead_code)]
+pub fn find<'a>(img: &'a [u8], want: &[u8]) -> Option<&'a [u8]> {
+    entries(img).find(|(n, _)| *n == want).map(|(_, d)| d)
 }
 
 #[cfg(test)]

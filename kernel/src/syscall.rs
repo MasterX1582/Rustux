@@ -14,14 +14,12 @@
 use crate::{log, user};
 use core::arch::global_asm;
 
-#[repr(align(16))]
-struct SysStack(#[allow(dead_code)] [u8; 8192]);
-
-/// Dedicated kernel stack for SYSCALL entries. SYSCALL doesn't touch
-/// TSS.rsp0, so this must be switched to explicitly by the stub.
-/// TSS.rsp0 separately serves interrupts arriving while CPL=3.
+/// Kernel stack top for the CURRENT task's syscall entries, set by
+/// user::run before each ring-3 drop. SYSCALL doesn't touch TSS.rsp0,
+/// so the stub loads this explicitly. TSS.rsp0 separately serves
+/// interrupts arriving while CPL=3.
 #[no_mangle]
-static SYS_STACK: SysStack = SysStack([0; 8192]);
+static mut CUR_KSTACK: u64 = 0;
 
 /// Where the stub stashes the user rsp for the return leg.
 #[no_mangle]
@@ -32,14 +30,22 @@ static mut KSP: u64 = 0;
 #[no_mangle]
 static mut KCR3: u64 = 0;
 
+/// Point the entry stub at `top` — the current task's private kernel
+/// stack. Called by user::run immediately before each ring-3 entry;
+/// the serial run-to-completion model makes the singleton sound.
+pub fn set_kstack(top: u64) {
+    // SAFETY: sole writer, main context, before any user code runs.
+    unsafe { *core::ptr::addr_of_mut!(CUR_KSTACK) = top };
+}
+
 global_asm!(
     "
     .globl syscall_entry
 syscall_entry:
     // rcx=user rip, r11=user rflags; rsp is still the USER stack.
     mov qword ptr [rip + USER_RSP], rsp
-    lea rsp, [rip + SYS_STACK]
-    add rsp, 8192 - 8
+    mov rsp, qword ptr [rip + CUR_KSTACK]
+    and rsp, -16               // kstack top is 16-aligned; belt&braces
     // Linux ABI: syscall may clobber only rax (ret), rcx and r11 —
     // every other user register must come back intact. The Rust
     // handler runs under the Windows x64 convention, which lets it
@@ -54,7 +60,6 @@ syscall_entry:
     push r8
     push r9
     push r10
-    sub rsp, 8                 // realign rsp to 16 for the call
     // Marshal the Linux syscall ABI (nr=rax, args rdi/rsi/rdx) into
     // the Windows x64 call this kernel uses: rcx,rdx,r8,r9.
     mov r9, rdx
@@ -62,7 +67,6 @@ syscall_entry:
     mov rdx, rdi
     mov rcx, rax
     call handle_syscall
-    add rsp, 8
     pop r10
     pop r9
     pop r8
@@ -77,9 +81,13 @@ syscall_entry:
     .globl user_enter
 user_enter:
     // Windows x64 args: rcx = user entry rip, rdx = user stack top,
-    // r8 = user pml4.
+    // r8 = user pml4. Windows callee-saves rbx,rbp,rdi,rsi,r12-r15 —
+    // rsi/rdi are argument registers under SysV but NOT here; the
+    // caller may hold live pointers in them across this call.
     push rbx
     push rbp
+    push rdi
+    push rsi
     push r12
     push r13
     push r14
@@ -109,6 +117,8 @@ user_terminate:
     pop r14
     pop r13
     pop r12
+    pop rsi
+    pop rdi
     pop rbp
     pop rbx
     ret
