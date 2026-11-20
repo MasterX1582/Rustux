@@ -580,3 +580,8 @@ the task model now supports fork/clone/wait as the next rung.
   (reentrant &mut TASKS traversal pattern gains one more instance
   -- pre-existing class, single-CPU safe, unprovable without Miri;
   no select/epoll and nfds cap 32 vs Linux's RLIMIT-sized sets).
+- Flake watch: one native-VM run saw fputest's parent exit(1) --
+  a single raced check -- while WSL and three later VM runs were
+  clean. Not attributed to poll (fputest's wait4 takes the
+  blocked-wake path, not the changed collect path); flagged here
+  for the next runs to confirm or chase.
