@@ -16,11 +16,15 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Local timer IRQ vector (gate installed by cpu::init).
 pub const IRQ_TIMER: u64 = 0xf0;
+/// Device IRQ vector for the PIT-through-IOAPIC proof.
+pub const IRQ_PIT: u64 = 0xf1;
 /// Spurious interrupt vector — hardware requires the low nibble be 0xf.
 pub const IRQ_SPURIOUS: u64 = 0xff;
 
 /// Timer ticks delivered so far; bumped in the IRQ path.
 pub static TICKS: AtomicU64 = AtomicU64::new(0);
+/// PIT channel-0 ticks delivered via the I/O APIC.
+pub static PIT_TICKS: AtomicU64 = AtomicU64::new(0);
 
 static LAPIC_BASE: AtomicU64 = AtomicU64::new(0);
 /// When the CPU/firmware put the LAPIC in x2APIC mode the MMIO window is
@@ -28,6 +32,7 @@ static LAPIC_BASE: AtomicU64 = AtomicU64::new(0);
 static X2APIC: AtomicBool = AtomicBool::new(false);
 
 const LAPIC_TPR: u64 = 0x080;
+const LAPIC_ID: u64 = 0x020;
 const LAPIC_EOI: u64 = 0x0b0;
 const LAPIC_SVR: u64 = 0x0f0;
 const LAPIC_LVT_TIMER: u64 = 0x320;
@@ -112,12 +117,16 @@ fn eoi() {
     }
 }
 
-/// IRQ vector -> action, called from cpu::report_frame for the two vectors
-/// with real IRQ stubs. Returns without printing so timer ticks stay cheap.
+/// IRQ vector -> action, called from cpu::report_frame for the vectors
+/// with real IRQ stubs. Returns without printing so ticks stay cheap.
 pub fn irq_dispatch(vec: u64) {
     match vec {
         IRQ_TIMER => {
             TICKS.fetch_add(1, Ordering::Relaxed);
+            eoi();
+        }
+        IRQ_PIT => {
+            PIT_TICKS.fetch_add(1, Ordering::Relaxed);
             eoi();
         }
         IRQ_SPURIOUS => {} // per spec: no EOI on a spurious interrupt
@@ -192,4 +201,110 @@ pub fn init() -> Option<u64> {
     lwrite(LAPIC_LVT_TIMER, (1 << 17) | IRQ_TIMER as u32); // periodic
     lwrite(LAPIC_TMRINIT, (hz / HZ).max(1) as u32);
     Some(hz)
+}
+
+// ---------------------------------------------------------------------------
+// I/O APIC — the real device IRQ path.
+//
+// The legacy PIC stays masked; ISA/PCI IRQs instead reach us through the
+// I/O APIC's redirection table, programmed from MADT entries. IOAPIC MMIO
+// is an indirect register file: IOREGSEL (offset 0) picks the register,
+// IOWIN (offset 0x10) reads/writes it.
+// ---------------------------------------------------------------------------
+
+const IOREGSEL: u64 = 0x00;
+const IOWIN: u64 = 0x10;
+/// I/O APIC register indexes.
+const IOAPIC_ID: u32 = 0x00;
+const IOAPIC_VER: u32 = 0x01;
+const IOREDTBL: u32 = 0x10; // + 2*gsi low dword, +1 high dword
+
+static IOAPIC_BASE: AtomicU64 = AtomicU64::new(0);
+
+fn ioapic_read(reg: u32) -> u32 {
+    let base = IOAPIC_BASE.load(Ordering::Relaxed);
+    // SAFETY: base was programmed from the MADT I/O APIC address (<4 GiB
+    // on PC, inside the identity map); IOREGSEL/IOWIN are 32-bit regs.
+    unsafe {
+        ((base + IOREGSEL) as *mut u32).write_volatile(reg);
+        ((base + IOWIN) as *const u32).read_volatile()
+    }
+}
+
+fn ioapic_write(reg: u32, v: u32) {
+    let base = IOAPIC_BASE.load(Ordering::Relaxed);
+    unsafe {
+        ((base + IOREGSEL) as *mut u32).write_volatile(reg);
+        ((base + IOWIN) as *mut u32).write_volatile(v);
+    }
+}
+
+/// Our LAPIC ID in the form the I/O APIC redirection entries take (8-bit
+/// physical destination). x2APIC IDs wider than 8 bits can't be expressed
+/// — QEMU's BSP is 0 either way; documented limitation until we route
+/// logical destinations.
+fn lapic_id() -> u32 {
+    if X2APIC.load(Ordering::Relaxed) {
+        // SAFETY: x2APIC confirmed in init().
+        unsafe { rdmsr(0x802).0 }
+    } else {
+        lread(LAPIC_ID) >> 24
+    }
+}
+
+/// Program one I/O APIC redirection entry: `gsi` -> `vec`, fixed delivery,
+/// physical destination = our LAPIC. `iso_flags` carries the MADT override
+/// (bits 1:0 polarity: 1=high 3=low; bits 3:2 trigger: 1=edge 3=level;
+/// 00 = conform -> ISA default edge/active-high). The entry is written
+/// masked-then-unmasked so a stale line can't fire mid-program.
+///
+/// Returns false without touching MMIO when the MADT-supplied values are
+/// implausible — a corrupt table must not turn our IOREGSEL/IOWIN writes
+/// into a scribble over ordinary RAM: the base must be page-aligned in
+/// the high (PCI-hole) region and the GSI inside the hardware's
+/// redirection-entry count.
+pub fn ioapic_route(ioapic_addr: u64, gsi: u32, vec: u64, iso_flags: u16) -> bool {
+    if ioapic_addr & 0xfff != 0 || !(0x8000_0000..=0xffff_f000).contains(&ioapic_addr) {
+        return false;
+    }
+    IOAPIC_BASE.store(ioapic_addr, Ordering::Relaxed);
+    let redirs = ((ioapic_read(IOAPIC_VER) >> 16) & 0xff) + 1;
+    if gsi >= redirs {
+        return false;
+    }
+
+    let low = (vec as u32 & 0xff)
+        | if iso_flags & 0x3 == 0x3 { 1 << 13 } else { 0 } // active-low
+        | if iso_flags & 0xc == 0xc { 1 << 15 } else { 0 } // level-triggered
+        | (1 << 16); // masked while we program the entry
+    let high = (lapic_id() & 0xff) << 24;
+    let reg = IOREDTBL + 2 * gsi;
+    // Mask -> program -> unmask: the entry must never be live with a
+    // half-written (new dest, old vector) combination.
+    ioapic_write(reg, low);
+    ioapic_write(reg + 1, high);
+    ioapic_write(reg, low & !(1 << 16)); // unmask: deliver
+    true
+}
+
+/// Arm PIT channel 0 as a periodic source on the IRQ0 pin — mode 2 rate
+/// generator (IRQ fires each cycle), ~`hz` ticks per second. The line
+/// reaches us through the I/O APIC entry routed above.
+pub fn arm_pit(hz: u64) {
+    let div = (PIT_HZ as u64 / hz).clamp(1, 0xffff) as u16;
+    unsafe {
+        outb(0x43, 0x34); // ch0, lo/hi, mode 2 rate generator
+        outb(0x40, (div & 0xff) as u8);
+        outb(0x40, (div >> 8) as u8);
+    }
+}
+
+/// (I)OAPIC self-check value for the boot log: id register, version +
+/// max redirection entry, and our destination LAPIC id.
+pub fn ioapic_probe() -> (u32, u32, u32) {
+    (
+        ioapic_read(IOAPIC_ID),
+        ioapic_read(IOAPIC_VER),
+        lapic_id() & 0xff,
+    )
 }

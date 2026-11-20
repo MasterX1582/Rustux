@@ -13,6 +13,7 @@ use core::fmt::Write;
 use uefi::mem::memory_map::{MemoryMap, MemoryType};
 use uefi::prelude::*;
 
+mod acpi;
 mod apic;
 mod cpu;
 mod fbcon;
@@ -734,6 +735,17 @@ fn main() -> Status {
     // From here no UEFI boot-services call is legal; the console keeps working
     // because it is pure port I/O + framebuffer memory, both of which survive
     // the transition.
+    // The ACPI RSDP pointer lives in the UEFI system table — boot-time
+    // only. Snapshot it now; the tables themselves stay readable post-EBS.
+    match acpi::grab_rsdp() {
+        Some(p) => {
+            let _ = writeln!(con, "rustux: acpi: RSDP at {:#x} (from UEFI config table)", p);
+        }
+        None => {
+            let _ = writeln!(con, "rustux: acpi: no RSDP in UEFI config table");
+        }
+    }
+
     let _ = writeln!(con, "rustux: exiting boot services...");
     // SAFETY: every firmware call this program makes happens before this
     // point; nothing afterwards touches boot or runtime services.
@@ -857,12 +869,48 @@ fn main() -> Status {
             false
         }
     };
+    // Interrupt layer step 2: parse the MADT (I/O APIC base + IRQ0
+    // override), route the ISA PIT pin to vector IRQ_PIT through the I/O
+    // APIC, and arm channel 0 — the first real device IRQ through our IDT.
+    let mut pit = false;
     if lapic {
-        // SAFETY: IDT gates for 0xf0/0xff are installed; dispatch saves and
-        // restores every caller-saved register around the handler, and the
-        // handler sends EOI. hlt sleeps until the IRQ arrives.
+        match acpi::madt() {
+            Some(m) if m.ioapic_addr != 0 => {
+                let _ = writeln!(
+                    con,
+                    "rustux: acpi: MADT {} lapics, LAPIC @{:#x}, IOAPIC @{:#x} gsi{}, IRQ0 -> GSI{} flags {:#x}",
+                    m.lapics, m.lapic_addr, m.ioapic_addr, m.ioapic_gsi_base, m.irq0_gsi, m.irq0_flags
+                );
+                if apic::ioapic_route(m.ioapic_addr, m.irq0_gsi, apic::IRQ_PIT, m.irq0_flags) {
+                    let (id, ver, dest) = apic::ioapic_probe();
+                    let _ = writeln!(
+                        con,
+                        "rustux: apic: ioapic id={:#x} ver={:#x} redirs={} dest-lapic={} -- PIT -> vec {:#x}",
+                        id, ver, ((ver >> 16) & 0xff) + 1, dest, apic::IRQ_PIT
+                    );
+                    apic::arm_pit(100);
+                    pit = true;
+                } else {
+                    let _ = writeln!(
+                        con,
+                        "rustux: apic: ioapic route GSI{} -> {:#x} REJECTED (bad addr/gsi)",
+                        m.irq0_gsi, apic::IRQ_PIT
+                    );
+                }
+            }
+            _ => {
+                let _ = writeln!(con, "rustux: acpi: no usable MADT/IOAPIC -- no device IRQs");
+            }
+        }
+    }
+
+    if lapic {
+        // SAFETY: IDT gates for 0xf0/0xf1/0xff are installed; dispatch
+        // saves and restores every caller-saved register around the
+        // handler, and the handler sends EOI. hlt sleeps until an IRQ.
         unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
         let t0 = apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let p0 = apic::PIT_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         // ~50 ticks at 100 Hz; the spin bound keeps a broken timer from
         // hanging the boot proof.
         let mut spins = 0u64;
@@ -875,6 +923,13 @@ fn main() -> Status {
             "rustux: apic: {} periodic timer IRQs delivered via own IDT",
             apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - t0
         );
+        if pit {
+            let _ = writeln!(
+                con,
+                "rustux: apic: {} PIT ch0 IRQs delivered via I/O APIC -> own IDT",
+                apic::PIT_TICKS.load(core::sync::atomic::Ordering::Relaxed) - p0
+            );
+        }
     }
 
     // Prove the new IDT: the #UD handler reports on COM1, bumps rip past the

@@ -140,9 +140,11 @@ const NAMES: [&str; 32] = [
 /// the UEFI target uses the Windows x64 ABI, so the first arg arrives in
 /// rcx, not rdi.
 extern "C" fn report_frame(f: &mut TrapFrame) {
-    // Hardware IRQs (LAPIC timer, spurious) take the cheap path: no serial
-    // port setup, no printing. Every other vector is an exception report.
-    if f.vec == crate::apic::IRQ_TIMER || f.vec == crate::apic::IRQ_SPURIOUS {
+    // Hardware IRQs (LAPIC timer 0xf0, PIT-via-IOAPIC 0xf1, spurious 0xff)
+    // take the cheap path: no serial port setup, no printing. The u64::MAX
+    // unknown-vector sentinel stays on the report path — a stray IRQ must
+    // be visible, not silently EOI'd. Every other vector is an exception.
+    if f.vec >= crate::apic::IRQ_TIMER && f.vec != u64::MAX {
         crate::apic::irq_dispatch(f.vec);
         return;
     }
@@ -271,6 +273,7 @@ stub_err!(stub_vc, 29);
 stub!(stub_ud, 6);
 stub!(stub_bp, 3);
 stub!(stub_irq_timer, "0xf0");
+stub!(stub_irq_pit, "0xf1");
 stub!(stub_irq_spurious, "0xff");
 
 /// Install our GDT (reload CS via far return, data segments via ax), TSS
@@ -328,7 +331,7 @@ pub fn init() {
         core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nostack, preserves_flags));
     }
 
-    let gates: [(usize, u64, u8); 13] = [
+    let gates: [(usize, u64, u8); 14] = [
         (3, stub_bp as *const () as u64, 0),
         (6, stub_ud as *const () as u64, 0),
         (8, stub_df as *const () as u64, 1), // IST1: dedicated DF stack
@@ -341,6 +344,7 @@ pub fn init() {
         (21, stub_cp as *const () as u64, 0),
         (29, stub_vc as *const () as u64, 0),
         (0xf0, stub_irq_timer as *const () as u64, 0),
+        (0xf1, stub_irq_pit as *const () as u64, 0),
         (0xff, stub_irq_spurious as *const () as u64, 0),
     ];
     for v in 0..256 {
