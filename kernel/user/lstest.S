@@ -39,7 +39,7 @@ _start:
     inc %r15d
 3:
     mov %rax, %r13              # bytes returned
-    # walk the reclen chain — archive holds 13 entries
+    # walk the reclen chain — archive holds 14 entries
     # (init, selftest, fstest, lstest, exectest, motd.txt)
     lea -1024(%rsp), %rbx       # cursor
     xor %ebp, %ebp              # record count
@@ -51,7 +51,7 @@ _start:
     add %r13, %rax              # buf end
     cmp %rax, %rbx
     jb 4b
-    cmp $13, %ebp
+    cmp $14, %ebp
     je 5f
     inc %r15d
 5:

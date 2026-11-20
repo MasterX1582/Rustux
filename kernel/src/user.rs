@@ -41,7 +41,7 @@ const MAX_RANGES: usize = 8;
 
 /// Max resident tasks — a hard bound so spawn can't exhaust the
 /// kernel heap by enqueueing forever.
-const MAX_TASKS: usize = 16;
+const MAX_TASKS: usize = 32;
 
 /// A resumable user-mode context: the 15 GPRs in sched_dispatch's
 /// push order plus the iret frame. Every task transition — first
@@ -283,6 +283,42 @@ fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
             }
         }
     }
+}
+
+/// A user-mode CPU fault whose signal is CAUGHT becomes real signal
+/// delivery: cpu.rs rebuilt the interrupted UCtx from the trap
+/// stubs' saved registers, we pend the signo and run it through the
+/// same maybe_deliver frame-push/redirect a kill() would get. The
+/// returned (rip, rsp, rdi) is spliced into the trap frame so the
+/// exception iretq lands in the handler — sigreturn later restores
+/// the fault-time context (re-faulting if unfixed, exactly like
+/// Linux). A default or ignored disposition dies synchronously —
+/// IGN on a synchronous fault can't resume (Linux force_sig).
+pub fn fault_signal(signo: u64, ctx: &mut UCtx) -> (u64, u64, u64) {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+        let caught = t
+            .handlers
+            .get(signo.saturating_sub(1) as usize)
+            .copied()
+            .unwrap_or(SIG_DFL)
+            > SIG_IGN;
+        if caught {
+            t.pending |= 1u32 << (signo - 1).min(31);
+            maybe_deliver(t, ctx);
+            if t.state == TaskState::Runnable {
+                return (ctx.rip, ctx.rsp, ctx.rdi);
+            }
+            // Frame push failed — maybe_deliver already set
+            // exit_status=SIGSEGV.
+        } else {
+            // Default-fatal or IGN on a synchronous fault — die with
+            // the bare signo (Linux force_sig semantics).
+            t.exit_status = signo;
+        }
+    }
+    task_exit_inner()
 }
 
 /// Deliver pending signals into task n's saved ctx for a pick-time
@@ -1490,7 +1526,7 @@ fn pick_next() -> Option<usize> {
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     // Snapshot living pids — a zombie is reapable only when no living
     // task can still wait4 it. Blocked counts as living.
-    let mut live = [0u64; 16];
+    let mut live = [0u64; MAX_TASKS];
     for (i, s) in tasks.iter().enumerate() {
         if let Some(t) = s {
             if t.state != TaskState::Exited {
@@ -1579,23 +1615,6 @@ fn die_signal(signo: u64) -> ! {
         t.exit_status = signo;
     }
     task_exit_inner()
-}
-
-/// A user-mode CPU fault kills the task instead of halting the
-/// kernel — the signo becomes the wait status. Called from
-/// report_frame on the faulting task's own kstack; never returns —
-/// the whole exception frame is abandoned with the task.
-pub fn fault_die(signo: u64) -> ! {
-    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
-    if cur == usize::MAX {
-        // No task to kill — this can't legitimately happen from
-        // CPL3 code, so treat it as a kernel bug and halt.
-        loop {
-            // SAFETY: terminal halt.
-            unsafe { core::arch::asm!("cli; hlt", options(nomem, nostack)) }
-        }
-    }
-    die_signal(signo)
 }
 
 /// Shared exit/signal-death teardown: mark Exited, wake a matching

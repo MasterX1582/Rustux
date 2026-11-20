@@ -149,6 +149,28 @@ struct TrapFrame {
     ss: u64,
 }
 
+/// The 14-GPR block dispatch saves under the aligned rsp (push
+/// order r11..rax,rbx,r12-r15 means the struct reads r15 at offset
+/// 0). The second arg to report_frame. The interrupted rcx and rbp
+/// live above the TrapFrame instead — see dispatch's push order.
+#[repr(C)]
+struct SavedRegs {
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    rbx: u64,
+    rax: u64,
+    _rcx_arg: u64, // slot holds &TrapFrame, not the interrupted rcx
+    rdx: u64,
+    rsi: u64,
+    rdi: u64,
+    r8: u64,
+    r9: u64,
+    r10: u64,
+    r11: u64,
+}
+
 const NAMES: [&str; 32] = [
     "#DE", "#DB", "NMI", "#BP", "#OF", "#BR", "#UD", "#NM", "#DF", "?", "#TS", "#NP", "#SS", "#GP",
     "#PF", "?", "#MF", "#AC", "#MC", "#XM", "#VE", "#CP", "?", "?", "?", "?", "?", "?", "?", "#VC",
@@ -158,7 +180,7 @@ const NAMES: [&str; 32] = [
 /// Rust-side reporter. `rcx` carries `&mut TrapFrame` (set by `dispatch`) —
 /// the UEFI target uses the Windows x64 ABI, so the first arg arrives in
 /// rcx, not rdi.
-extern "C" fn report_frame(f: &mut TrapFrame) {
+extern "C" fn report_frame(f: &mut TrapFrame, regs: *mut SavedRegs) {
     // Hardware IRQs (LAPIC timer 0xf0, PIT-via-IOAPIC 0xf1, spurious 0xff)
     // take the cheap path: no serial port setup, no printing. The u64::MAX
     // unknown-vector sentinel stays on the report path — a stray IRQ must
@@ -222,7 +244,39 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
                         "rustux: cpu: user fault {} rip={:#x} err={:#x} cr2={:#x} -> sig {}",
                         name, f.rip, f.err, cr2, signo
                     );
-                    crate::user::fault_die(signo);
+                    // Rebuild the complete interrupted context from
+                    // the stubs' saved registers — a caught
+                    // disposition pushes [signo][UCtx] on the user
+                    // stack and we splice the handler redirect into
+                    // this frame, so iretq lands in the handler.
+                    let r = unsafe { &*regs };
+                    let ir = f as *mut TrapFrame as *const u64;
+                    let mut ctx = crate::user::UCtx {
+                        r15: r.r15, r14: r.r14, r13: r.r13, r12: r.r12,
+                        // SAFETY: dispatch pushed interrupted rbp at
+                        // f-16 and interrupted rcx at f-8.
+                        rbp: unsafe { *ir.sub(2) },
+                        rbx: r.rbx,
+                        r11: r.r11, r10: r.r10, r9: r.r9, r8: r.r8,
+                        rdi: r.rdi, rsi: r.rsi, rdx: r.rdx,
+                        rcx: unsafe { *ir.sub(1) },
+                        rax: r.rax,
+                        rip: f.rip, cs: f.cs, rflags: f.rflags,
+                        rsp: f.rsp, ss: f.ss,
+                    };
+                    // Returns (handler, frame rsp, signo) on delivery
+                    // or tears the task down internally on a
+                    // default/ignored/failed disposition — the
+                    // callee-saved GPRs never left the registers, so
+                    // the pops below resume the handler cleanly.
+                    let (rip, rsp, rdi) = crate::user::fault_signal(signo, &mut ctx);
+                    f.rip = rip;
+                    f.rsp = rsp;
+                    // SAFETY: regs names the dispatch-saved block on
+                    // the live kstack; rdi's slot is what `pop rdi`
+                    // hands the handler.
+                    unsafe { (*regs).rdi = rdi };
+                    return;
                 }
             }
             let _ = writeln!(
@@ -262,9 +316,21 @@ extern "C" fn dispatch() -> ! {
         "push rdx",
         "push rcx",
         "push rax",
-        "sub rsp, 8",
+        "push rbx",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // rdx = &SavedRegs (r15 lands at base, r11 at top) — the
+        // second report_frame arg. Must come AFTER the pushes so
+        // the rdx slot above holds the interrupted value.
+        "mov rdx, rsp",
         "call {r}",
-        "add rsp, 8",
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop rbx",
         "pop rax",
         "pop rcx",
         "pop rdx",

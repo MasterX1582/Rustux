@@ -358,7 +358,7 @@ fn sys_write(ctx: &mut user::UCtx, fd: u64, buf: u64, len: u64) -> u64 {
 /// exit(code): hand off to the scheduler — resume the next Runnable
 /// task's ctx, or unwind to the saved kernel frame when none remain.
 fn sys_exit(code: u64) -> ! {
-    log::printk(format_args!("rustux: user: exit({code})"));
+    log::printk(format_args!("rustux: user: pid {} exit({code})", user::getpid()));
     log::drain_task();
     user::task_exit(code)
 }
