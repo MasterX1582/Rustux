@@ -632,3 +632,56 @@ the task model now supports fork/clone/wait as the next rung.
   (bind re-bind, translate_r, tx page), 6 rejected, NV-64-1..4
   (one-dgram queue depth, no connect/send/recv aliases or
   getsockname, no O_NONBLOCK, sequential ephemeral ports).
+
+## TCP sockets (commit pending, audit run-65)
+
+- Syscalls: connect(42), accept(43), listen(50), shutdown(48) join
+  socket(41)/bind(49); read/write and sendto/recvfrom route streams.
+- A TCP endpoint is FdKind::Tcp -> TCPSOCKS[8] (bounded), an OFD kind
+  that dups/fork-shares/closes like every fd. States: Init, Listen,
+  SynSent, SynRecv, Estab, FinWait, CloseWait, LastAck, Closed.
+- listen() turns a bound Init socket passive (backlog capped at 4;
+  unbound gets an ephemeral port, separate namespace from UDP).
+- connect() ISN = siphash(4-tuple, rdtsc, per-boot isn_key), SYN out,
+  then blocks on WaitOn::TcpConn with a ~10s TICKS deadline
+  (ETIMEDOUT). Loopback peers (127/8) canonicalize to our IP so the
+  4-tuple stays exact on the injected path.
+- Loopback is the hermetic test path AND a real OS feature: tcp_tx
+  detects dst==our_ip/127.x and pushes the built frame onto LO_Q[4]
+  instead of tx_once, then lo_drain() walks the SAME ip_demux as the
+  NIC. The drain is iterative (LO_DRAIN guard) precisely so
+  tx->demux->rx->tx can't nest and overflow the task kstack.
+- accept() pops the completed backlog child into a fresh fd (sa_out
+  is a zeroed sockaddr_in -- 47597 discipline); empty backlog blocks
+  on WaitOn::TcpAccept and wake_accept mints the fd inside the
+  sleeper's table through the cross-space wake machinery.
+- RX demux: conn 4-tuple match first, then listener SYN, else RST.
+  SynRecv children are bounded per-listener; the final ACK moves
+  them to the backlog. RST -> dead + ECONNREFUSED/ECONNRESET wakes;
+  ESTab consumes in-order seq only, ACKs, fin_rx -> CloseWait ->
+  LastAck -> free. Orphaned (last-fd-gone) conns finish async.
+- send copies the user range directly into the segment (no staging
+  buffer -- range_ok'd, single-CPU, uninterruptible); recv copies
+  out of a bounded 1400B conn ring or blocks on WaitOn::TcpRecv and
+  wake_tcp_recv fills the sleeper's buffer through its tables.
+- BUG FOUND + FIXED by this rung (the 4-frame leak): the loopback
+  chain tcp_send pay[1400] + tcp_tx f[1600] + lo_drain fr[1600] +
+  inner tcp_rx->tcp_seg->tcp_tx f[1600] + syscall frames summed to
+  ~8.2KiB -- over the 8KiB kstack. The overflow wrote zeros over the
+  kmalloc block header below kstack_base, so kfree read kind=0 and
+  took the slab-link/corrupt arm, leaking the 4-frame block. Root-
+  caused via af/km allocator counters + a corrupt-header probe.
+  Fixes: (a) pay now reads the user slice directly, (b) tcp_tx's
+  build buffer and lo_drain's pop buffer are non-reentrant statics
+  (TX_F/DRAIN_F), (c) KSTACK_SIZE 8KiB -> 16KiB (x86_64 Linux's
+  THREAD_SIZE), (d) kfree screams on a corrupt header instead of
+  leaking silently (CVE-2022-4378 class: kernel-stack overflow
+  corrupting allocator metadata).
+- tcptest: socket/bind/listen/connect/accept over loopback, echo
+  both directions, dead-port connect -> ECONNREFUSED, accept
+  sockaddr_out family+port, teardown. exit(0), zero leak, 4x WSL.
+- Audit run-65 (quick): the overflow was the confirmed finding and
+  is fixed; NV-65-1 = pre-existing reentrant &mut statics pattern
+  extended to TCPSOCKS (NV-63-1 family); known bounded limitations:
+  no retransmit/timeout for orphans (slot pin), accept backlog
+  tail-insert under EMFILE, no OOB/out-of-order queues (drop).
