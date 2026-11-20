@@ -137,3 +137,33 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 - cve.now: CVE-2006-0744 (sysret uncanonical rcx) is harmless by construction
   (rcx is the CPU-saved next-instruction rip) — recorded as NV-49-1 against
   any future rcx-touching syscall. Audit run-49 (standard): 0 confirmed.
+
+## 2026-11-20 — task/process abstraction + frame reclaim (run-50)
+- `kernel/src/user.rs`: `Proc` -> owned `Task` (pml4, entry, stacks, ranges).
+  `Task::reap()` walks only user PML4 slots 128..255 and frees every leaf and
+  table frame plus the per-task kstack — the page table IS the ledger
+  (CVE-2022-50661: teardown freeing designed in). Shared kernel slots 0..127
+  are never touched. `PHYS_MASK` (0x000f_ffff_ffff_f000) replaces `& !0xfff`
+  when extracting frame addresses — the old mask kept the NX bit and
+  fabricated non-canonical "addresses" out of read-only PTEs.
+- `kernel/src/syscall.rs`: shared `SYS_STACK` replaced by per-task
+  kmalloc'd `CUR_KSTACK` set before each entry. **`user_enter`/`user_terminate`
+  now also save/restore `rdi`+`rsi`** — see below.
+- `kernel/src/cpio.rs`: `entry_at`/`entries()` iterator — the initrd is now
+  the process table; main.rs runs every archive entry as a sequential task
+  with spawn/done lines and before/after frame accounting.
+- `kernel/src/cpu.rs`: `init_syscall` zeroes FS/GS/KGS bases (no firmware
+  leftovers into user state); exception reporter now prints cr2.
+- `kernel/src/kalloc.rs`: `free_frame` (buddy order-0 wrapper) for reap.
+- REAL BUG of the rung — F-50-1, second instance of the Windows-ABI trap:
+  rsi/rdi are callee-saved under Windows x64 but argument registers under
+  SysV. `user_enter` didn't preserve them; the compiler legally kept `&CUR`
+  in rsi across `syscall::enter()`, and the syscall path left the saved
+  user rip (0x555500000023) in rsi on return — take()'s memcpy read a user
+  VA under the kernel table (#PF) or silently mis-sourced (reap skipped,
+  fake 60-frame "leak"). Caught via COM1 markers + cr2 + caller-stack dump.
+  Fix: push/pop rdi,rsi. Boot proof x3:
+  `tasks: 2 ran, frames 18345 -> 18345 after reap (zero leak)`.
+- Audit run-50 (standard, privilege boundary + teardown): 1 confirmed
+  (F-50-1, fixed in-diff); NV-50-1..5 carried/reframed; closes NV-47-2/3/4
+  and NV-49-2.
