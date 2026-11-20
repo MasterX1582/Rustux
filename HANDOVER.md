@@ -543,3 +543,40 @@ the task model now supports fork/clone/wait as the next rung.
 - Audit run-62 (quick): 0 confirmed, 3 rejected, NV-62-1
   (dirfd is ignored rather than ENOTDIR'd -- no real fd-relative
   resolution exists yet; timestamps are all-zero, no fs clock).
+
+## poll(2) (commit pending, audit run-63)
+
+- Syscall 7: Linux pollfd {i32 fd, u16 events, u16 revents} = 8B,
+  nfds <= 32, timeout_ms (<0 infinite, 0 scan-only, >0 slept on a
+  100Hz tick deadline). nfds=0+timeout is a plain interruptible
+  sleep like Linux.
+- Readiness is honest kernel state: pipe read ends report POLLIN
+  on data plus POLLHUP when writers==0 (both may co-report);
+  write ends report POLLOUT on space plus POLLERR when readers==0;
+  file/dir/stdin reads never block -> POLLIN, console -> POLLOUT;
+  unmapped/bad fd -> POLLNVAL. ERR/HUP/NVAL report regardless of
+  the events mask, as Linux.
+- The sleeper stores the user pfds VA + count in wait_ptr/wait_len
+  and a tick deadline in wait_deadline; every pipe-state change
+  (data, space, EOF/EPIPE teardown) re-scans all Poll waiters via
+  per-byte translate through THEIR page tables -- same cross-space
+  mechanism as pipe io wakes -- and a ready count>0 lands in
+  ctx.rax. poll_expire in tick() zeroes revents and returns 0 on
+  timeout.
+- CVE-2023-54019 (poller/waitqueue lifetime UAF) is structurally
+  absent: we hold no pointer from poller to polled object -- the
+  fd->OFD->pipe chain is re-resolved each scan and the sleeper's
+  own fds pin the objects.
+- wait4 collects the zombie NOW (was: mark ppid=0, reap at next
+  pick): Linux releases the task at wait; the deferral kept a
+  dead child counted as a pipe writer, so post-wait4 POLLHUP
+  arrived late -- polltest exposed it (exit 24 -> the deferred-
+  reap window).
+- polltest: empty-pipe poll timeout -> 0, POLLNVAL, poll on a
+  plain file -> POLLIN, cross-fork write -> infinite poll wakes
+  POLLIN, byte read, wait4, parent close -> POLLHUP, 5ms sleep.
+  exit(0), zero leak.
+- Audit run-63 (quick): 0 confirmed, 6 rejected, NV-63-1..2
+  (reentrant &mut TASKS traversal pattern gains one more instance
+  -- pre-existing class, single-CPU safe, unprovable without Miri;
+  no select/epoll and nfds cap 32 vs Linux's RLIMIT-sized sets).
