@@ -580,11 +580,18 @@ the task model now supports fork/clone/wait as the next rung.
   (reentrant &mut TASKS traversal pattern gains one more instance
   -- pre-existing class, single-CPU safe, unprovable without Miri;
   no select/epoll and nfds cap 32 vs Linux's RLIMIT-sized sets).
-- Flake watch: one native-VM run saw fputest's parent exit(1) --
-  a single raced check -- while WSL and three later VM runs were
-  clean. Not attributed to poll (fputest's wait4 takes the
-  blocked-wake path, not the changed collect path); flagged here
-  for the next runs to confirm or chase.
+- Flake resolved: the run-63 "rare fputest exit(1)" recurred on the
+  VM as child exit(9) -- root-caused to resume_ctx (the tick/IRQ
+  resume path) never fxrstor'ing the incoming task's fx image.
+  switch_to/launch had it; resume_ctx only set CUR_I/cr3/ctx, so a
+  timer switch left the previous task's live xmm registers in the
+  FPU. Invisible almost always (kernel emits zero xmm instructions,
+  so stale live regs usually still hold the resuming task's own
+  values); it needs a tick inside fputest's ~0.3ms verify loop AND
+  round-robin to the other pattern-bearing task. A deterministic
+  eager variant of the CVE-2018-3665 (LazyFP) cross-process FPU
+  leak class. Fixed: resume_ctx now fxrstor(&t.fx); five clean WSL
+  boots + native VM verify.
 
 ## UDP sockets (commit pending, audit run-64)
 
