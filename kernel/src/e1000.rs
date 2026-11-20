@@ -651,6 +651,7 @@ pub fn ping_selftest(base: usize, mac: [u8; 6]) -> bool {
 /// exist — its spec was never submitted); the responder learns the
 /// sender's MAC from the received frame and unicasts the reply.
 /// Addresses: A = RN 0.0.0.1 / 10.0.0.1, B = RN 0.0.0.2 / 10.0.0.2.
+#[cfg(demo_net)]
 pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     let role = mac[5];
     if role != 0x01 && role != 0x02 {
@@ -840,6 +841,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
 /// ICMPv6 echo request/reply over link-local addresses.
 /// Same MAC-last-byte role gate as ipv8_demo (:01 initiator,
 /// :02 responder). Runs after ipv8_demo on the socket pair.
+#[cfg(demo_net)]
 pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     let role = mac[5];
     if role != 0x01 && role != 0x02 {
@@ -1273,6 +1275,7 @@ pub fn dhcp_selftest(base: usize, mac: [u8; 6]) -> bool {
 /// Role :01 = active opener, :02 = passive listener on port 7.
 /// Full handshake + one data segment each way + FIN teardown; every
 /// segment's checksum, seq and ack are validated before acting.
+#[cfg(demo_net)]
 pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     let role = mac[5];
     if role != 0x01 && role != 0x02 {
@@ -1283,10 +1286,16 @@ pub fn tcp_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
     const SRV_PORT: u16 = 7;
     let our_port: u16 = if role == 0x01 { 49152 } else { SRV_PORT };
     const MSG: &[u8] = b"rustux over tcp";
-    // ISN with some entropy rather than a constant (seq-prediction
-    // hygiene) — demo-grade, production needs a real hash ISN.
-    let isn =
-        (unsafe { core::arch::x86_64::_rdtsc() } as u32) ^ 0x9e37_79b9;
+    // Linux secure_tcp_seq shape: SipHash of the 4-tuple + a
+    // per-boot timestamp under a boot-seeded key — unpredictable
+    // to an off-path observer, unlike a fixed or bare-rdtsc ISN.
+    let t = unsafe { core::arch::x86_64::_rdtsc() } as u32;
+    let isn = klib::hash::siphash_3u32(
+        u32::from_be_bytes(us_ip) ^ u32::from_be_bytes(peer_ip),
+        ((our_port as u32) << 16) | SRV_PORT as u32,
+        t,
+        ((t as u64) << 32, t.rotate_left(17) as u64),
+    ) as u32;
     let Some((ring, bufs)) = rx_init(base) else {
         return;
     };

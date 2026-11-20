@@ -13,11 +13,28 @@ QEMU     ?= qemu-system-x86_64
 TARGET   := x86_64-unknown-uefi
 KERNEL   := target/$(TARGET)/release/kernel.efi
 
-.PHONY: build run clean
+# demo_net gates the socket-link protocol demos (ipv8/ipv6/tcp
+# selftests driven by the MAC-byte role check). Enabled for `run` and
+# `demo` (the two-guest proof image); a plain `make build` produces a
+# kernel with no demo code paths at all.
+DEMO_RUSTFLAGS := --cfg demo_net
+
+.PHONY: build run demo clean FORCE
 
 build: $(ESP_IMG)
 
-$(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml
+# `run`/`demo` propagate this to the $(KERNEL) recipe below; FORCE
+# makes the kernel/esp recipes always re-run so cargo (not make's
+# timestamps) decides — RUSTFLAGS changes invalidate the fingerprint.
+run demo: RUSTFLAGS = $(DEMO_RUSTFLAGS)
+export RUSTFLAGS
+
+demo: $(ESP_IMG)
+	@echo "demo image (demo_net) ready at $(ESP_IMG)"
+
+FORCE:
+
+$(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml FORCE
 	cargo build --release --target $(TARGET) -p kernel
 
 $(ESP_IMG): $(KERNEL)

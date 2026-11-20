@@ -916,9 +916,14 @@ fn main() -> Status {
                 let dhcp_ok = e1000::dhcp_selftest(e_base, e_mac);
                 kprintln!(con, "rustux: e1000: DHCP lease {dhcp_ok}");
             }
-            e1000::ipv8_demo(e_base, e_mac, &mut con);
-            e1000::ipv6_selftest(e_base, e_mac, &mut con);
-            e1000::tcp_selftest(e_base, e_mac, &mut con);
+            // Socket-link protocol demos: only built with
+            // RUSTFLAGS=--cfg demo_net (see Makefile `run`).
+            #[cfg(demo_net)]
+            {
+                e1000::ipv8_demo(e_base, e_mac, &mut con);
+                e1000::ipv6_selftest(e_base, e_mac, &mut con);
+                e1000::tcp_selftest(e_base, e_mac, &mut con);
+            }
         }
     } else {
         kprintln!(con, "rustux: e1000: no 82574L on the bus");

@@ -7,3 +7,6 @@ publish = false
 [dependencies]
 uefi = "0.41"
 klib = { path = "../klib" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(demo_net)"] }

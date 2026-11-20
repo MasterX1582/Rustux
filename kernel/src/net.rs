@@ -1,4 +1,7 @@
 //! net — minimal IPv4/ICMP wire layer.
+// Wire-layer items consumed only by the socket-link demos are dead
+// code in a non-demo_net build — that's expected layering, not rot.
+#![cfg_attr(not(demo_net), allow(dead_code))]
 //!
 //! Everything parsed here is untrusted wire data (device-DMA'd
 //! buffers): every field is validated before use and every derived
