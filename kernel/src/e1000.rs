@@ -408,7 +408,8 @@ pub fn irq_selftest(base: usize, mac: [u8; 6]) -> bool {
 
 /// Bring up the RX ring: 8 descriptors, each pointing at its own 2 KiB
 /// buffer. Returns (ring, buffers) — both buddy pages, kept for the
-/// device lifetime. Hardware owns descriptors 0..N_RX-2 (RDT points one
+/// device lifetime. Hardware receives into [RDH, RDT); reposting a
+/// consumed descriptor d writes RDT=d so the just-freed slot becomes
 /// past the last usable, the full/empty ambiguity keeps one free).
 fn rx_init(base: usize) -> Option<(*mut RxDesc, *mut u8)> {
     let ring = kalloc::kmalloc(4096) as *mut RxDesc;
@@ -483,7 +484,7 @@ pub fn arp_selftest(base: usize, mac: [u8; 6]) -> bool {
                 ));
                 unsafe {
                     (*ring.add(d)).sta = 0;
-                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                    wr(base, RDT, d as u32);
                 }
                 continue;
             }
@@ -523,12 +524,12 @@ pub fn arp_selftest(base: usize, mac: [u8; 6]) -> bool {
                 if sta & RXD_STA_EOP != 0 { " eop" } else { "" }
             ));
             // Not our ARP — recycle the descriptor so more can arrive.
-            // RDT is one-past-last-posted (next_to_use): reposting d
-            // makes it the tail again at d+1.
+            // RDT=d: the consumed slot becomes the new one-descriptor
+            // gap; all other posted buffers stay inside [RDH, RDT).
             // SAFETY: reposting a consumed descriptor.
             unsafe {
                 (*ring.add(d)).sta = 0;
-                wr(base, RDT, ((d + 1) % N_RX) as u32);
+                wr(base, RDT, d as u32);
             }
         }
         i += 1;
@@ -586,7 +587,7 @@ pub fn ping_selftest(base: usize, mac: [u8; 6]) -> bool {
             if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
                 unsafe {
                     (*ring.add(d)).sta = 0;
-                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                    wr(base, RDT, d as u32);
                 }
                 continue;
             }
@@ -632,7 +633,7 @@ pub fn ping_selftest(base: usize, mac: [u8; 6]) -> bool {
             // SAFETY: reposting a consumed descriptor.
             unsafe {
                 (*ring.add(d)).sta = 0;
-                wr(base, RDT, ((d + 1) % N_RX) as u32);
+                wr(base, RDT, d as u32);
             }
         }
         i += 1;
@@ -692,7 +693,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
                     unsafe {
                         (*ring.add(d)).sta = 0;
-                        wr(base, RDT, ((d + 1) % N_RX) as u32);
+                        wr(base, RDT, d as u32);
                     }
                     continue;
                 }
@@ -734,7 +735,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
                 // SAFETY: reposting a consumed descriptor.
                 unsafe {
                     (*ring.add(d)).sta = 0;
-                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                    wr(base, RDT, d as u32);
                 }
             }
             rounds += 1;
@@ -770,7 +771,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
             if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
                 unsafe {
                     (*ring.add(d)).sta = 0;
-                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                    wr(base, RDT, d as u32);
                 }
                 continue;
             }
@@ -819,7 +820,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
             // SAFETY: reposting a consumed descriptor.
             unsafe {
                 (*ring.add(d)).sta = 0;
-                wr(base, RDT, ((d + 1) % N_RX) as u32);
+                wr(base, RDT, d as u32);
             }
         }
         i += 1;
