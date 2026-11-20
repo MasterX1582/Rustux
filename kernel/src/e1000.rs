@@ -736,7 +736,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
                 }
             }
             rounds += 1;
-            if rounds == 2_000_000_000 {
+            if rounds == u32::MAX {
                 printk(format_args!("rustux: ipv8: no reply (peer down?)"));
                 return;
             }
@@ -813,9 +813,8 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
             }
         }
         i += 1;
-        if i == 2_000_000_000 {
-            printk(format_args!("rustux: ipv8: listen timed out"));
-            return;
+        if i == u32::MAX {
+            i = 0; // dedicated demo peer: listen indefinitely
         }
     }
 }
