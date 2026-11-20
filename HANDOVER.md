@@ -2,7 +2,7 @@
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:** `ea5cfcf kernel: ExitBootServices + UEFI memory map` — GOP framebuffer console + ExitBootServices landed on top of all four wave-2 port adoptions. Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only.
+**Last commit:** `2159f67 kernel: boot logo — fbcon splash + scroll region, README logo` — own page tables + FrameAlloc (`e8946f8`), own GDT+IDT with exception dispatch (`f26b2e4`), and the UEFI boot logo (`2159f67`) landed on top of ExitBootServices. Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo is public: `https://github.com/MasterX1582/Linux-Rust` (history rewritten/anonymized — force-pushed baseline `ef6f55f`).
 
 ## Environments
 
@@ -10,7 +10,7 @@
 |------|------|------|
 | Primary host | `$REPO` (this checkout) | primary repo, port jobs run here |
 | Primary host | `$LINUX_REF` | Linux reference tree (torvalds clone or scoped subset); `check-sources.sh` reads `${LINUX_REF:-$HOME/linux-ref}` |
-| Linux dev VM | `~/linux-rust` | git checkout — sync via `git bundle`/fetch; native build+test+boot host |
+| Linux dev VM | `~/linux-rust` | git checkout — sync via `git pull` (origin = GitHub, public); native build+test+boot host |
 | Linux dev VM | `~/linux-ref` | scoped ref tree (lib/, include/, arch/x86/include/, Kbuild/Kconfig/Makefile) — the `$LINUX_REF` default |
 | Linux dev VM | `~/recv/recv.py` | HTTP PUT receiver on `:9876` — `curl -T file http://<VM_IP>:9876/name` |
 | Linux dev VM | `~/linux-rust/test/zorin/fixtures/` | Zorin 18.1 ISO fixtures: vmlinuz 6.17, initrd (4-layer: AMD ucode → Intel ucode → modules/firmware cpio → gzip'd casper userspace), grub.cfg; dissection docs in `test/zorin/README.md` |
@@ -23,29 +23,32 @@ VM toolchain: gcc 13.3, clang 18.1, QEMU 8.2.2+OVMF, mtools, cargo 1.100 (`~/.ca
 
 Gate bar: `rust-anything diff` 100% case match + `rust-anything gate` all checks. Then serial adoption: generator/extractor script → `klib/src/<mod>.rs` + `<mod>_tests.inc` → register in `klib/src/lib.rs` → boot proof in `kernel/src/main.rs` → `cargo test -p klib` + `make run` → scoped security-audit run → commit.
 
-## Port status (as of ea5cfcf)
+## Port status (as of 2159f67)
 
 All four wave-2 parallel ports **landed**: siphash (`0149328`, klib::hash already identical), genradix+interval_tree (`eb55a9b`, 899/899), assoc_array (`6097eab`, 1383/1383), strtox-helpers (`a4d19df`, 11667/11667, merge-adopted). Port packages stay in `ports/` as regression fixtures.
 
 Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap, crc, hash(+siphash), rbtree, string, sha1/256/512+hmac, kfifo, llist, seq_buf, fmt, rhashtable, xarray, idr, radix_tree, maple_tree, percpu_counter, prb (printk ringbuf), genradix, interval_tree, assoc_array, kstrtox, string_helpers, font. **327 tests.**
 
-## Kernel runtime status (as of ea5cfcf)
+## Kernel runtime status (as of 2159f67)
 
 - Consoles: COM1 serial (`kernel/src/uart.rs`) + GOP framebuffer text console (`kernel/src/fbcon.rs`, `klib::font` = generated `lib/fonts/font_8x16.c` glyphs via `extract_font.py`). `Console` in `main.rs` fans every write to both. Committed `e7486d7`, audit run-21 clean.
+- Boot logo (`2159f67`, audit run-25 clean): `gen_logo.ps1` edge-flood-fills the source PNG → transparent `docs/logo.png` + 96×143 RGB const `kernel/src/logo_data.rs`; `fbcon::splash()` draws it centered at top and a `top` row bound makes `scroll()` move only the text region (fbcon-style pinned logo). Verified by QEMU monitor `screendump` on the VM.
 - `ExitBootServices` claimed (`ea5cfcf`, audit run-22 clean): kernel leaves UEFI boot services, takes the final memory map, prints usable/reclaimable/largest-region summary. Post-exit output still reaches both consoles (COM1 = port I/O, fb = GOP BAR memory; the uefi crate's `MemoryMapOwned` drop is post-EBS-safe).
-- Visible demo on VM: `~/boot-demo.sh` (GTK window + serial). Headless pass/fail: `make run` (exit 33).
+- Own page tables + FrameAlloc (`e8946f8`, audit run-23 clean): `kernel/src/mm.rs` builds a 4-level identity map 0..max(4 GiB, map top) with 2 MiB pages (multi-PDPT layout — QEMU's ~1 TiB PCI-hole descriptor needs >512 entries), switches CR3, and pools every conventional frame minus the carve into an intrusive freelist. Boot proof: alloc/write/free on real frames.
+- Own GDT + IDT (`f26b2e4`, audit run-24 clean): `kernel/src/cpu.rs` flat 64-bit GDT (KCODE=0x08, KDATA=0x10, CS reload via `lretq`), 256-entry IDT, naked asm stubs → shared dispatcher → Rust reporter; installed AFTER ExitBootServices (firmware reloads GDTR/IDTR and raises timer IRQs internally — installing earlier triple-faults). UEFI target is Windows x64 ABI: stub args go in rcx/rdx, not rdi/rsi. #UD proof catches, advances rip, resumes.
+- Visible demo on VM: `~/boot-demo.sh` (GTK window + serial; launch with `DISPLAY=:0 XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.*` if no session env). Headless pass/fail: `make run` (exit 33). VM MCP (LinuxMCP-VM-3) provides shell/PTY/fs/desktop control when sshd is down.
 
 ## Conventions that matter
 
 - **Generators are authoritative.** `extract_*.py` at repo root regenerate `klib/src/*.rs` — hardening fixes go in the extractor, never edit generated files directly. `.replace()` calls are assert-guarded (drift can't silently no-op).
 - **Adversarial hardening patterns** (apply to new ports): `wrapping_*` where C wraps; arena-index routing to scratch nodes (`nat`/`nmat`, `nidx`/`spare`) for crafted pointers; iteration caps (`MAS_ITER_LIMIT`-style `__lim`) on pointer-chasing/retry loops; clamp table/slot/mark/type indexes; bounds on copy/zero helpers; widen-then-multiply for `batch*ncpu`-style arithmetic.
-- **Security mandate (standing rule):** every executable-code change → scoped `security-audit` run (quick profile; standard for crypto/auth/etc.), artifacts to `<AUDIT_DIR>/linux-rust/run-N\` (outside the target repo) (next free N; run-22 closed — runs 18-22 covered the wave-2 adoptions, fbcon, and ExitBootServices). Fix confirmed findings or record as needs_validation before commit.
+- **Security mandate (standing rule):** every executable-code change → scoped `security-audit` run (quick profile; standard for crypto/auth/etc.), artifacts to `<AUDIT_DIR>/linux-rust/run-N\` (outside the target repo) (next free N; run-25 closed — runs 18-25 covered the wave-2 adoptions, fbcon, EBS, mm, cpu, boot logo). Fix confirmed findings or record as needs_validation before commit.
 - **Commits:** signed `Generated with [Devin]` + co-author trailer. One commit per adoption wave.
 - **Delegation model:** port jobs run as parallel background subagents, one `ports/` dir each, no shared-file edits. Adoption/wiring/boot/audit/commit stay serial. Rate limits killed 3 of 4 jobs this round — resume by re-dispatching with the resume-step above; their on-disk progress survives.
 
 ## Next steps
 
-1. Kernel runtime: GDT/IDT + exception handlers (page tables + frame allocator DONE in `e8946f8` — `kernel/src/mm.rs`: 4-level identity map w/ multi-PDPT, intrusive freelist FrameAlloc; we still run on OVMF's GDT/IDT). Then buddy/slab allocator on top of FrameAlloc.
+1. Kernel runtime: GDT/IDT + exception dispatch DONE in `f26b2e4` (see runtime status). Next: interrupt layer — PIC/APIC + timer (needs IDT gates for IRQ vectors, currently `cli`), IST for #DF, then buddy/slab allocator on top of FrameAlloc.
 2. Interrupt/timer + early printk drain into `klib::prb`, panic path → both consoles.
 3. Queue next lib units per `docs/roadmap.md` (Wave-1 remainder or Wave-2 core services: timer wheels, workqueues, sched math — needs userspace shims).
 4. Zorin acceptance ladder (see `test/zorin/README.md`): M0 fixtures done → next rungs are boot our kernel under the real grub cmdline, initrd cpio/gzip readers, eventually casper init (M6 desktop = drop-in milestone).
