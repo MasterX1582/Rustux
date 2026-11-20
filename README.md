@@ -1,4 +1,4 @@
-# linux-rust
+# Rust-Linux
 
 <p align="center">
   <img src="docs/logo.png" alt="linux-rust logo" width="220">
@@ -9,9 +9,18 @@ the original C kernel's recorded behavior.
 
 The C kernel source is the reference and stays untouched in a separate tree
 (`$LINUX_REF`, default `~/linux-ref`). Each unit is ported one at a time with
-[rust-anything](https://github.com/MasterX1582/rust-anything): the original's
+[rust-anything](https://github.com/erkamyaman/rust-anything): the original's
 behavior is recorded to `cases.jsonl`, the Rust port must match every recorded
 case (`diff`) and pass `gate` before it is adopted.
+
+## Acknowledgements
+
+- **Linus Torvalds** — for the Linux kernel itself
+  ([torvalds/linux](https://github.com/torvalds/linux)), the reference this
+  project reimplements unit by unit.
+- **[@erkamyaman_ng](https://x.com/erkamyaman_ng)** — for
+  [rust-anything](https://github.com/erkamyaman/rust-anything), the
+  record/diff/gate porting toolchain that drives every verified port here.
 
 ## Layout
 

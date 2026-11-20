@@ -2,7 +2,7 @@
 
 **Goal:** rebuild the Linux kernel in Rust as a drop-in replacement — not Rust-in-Linux support. Strategy: port `lib/` and subsystem units one at a time with differential verification (`rust-anything` record → diff → gate), adopt verified ports into `klib`, prove each under QEMU boot, audit, commit. Long tail leads to mm/sched/fs/net/drivers parity.
 
-**Last commit:** `2159f67 kernel: boot logo — fbcon splash + scroll region, README logo` — own page tables + FrameAlloc (`e8946f8`), own GDT+IDT with exception dispatch (`f26b2e4`), and the UEFI boot logo (`2159f67`) landed on top of ExitBootServices. Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo is public: `https://github.com/MasterX1582/Linux-Rust` (history rewritten/anonymized — force-pushed baseline `ef6f55f`).
+**Last commit:** `cc57220 kernel: LAPIC periodic timer via own IDT + register-safe IRQ dispatch` — the LAPIC timer now delivers real async IRQs through our IDT (timer 0xf0, spurious 0xff) on top of GDT/IDT (`f26b2e4`), page tables + FrameAlloc (`e8946f8`), and the boot logo (`2159f67`). Suite: **327 klib tests green**, QEMU boot PASS (exit 33), clippy has 14 pre-existing bitmap warnings only. Repo is public: `https://github.com/MasterX1582/Linux-Rust` (history rewritten/anonymized — force-pushed baseline `ef6f55f`).
 
 ## Environments
 
@@ -36,19 +36,20 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
 - `ExitBootServices` claimed (`ea5cfcf`, audit run-22 clean): kernel leaves UEFI boot services, takes the final memory map, prints usable/reclaimable/largest-region summary. Post-exit output still reaches both consoles (COM1 = port I/O, fb = GOP BAR memory; the uefi crate's `MemoryMapOwned` drop is post-EBS-safe).
 - Own page tables + FrameAlloc (`e8946f8`, audit run-23 clean): `kernel/src/mm.rs` builds a 4-level identity map 0..max(4 GiB, map top) with 2 MiB pages (multi-PDPT layout — QEMU's ~1 TiB PCI-hole descriptor needs >512 entries), switches CR3, and pools every conventional frame minus the carve into an intrusive freelist. Boot proof: alloc/write/free on real frames.
 - Own GDT + IDT (`f26b2e4`, audit run-24 clean): `kernel/src/cpu.rs` flat 64-bit GDT (KCODE=0x08, KDATA=0x10, CS reload via `lretq`), 256-entry IDT, naked asm stubs → shared dispatcher → Rust reporter; installed AFTER ExitBootServices (firmware reloads GDTR/IDTR and raises timer IRQs internally — installing earlier triple-faults). UEFI target is Windows x64 ABI: stub args go in rcx/rdx, not rdi/rsi. #UD proof catches, advances rip, resumes.
+- LAPIC periodic timer (audit run-26 clean): `kernel/src/apic.rs` masks the legacy PIC, enables the LAPIC (IA32_APIC_BASE; xAPIC MMIO + x2APIC MSR paths — x2APIC coded but unexercised on QEMU), calibrates the timer against PIT ch2 (~63 MHz counter), arms 100 Hz periodic on vec 0xf0 (spurious 0xff). IRQs route through dedicated IDT stubs; `dispatch` saves/restores every caller-saved reg (incl. the interrupted rcx — stubs are pure push-immediate now; an earlier `mov rcx, rsp` clobbered it and made the tick wait read a garbage bound). Boot proof: `sti` + hlt-wait delivers exactly 50 ticks, #UD resume intact.
 - Visible demo on VM: `~/boot-demo.sh` (GTK window + serial; launch with `DISPLAY=:0 XAUTHORITY=/run/user/1000/.mutter-Xwaylandauth.*` if no session env). Headless pass/fail: `make run` (exit 33). VM MCP (LinuxMCP-VM-3) provides shell/PTY/fs/desktop control when sshd is down.
 
 ## Conventions that matter
 
 - **Generators are authoritative.** `extract_*.py` at repo root regenerate `klib/src/*.rs` — hardening fixes go in the extractor, never edit generated files directly. `.replace()` calls are assert-guarded (drift can't silently no-op).
 - **Adversarial hardening patterns** (apply to new ports): `wrapping_*` where C wraps; arena-index routing to scratch nodes (`nat`/`nmat`, `nidx`/`spare`) for crafted pointers; iteration caps (`MAS_ITER_LIMIT`-style `__lim`) on pointer-chasing/retry loops; clamp table/slot/mark/type indexes; bounds on copy/zero helpers; widen-then-multiply for `batch*ncpu`-style arithmetic.
-- **Security mandate (standing rule):** every executable-code change → scoped `security-audit` run (quick profile; standard for crypto/auth/etc.), artifacts to `<AUDIT_DIR>/linux-rust/run-N\` (outside the target repo) (next free N; run-25 closed — runs 18-25 covered the wave-2 adoptions, fbcon, EBS, mm, cpu, boot logo). Fix confirmed findings or record as needs_validation before commit.
+- **Security mandate (standing rule):** every executable-code change → scoped `security-audit` run (quick profile; standard for crypto/auth/etc.), artifacts to `<AUDIT_DIR>/linux-rust/run-N\` (outside the target repo) (next free N; run-26 closed — runs 18-26 covered the wave-2 adoptions, fbcon, EBS, mm, cpu, boot logo, LAPIC timer). Fix confirmed findings or record as needs_validation before commit.
 - **Commits:** signed `Generated with [Devin]` + co-author trailer. One commit per adoption wave.
 - **Delegation model:** port jobs run as parallel background subagents, one `ports/` dir each, no shared-file edits. Adoption/wiring/boot/audit/commit stay serial. Rate limits killed 3 of 4 jobs this round — resume by re-dispatching with the resume-step above; their on-disk progress survives.
 
 ## Next steps
 
-1. Kernel runtime: GDT/IDT + exception dispatch DONE in `f26b2e4` (see runtime status). Next: interrupt layer — PIC/APIC + timer (needs IDT gates for IRQ vectors, currently `cli`), IST for #DF, then buddy/slab allocator on top of FrameAlloc.
+1. Kernel runtime: GDT/IDT (`f26b2e4`) and LAPIC periodic timer (50-tick IRQ proof) DONE. Next: IST stack for #DF, buddy/slab allocator on top of FrameAlloc, then ACPI/IOAPIC parsing for real device IRQ routing.
 2. Interrupt/timer + early printk drain into `klib::prb`, panic path → both consoles.
 3. Queue next lib units per `docs/roadmap.md` (Wave-1 remainder or Wave-2 core services: timer wheels, workqueues, sched math — needs userspace shims).
 4. Zorin acceptance ladder (see `test/zorin/README.md`): M0 fixtures done → next rungs are boot our kernel under the real grub cmdline, initrd cpio/gzip readers, eventually casper init (M6 desktop = drop-in milestone).

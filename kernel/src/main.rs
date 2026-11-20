@@ -13,6 +13,7 @@ use core::fmt::Write;
 use uefi::mem::memory_map::{MemoryMap, MemoryType};
 use uefi::prelude::*;
 
+mod apic;
 mod cpu;
 mod fbcon;
 mod logo_data;
@@ -835,6 +836,45 @@ fn main() -> Status {
         ok
     );
     assert!(ok && fa.free_count() == free0 && free0 > 0);
+
+    // Interrupt layer step 1: mask the legacy PIC, arm the LAPIC periodic
+    // timer (calibrated against the PIT), then take real IRQs through our
+    // own IDT. Interrupt gates restore caller-saved registers in dispatch,
+    // so the interrupted context resumes intact.
+    let lapic = match apic::init() {
+        Some(hz) => {
+            let _ = writeln!(
+                con,
+                "linux-rust: apic: lapic timer {hz} Hz counter -> 100 Hz periodic on vec {:#x} ({} mode)",
+                apic::IRQ_TIMER,
+                if apic::is_x2apic() { "x2apic" } else { "xapic" }
+            );
+            true
+        }
+        None => {
+            let _ = writeln!(con, "linux-rust: apic: no local APIC -- interrupts stay off");
+            false
+        }
+    };
+    if lapic {
+        // SAFETY: IDT gates for 0xf0/0xff are installed; dispatch saves and
+        // restores every caller-saved register around the handler, and the
+        // handler sends EOI. hlt sleeps until the IRQ arrives.
+        unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
+        let t0 = apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        // ~50 ticks at 100 Hz; the spin bound keeps a broken timer from
+        // hanging the boot proof.
+        let mut spins = 0u64;
+        while apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - t0 < 50 && spins < 3000 {
+            unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
+            spins += 1;
+        }
+        let _ = writeln!(
+            con,
+            "linux-rust: apic: {} periodic timer IRQs delivered via own IDT",
+            apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - t0
+        );
+    }
 
     // Prove the new IDT: the #UD handler reports on COM1, bumps rip past the
     // 2-byte ud2, and execution resumes here.

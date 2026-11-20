@@ -89,10 +89,16 @@ const NAMES: [&str; 32] = [
     "#SX", "?",
 ];
 
-/// Rust-side reporter. `rcx` carries `&mut TrapFrame` (set by the stubs) —
+/// Rust-side reporter. `rcx` carries `&mut TrapFrame` (set by `dispatch`) —
 /// the UEFI target uses the Windows x64 ABI, so the first arg arrives in
 /// rcx, not rdi.
 extern "C" fn report_frame(f: &mut TrapFrame) {
+    // Hardware IRQs (LAPIC timer, spurious) take the cheap path: no serial
+    // port setup, no printing. Every other vector is an exception report.
+    if f.vec == crate::apic::IRQ_TIMER || f.vec == crate::apic::IRQ_SPURIOUS {
+        crate::apic::irq_dispatch(f.vec);
+        return;
+    }
     let mut u = unsafe { Uart16550::new(COM1) };
     u.init();
     match f.vec {
@@ -130,24 +136,53 @@ extern "C" fn report_frame(f: &mut TrapFrame) {
     }
 }
 
-/// Shared tail for every stub: align the stack for the SysV callee, call the
-/// reporter, then unwind to the hardware frame and iretq.
+/// Shared tail for every stub. Stubs push ONLY immediates so the frame can
+/// be located without clobbering any register: on entry rsp points at `vec`.
+/// Here we save rcx (the arg register we are about to reuse) first, derive
+/// `&TrapFrame` from the stack, save every other caller-saved register
+/// (asynchronous IRQs must not corrupt the interrupted context), call the
+/// reporter, restore, unwind to the hardware frame and iretq.
 #[unsafe(naked)]
 extern "C" fn dispatch() -> ! {
     core::arch::naked_asm!(
+        "push rcx", // interrupted rcx -- stubs leave it untouched
+        "mov rcx, rsp",
+        "lea rcx, [rcx + 8]", // rcx = &TrapFrame (first arg, Windows x64 ABI)
         "push rbp",
         "mov rbp, rsp",
         "and rsp, -16",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rax",
+        "sub rsp, 8",
         "call {r}",
+        "add rsp, 8",
+        "pop rax",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
         "mov rsp, rbp",
         "pop rbp",
+        "pop rcx", // interrupted rcx back
         "add rsp, 16",
         "iretq",
         r = sym report_frame,
     );
 }
 
-/// Stub without CPU error code: pushes a dummy err=0 then the vector.
+/// Stub without CPU error code: pushes a dummy err=0 then the vector. Must
+/// not write any register -- the interrupted context's rcx et al. are live.
 macro_rules! stub {
     ($name:ident, $vec:expr) => {
         #[unsafe(naked)]
@@ -155,7 +190,6 @@ macro_rules! stub {
             core::arch::naked_asm!(
                 "push 0",
                 concat!("push ", $vec),
-                "mov rcx, rsp",
                 "jmp {d}",
                 d = sym dispatch,
             );
@@ -170,7 +204,6 @@ macro_rules! stub_err {
         extern "C" fn $name() {
             core::arch::naked_asm!(
                 concat!("push ", $vec),
-                "mov rcx, rsp",
                 "jmp {d}",
                 d = sym dispatch,
             );
@@ -190,9 +223,12 @@ stub_err!(stub_cp, 21);
 stub_err!(stub_vc, 29);
 stub!(stub_ud, 6);
 stub!(stub_bp, 3);
+stub!(stub_irq_timer, "0xf0");
+stub!(stub_irq_spurious, "0xff");
 
 /// Install our GDT (reload CS via far return, data segments via ax) and IDT
-/// (all 256 vectors). Interrupts stay masked — no PIC/APIC setup yet.
+/// (all 256 vectors, incl. IRQ stubs for the LAPIC timer and spurious
+/// vectors). Interrupts stay masked — apic::init + `sti` come later.
 pub fn init() {
     let gdtr = TablePtr {
         limit: (GDT.len() * 8 - 1) as u16,
@@ -227,7 +263,7 @@ pub fn init() {
         );
     }
 
-    let gates: [(usize, u64); 11] = [
+    let gates: [(usize, u64); 13] = [
         (3, stub_bp as *const () as u64),
         (6, stub_ud as *const () as u64),
         (8, stub_df as *const () as u64),
@@ -239,6 +275,8 @@ pub fn init() {
         (17, stub_ac as *const () as u64),
         (21, stub_cp as *const () as u64),
         (29, stub_vc as *const () as u64),
+        (0xf0, stub_irq_timer as *const () as u64),
+        (0xff, stub_irq_spurious as *const () as u64),
     ];
     for v in 0..256 {
         set_gate(v, stub_default as *const () as u64);
