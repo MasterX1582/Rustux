@@ -748,7 +748,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
     }
 
     // Responder: bounded listen for an IPv8 echo request, then reply.
-    printk(format_args!("rustux: ipv8: responder listening ~10s"));
+    printk(format_args!("rustux: ipv8: responder listening ~50s"));
     let mut i = 0u32;
     loop {
         for d in 0..N_RX {
@@ -813,7 +813,7 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
             }
         }
         i += 1;
-        if i == 40_000_000 {
+        if i == 200_000_000 {
             printk(format_args!("rustux: ipv8: listen timed out"));
             return;
         }
