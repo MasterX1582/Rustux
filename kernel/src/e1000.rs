@@ -463,6 +463,23 @@ pub fn arp_selftest(base: usize, mac: [u8; 6]) -> bool {
             if sta & RXD_STA_DD == 0 {
                 continue;
             }
+            // Validate the device-written fields before touching the
+            // buffer (CVE-2009-1385 class): len is untrusted — it must
+            // describe a complete (EOP), minimally-sized frame that fits
+            // the posted buffer. Anything else is reposted, not parsed.
+            if sta & RXD_STA_EOP == 0
+                || len < 14
+                || len as usize > RX_BUF
+            {
+                printk(format_args!(
+                    "rustux: e1000: rx {len}B sta{sta:#04x} invalid, dropping"
+                ));
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                }
+                continue;
+            }
             let p = unsafe { bufs.add(d * RX_BUF) };
             let et = unsafe { u16::from_be_bytes([*p.add(12), *p.add(13)]) };
             if et == 0x0806 && len >= 42 {
