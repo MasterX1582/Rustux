@@ -196,6 +196,7 @@ const NR_GETPPID: u64 = 110;
 const NR_PIPE2: u64 = 293;
 const NR_GETDENTS: u64 = 217;
 const NR_NEWFSTATAT: u64 = 262;
+const NR_POLL: u64 = 7;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -233,6 +234,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_WRITE => sys_write(ctx, a1, a2, a3),
         NR_PIPE => user::fd_pipe(a1, 0),
         NR_PIPE2 => user::fd_pipe(a1, a2),
+        NR_POLL => user::fd_poll(ctx, a1, a2, a3 as i64),
         NR_OPEN => sys_open(a1, a2, a3),
         NR_CLOSE => user::fd_close(a1),
         // off arrives as u64; the fd layer interprets it as i64 —

@@ -119,6 +119,10 @@ enum WaitOn {
     PipeRead(usize),
     /// write() on a full pipe: `wait_ptr/len` is the user buffer.
     PipeWrite(usize),
+    /// poll(): `wait_ptr` is the user pollfd array, `wait_len` the
+    /// fd count. Any pipe-state change re-scans it; wait_deadline
+    /// ticks (0 = none) bounds the sleep.
+    Poll,
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -395,6 +399,7 @@ pub fn kill(pid: u64, sig: u64) -> u64 {
         t.wait_on = WaitOn::None;
         t.wait_ptr = 0;
         t.wait_len = 0;
+        t.wait_deadline = 0;
         t.state = TaskState::Runnable;
     }
     0
@@ -512,6 +517,8 @@ pub struct Task {
     wait_ptr: u64,
     /// Blocked pipe io length (unused by wait4).
     wait_len: u64,
+    /// apic::TICKS deadline for a timed Poll wait — 0 means none.
+    wait_deadline: u64,
     /// Pending signal bitmask — bit (sig-1), sigs 1..=31.
     pending: u32,
     /// Per-signal disposition: 0=SIG_DFL, 1=SIG_IGN, else a user VA
@@ -796,6 +803,7 @@ fn load(img: &[u8]) -> Option<Task> {
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_len: 0,
+        wait_deadline: 0,
         pending: 0,
         handlers: [0; 31],
         // SAFETY: read of the init-time capture.
@@ -1333,10 +1341,13 @@ fn wake_pipe_waiters(on: WaitOn, ret: u64) {
             if t.state == TaskState::Blocked && t.wait_on == on {
                 t.ctx.rax = ret;
                 t.wait_on = WaitOn::None;
+                t.wait_deadline = 0;
                 t.state = TaskState::Runnable;
             }
         }
     }
+    // Endpoint teardown also changes poll readiness (POLLHUP/ERR).
+    wake_pollers();
 }
 
 /// Feed blocked readers from pipe `id`'s ring, greedily: each waiter
@@ -1428,13 +1439,202 @@ fn wake_pipe_writers(id: usize) -> usize {
 /// After a pipe's fill level changes, settle both wait directions.
 /// A woken reader frees space (writers may fit); a woken writer adds
 /// data (more readers may be fed). Every wake clears wait_on, so
-/// this loop is monotonically terminating within MAX_TASKS.
+/// this loop is monotonically terminating within MAX_TASKS. Poll
+/// waiters re-scan on any pipe change (their fd set may name it).
 fn pipe_wake(id: usize) {
     loop {
         if wake_pipe_readers(id) + wake_pipe_writers(id) == 0 {
             break;
         }
     }
+    wake_pollers();
+}
+
+/// poll() event bits — the standard Linux POLL* values.
+const POLLIN: u16 = 0x0001;
+const POLLOUT: u16 = 0x0004;
+const POLLERR: u16 = 0x0008;
+const POLLHUP: u16 = 0x0010;
+const POLLNVAL: u16 = 0x0020;
+/// Bounded pollfd array — same fixed-table discipline as MAX_FDS.
+const MAX_POLL: u64 = 32;
+
+/// Read `len` user bytes from another space via per-byte translate —
+/// small (<=8B) structured reads for pollfd fields on a sleeping task.
+fn read_task_u(pml4: u64, va: u64, len: u64) -> Option<u64> {
+    let mut v = 0u64;
+    for i in 0..len {
+        let pa = translate(pml4, va + i)?;
+        // SAFETY: pa is a present user frame in pml4.
+        v |= (unsafe { (pa as *const u8).read() } as u64) << (i * 8);
+    }
+    Some(v)
+}
+
+/// Write one u16 into another space (pollfd.revents on a sleeper).
+fn write_task_u16(pml4: u64, va: u64, v: u16) {
+    for i in 0..2u64 {
+        if let Some(pa) = translate(pml4, va + i) {
+            // SAFETY: pa is a present user frame in pml4.
+            unsafe { (pa as *mut u8).write((v >> (i * 8)) as u8) };
+        }
+    }
+}
+
+/// Evaluate one pollfd's revents against kernel state. Requested
+/// events are masked in; ERR/HUP/NVAL report unconditionally like
+/// Linux (they describe the fd, not the request).
+fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
+    if !(0..MAX_FDS as i32).contains(&fd) {
+        return POLLNVAL;
+    }
+    let Some(oi) = t.fds[fd as usize] else {
+        return POLLNVAL;
+    };
+    let ofds = unsafe { &*core::ptr::addr_of!(OFDS) };
+    let Some(o) = ofds.get(oi as usize).and_then(|s| s.as_ref()) else {
+        return POLLNVAL;
+    };
+    let pipes = unsafe { &*core::ptr::addr_of!(PIPES) };
+    let r = match &o.kind {
+        // Console writes never block; stdin reads return EOF so they
+        // "never block" either — Linux reports POLLIN at EOF.
+        FdKind::Stdin => POLLIN,
+        FdKind::Console => POLLOUT,
+        // File and dir reads never block (EOF reads return 0).
+        FdKind::File(_) | FdKind::Dir => POLLIN,
+        FdKind::Pipe { id, write } => {
+            match pipes.get(*id).and_then(|s| s.as_ref()) {
+                None => POLLERR, // peer's frame freed — torn down
+                Some(p) if !write => {
+                    let mut r = 0;
+                    if p.tail > p.head {
+                        r |= POLLIN;
+                    }
+                    if p.writers == 0 {
+                        r |= POLLHUP; // every writer gone — read won't block
+                    }
+                    r
+                }
+                Some(p) => {
+                    let mut r = 0;
+                    if p.readers == 0 {
+                        r |= POLLERR; // write would EPIPE
+                    }
+                    if PIPE_SIZE - (p.tail - p.head) > 0 {
+                        r |= POLLOUT;
+                    }
+                    r
+                }
+            }
+        }
+    };
+    (r & events) | (r & (POLLERR | POLLHUP | POLLNVAL))
+}
+
+/// Scan a task's pollfd array through ITS page tables, writing each
+/// revents. Returns the count of nonzero revents — works on the
+/// current task and on a blocked one (translate walks the pml4).
+fn poll_scan(t: &Task, fds: u64, nfds: u64) -> u64 {
+    let mut ready = 0;
+    for i in 0..nfds {
+        let va = fds + i * 8;
+        let (fd, events) = match (
+            read_task_u(t.pml4, va, 4),
+            read_task_u(t.pml4, va + 4, 2),
+        ) {
+            (Some(f), Some(e)) => (f as u32 as i32, e as u16),
+            _ => {
+                write_task_u16(t.pml4, va + 6, POLLNVAL);
+                ready += 1;
+                continue;
+            }
+        };
+        let r = poll_revents(t, fd, events);
+        write_task_u16(t.pml4, va + 6, r);
+        if r != 0 {
+            ready += 1;
+        }
+    }
+    ready
+}
+
+/// Wake any blocked poller whose fd set is now ready — called after
+/// every pipe-state change. The scan rewrites revents through the
+/// sleeper's tables and the ready count lands in its syscall rax.
+fn wake_pollers() {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state != TaskState::Blocked || t.wait_on != WaitOn::Poll {
+            continue;
+        }
+        let n = poll_scan(t, t.wait_ptr, t.wait_len);
+        if n > 0 {
+            t.ctx.rax = n;
+            t.wait_on = WaitOn::None;
+            t.wait_deadline = 0;
+            t.state = TaskState::Runnable;
+        }
+    }
+}
+
+/// Timer tick: expire timed poll waits — the return is 0 with
+/// revents zeroed, the Linux timeout shape.
+fn poll_expire() {
+    let now = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state == TaskState::Blocked
+            && t.wait_on == WaitOn::Poll
+            && t.wait_deadline != 0
+            && now >= t.wait_deadline
+        {
+            for i in 0..t.wait_len {
+                write_task_u16(t.pml4, t.wait_ptr + i * 8 + 6, 0);
+            }
+            t.ctx.rax = 0;
+            t.wait_on = WaitOn::None;
+            t.wait_deadline = 0;
+            t.state = TaskState::Runnable;
+        }
+    }
+}
+
+/// poll(fds, nfds, timeout_ms): Linux pollfd {fd,events,revents} is
+/// 8 bytes; revents write back through the caller's own tables.
+/// Readiness is honest kernel state — pipes by ring level and
+/// endpoint counts, files/dirs/console statically. timeout<0 waits
+/// forever; nfds=0 with timeout>0 is a plain sleep.
+pub fn fd_poll(ctx: &mut UCtx, fds: u64, nfds: u64, timeout_ms: i64) -> u64 {
+    const EINTR: u64 = (-4i64) as u64;
+    if nfds > MAX_POLL {
+        return EINVAL;
+    }
+    let Some(t) = cur_mut() else { return EINVAL };
+    if nfds > 0 && !range_ok_w(fds, nfds * 8) {
+        return EFAULT;
+    }
+    let ready = if nfds == 0 { 0 } else { poll_scan(t, fds, nfds) };
+    if ready > 0 || timeout_ms == 0 {
+        return ready;
+    }
+    if t.pending != 0 {
+        return EINTR; // a signal landed before we slept
+    }
+    t.wait_on = WaitOn::Poll;
+    t.wait_ptr = fds;
+    t.wait_len = nfds;
+    t.wait_deadline = if timeout_ms < 0 {
+        0
+    } else {
+        crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed)
+            + (timeout_ms as u64).div_ceil(10)
+    };
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
 }
 
 /// getdents64(fd, dirp, count): emit linux_dirent64 records for the
@@ -1779,6 +1979,7 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
         fxsave(t);
     }
     deliver_for(cur);
+    poll_expire(); // timed poll waits age one tick
     let Some(n) = pick_ready() else {
         // Nothing else runnable: if cur survived delivery it's the
         // only task — resume its (possibly redirected) ctx. If a
@@ -1920,6 +2121,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_len: 0,
+        wait_deadline: 0,
         // Dispositions inherit across fork (the Linux semantic);
         // the pending set does not.
         pending: 0,
@@ -1984,7 +2186,12 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
             };
         }
         let r = t.pid;
-        t.ppid = 0; // collected — the next pick reaps the zombie
+        // Collected — reap now (Linux releases the task at wait):
+        // the child's fds/map/pml4 free immediately, so shared
+        // endpoint counts (pipe writers/readers) drop before we
+        // return — a poll right after wait4 sees the child gone.
+        t.reap();
+        tasks[i] = None;
         return r;
     }
     if !tasks.iter().flatten().any(relevant) {
