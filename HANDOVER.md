@@ -522,3 +522,24 @@ the task model now supports fork/clone/wait as the next rung.
   signal delivers ahead of the fault signal, fault stays pending --
   acceptable ordering; nested fault frames bounded only by the
   user stack, as Linux).
+
+
+## newfstatat (commit pending, audit run-62)
+
+- Syscall 262: fills a 144-byte Linux x86_64 struct stat at a user
+  VA. dirfd/flags are ABI-shape only -- the flat cpio namespace has
+  no symlinks or per-dirfd views to honor.
+- ino = the entry's archive index; mode synthesized
+  (S_IFREG|0644, S_IFDIR|0755 for "."); st_size/st_blocks from the
+  member header. Path goes through copy_user_path's getname
+  discipline like open/execve.
+- The stat struct is [0u64; 18] fully zeroed before fields are
+  set -- the partially-initialized-kernel-struct copy_to_user
+  info-leak class (CVE-2022-50531 family) is closed by
+  construction. Write happens only after range_ok_w on all 144
+  bytes.
+- fstest covers: real file (mode/ino/size), ENOENT, "." -> S_IFDIR,
+  EFAULT on an unmapped statbuf. exit(0), zero leak.
+- Audit run-62 (quick): 0 confirmed, 3 rejected, NV-62-1
+  (dirfd is ignored rather than ENOTDIR'd -- no real fd-relative
+  resolution exists yet; timestamps are all-zero, no fs clock).
