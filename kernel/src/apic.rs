@@ -12,12 +12,15 @@
 //! 0xf anyway). Both route through dedicated cpu.rs stubs into
 //! `irq_dispatch`; every other vector stays on the exception path.
 
+use crate::pio::{inb, outb};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Local timer IRQ vector (gate installed by cpu::init).
 pub const IRQ_TIMER: u64 = 0xf0;
 /// Device IRQ vector for the PIT-through-IOAPIC proof.
 pub const IRQ_PIT: u64 = 0xf1;
+/// PS/2 keyboard IRQ vector.
+pub const IRQ_KBD: u64 = 0xf2;
 /// Spurious interrupt vector — hardware requires the low nibble be 0xf.
 pub const IRQ_SPURIOUS: u64 = 0xff;
 
@@ -93,22 +96,6 @@ fn lwrite(off: u64, v: u32) {
     }
 }
 
-#[inline]
-unsafe fn outb(port: u16, v: u8) {
-    unsafe {
-        core::arch::asm!("out dx, al", in("dx") port, in("al") v, options(nomem, nostack));
-    }
-}
-
-#[inline]
-unsafe fn inb(port: u16) -> u8 {
-    let v: u8;
-    unsafe {
-        core::arch::asm!("in al, dx", out("al") v, in("dx") port, options(nomem, nostack));
-    }
-    v
-}
-
 /// End-of-interrupt on the local APIC. Never write this on the spurious
 /// vector — the EOI register is level-insensitive and harmless anyway.
 fn eoi() {
@@ -127,6 +114,10 @@ pub fn irq_dispatch(vec: u64) {
         }
         IRQ_PIT => {
             PIT_TICKS.fetch_add(1, Ordering::Relaxed);
+            eoi();
+        }
+        IRQ_KBD => {
+            crate::kbd::on_irq();
             eoi();
         }
         IRQ_SPURIOUS => {} // per spec: no EOI on a spurious interrupt

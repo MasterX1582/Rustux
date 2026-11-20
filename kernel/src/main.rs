@@ -18,8 +18,10 @@ mod apic;
 mod cpu;
 mod fbcon;
 mod kalloc;
+mod kbd;
 mod logo_data;
 mod mm;
+mod pio;
 mod uart;
 
 /// printk-style console fan-out: every write goes to COM1 and, when the GOP
@@ -873,15 +875,17 @@ fn main() -> Status {
     // override), route the ISA PIT pin to vector IRQ_PIT through the I/O
     // APIC, and arm channel 0 — the first real device IRQ through our IDT.
     let mut pit = false;
+    let mut kbd_ok = false;
     if lapic {
         match acpi::madt() {
             Some(m) if m.ioapic_addr != 0 => {
+                let (g0, f0) = m.gsi_for_irq(0);
                 let _ = writeln!(
                     con,
-                    "rustux: acpi: MADT {} lapics, LAPIC @{:#x}, IOAPIC @{:#x} gsi{}, IRQ0 -> GSI{} flags {:#x}",
-                    m.lapics, m.lapic_addr, m.ioapic_addr, m.ioapic_gsi_base, m.irq0_gsi, m.irq0_flags
+                    "rustux: acpi: MADT {} lapics, LAPIC @{:#x}, IOAPIC @{:#x} gsi{}, IRQ0 -> GSI{} flags {:#x} ({} ISOs)",
+                    m.lapics, m.lapic_addr, m.ioapic_addr, m.ioapic_gsi_base, g0, f0, m.n_isos
                 );
-                if apic::ioapic_route(m.ioapic_addr, m.irq0_gsi, apic::IRQ_PIT, m.irq0_flags) {
+                if apic::ioapic_route(m.ioapic_addr, g0, apic::IRQ_PIT, f0) {
                     let (id, ver, dest) = apic::ioapic_probe();
                     let _ = writeln!(
                         con,
@@ -894,8 +898,23 @@ fn main() -> Status {
                     let _ = writeln!(
                         con,
                         "rustux: apic: ioapic route GSI{} -> {:#x} REJECTED (bad addr/gsi)",
-                        m.irq0_gsi, apic::IRQ_PIT
+                        g0, apic::IRQ_PIT
                     );
+                }
+
+                // PS/2 keyboard: ISA IRQ1 -> GSI (override-aware), same
+                // I/O APIC path. The i8042 init enables the port's IRQ
+                // bit and flushes stale output.
+                let (g1, f1) = m.gsi_for_irq(1);
+                if kbd::init() && apic::ioapic_route(m.ioapic_addr, g1, apic::IRQ_KBD, f1) {
+                    let _ = writeln!(
+                        con,
+                        "rustux: kbd: i8042 up, IRQ1 -> GSI{} on vec {:#x}",
+                        g1, apic::IRQ_KBD
+                    );
+                    kbd_ok = true;
+                } else {
+                    let _ = writeln!(con, "rustux: kbd: no usable i8042/IRQ1 route");
                 }
             }
             _ => {
@@ -928,6 +947,34 @@ fn main() -> Status {
                 con,
                 "rustux: apic: {} PIT ch0 IRQs delivered via I/O APIC -> own IDT",
                 apic::PIT_TICKS.load(core::sync::atomic::Ordering::Relaxed) - p0
+            );
+        }
+
+        // The interactive payoff: a bounded window where every IRQ1
+        // scancode is decoded consumer-side and echoed live — real input
+        // through the I/O APIC into our console. Headless runs just wait
+        // the window out.
+        if kbd_ok {
+            let _ = writeln!(
+                con,
+                "rustux: kbd: type on the guest keyboard -- ~3s echo window"
+            );
+            let e0 = apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            while apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - e0 < 300 {
+                match kbd::poll() {
+                    Some(c) => {
+                        let _ = con.write_char(c);
+                    }
+                    None => {
+                        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
+                    }
+                }
+            }
+            let _ = writeln!(
+                con,
+                "rustux: kbd: {} scancode IRQs, {} keys decoded",
+                kbd::IRQS.load(core::sync::atomic::Ordering::Relaxed),
+                kbd::DECODED.load(core::sync::atomic::Ordering::Relaxed)
             );
         }
     }

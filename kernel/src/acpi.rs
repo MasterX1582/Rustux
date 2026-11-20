@@ -15,16 +15,37 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 static RSDP: AtomicU64 = AtomicU64::new(0);
 
+/// One MADT interrupt-source override: ISA `src` pin -> `gsi` line.
+#[derive(Clone, Copy)]
+pub struct Iso {
+    pub src: u8,
+    pub gsi: u32,
+    /// Bits 1:0 polarity, 3:2 trigger (00 = conform -> ISA edge/high).
+    pub flags: u16,
+}
+
 /// What we need out of the MADT.
 pub struct Madt {
     pub lapic_addr: u64,
     pub ioapic_addr: u64,
     pub ioapic_gsi_base: u32,
-    /// GSI the ISA IRQ0 line is routed to (usually 2 via an ISO).
-    pub irq0_gsi: u32,
-    /// ISO flags for IRQ0: bits 1:0 polarity, 3:2 trigger (00 = conform).
-    pub irq0_flags: u16,
+    /// All interrupt-source overrides found (up to 8 kept).
+    pub isos: [Iso; 8],
+    pub n_isos: usize,
     pub lapics: u32,
+}
+
+impl Madt {
+    /// GSI + flags for an ISA IRQ line: the override when present, else
+    /// identity-mapped GSI with conform (edge/active-high) flags.
+    pub fn gsi_for_irq(&self, irq: u8) -> (u32, u16) {
+        for iso in &self.isos[..self.n_isos] {
+            if iso.src == irq {
+                return (iso.gsi, iso.flags);
+            }
+        }
+        (irq as u32, 0)
+    }
 }
 
 /// Snapshot the RSDP address from the UEFI configuration table. Must run
@@ -127,11 +148,10 @@ pub fn madt() -> Option<Madt> {
         lapic_addr: rd::<u32>(madt, 36) as u64,
         ioapic_addr: 0,
         ioapic_gsi_base: 0,
-        irq0_gsi: 0,
-        irq0_flags: 0,
+        isos: [Iso { src: 0, gsi: 0, flags: 0 }; 8],
+        n_isos: 0,
         lapics: 0,
     };
-    let mut saw_iso0 = false;
     let mut off = 44u64;
     let end = len as u64;
     while off + 2 <= end {
@@ -152,19 +172,17 @@ pub fn madt() -> Option<Madt> {
             }
             // Interrupt Source Override (10-byte record): bus, source
             // IRQ, GSI u32, flags u16.
-            2 if l >= 10 && off + l <= end && rd::<u8>(madt, off + 3) == 0 && !saw_iso0 => {
-                m.irq0_gsi = rd::<u32>(madt, off + 4);
-                m.irq0_flags = rd::<u16>(madt, off + 8);
-                saw_iso0 = true;
+            2 if l >= 10 && off + l <= end && m.n_isos < m.isos.len() => {
+                m.isos[m.n_isos] = Iso {
+                    src: rd::<u8>(madt, off + 3),
+                    gsi: rd::<u32>(madt, off + 4),
+                    flags: rd::<u16>(madt, off + 8),
+                };
+                m.n_isos += 1;
             }
             _ => {}
         }
         off += l;
-    }
-    // No IRQ0 override: ISA line routes to the same-numbered GSI.
-    if !saw_iso0 {
-        m.irq0_gsi = 0;
-        m.irq0_flags = 0;
     }
     Some(m)
 }
