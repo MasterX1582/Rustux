@@ -424,3 +424,37 @@ the task model now supports fork/clone/wait as the next rung.
   a new trigger of that pre-existing class; sigreturn accepts rsp
   in any writable range like Linux; signals coalesce by mask —
   queued counts absent).
+
+## per-task fault isolation (commit pending, audit run-59)
+
+- A user-mode exception used to hit `report_frame`'s halt path and
+  take down the whole kernel — any null deref, ud2, or int3 was a
+  trivial machine-kill (and after signals, a forged sigframe rip
+  was a new trigger of the same class).
+- `report_frame` now checks `cs & 3`: a CPL3 fault calls
+  `user::fault_die(signo)` — same teardown as a signal death
+  (bare-signo wstatus, SIGCHLD to parent, wait4 collects, kstack
+  reaped). The abandoned exception frame lives on the task's own
+  kstack and dies with it. Kernel faults still halt.
+- Vector -> signal: #DB/#BP->TRAP(5), #UD->ILL(4),
+  #DE/#OF/#NM/#MF/#XM->FPE(8), #BR/#AC->BUS(7),
+  #TS/#NP/#SS/#GP/#PF/#VE->SEGV(11). Kernel-integrity exceptions
+  (#DF, #MC, NMI, #CP, #VC) halt even from CPL3 — task teardown is
+  not a trustworthy answer to a double fault.
+- **Self-review found a real gap**: only the error-code exceptions
+  had stubs — #DE/#DB/#NM/#MF/#XM hit `stub_default`'s unknown
+  sentinel and halted anyway. All plausible user vectors are now
+  stubbed and gated.
+- The #UD-skip and #BP-resume proofs are gated to kernel cs — a
+  user int3/ud2 now dies (SIGTRAP/SIGILL) instead of resuming or
+  looping.
+- CVE-2018-8897 (deferred #DB after MOV/POP SS): the user path can
+  no longer reach kernel-halt — #DB->SIGTRAP, `mov ss`->#GP->SIGSEGV.
+- Boot proof: `faulttest` — children die to null-write(11),
+  ud2(4), div0(8); parent verifies all three statuses, prints,
+  exit(0); 11 tasks, zero leak, boot PASS.
+- Audit run-59 (standard): 0 confirmed, 6 rejected, NV-59-1..4
+  (fault death doesn't deliver a catchable SIGSEGV to a handler
+  yet — needs fault-driven signal frames; reserved vectors still
+  sentinel-halt, can't fire in practice; si_addr/cr2 not reported
+  to userspace — UART line only; kernel faults halt unconditionally).
