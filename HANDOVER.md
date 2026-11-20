@@ -194,3 +194,32 @@ Adopted so far (in klib): math/div64/gcd/int-pow/lcm/primes, bcd, bitops, bitmap
   (file refcount when heap-backed, SMAP reliance for copy_to_user,
   fd-sharing rules for fork/clone). cve.now: CVE-2025-68814 drove the
   getname/cleanup discipline.
+
+## open-file descriptions (lseek/dup/dup2) — run-52
+- `kernel/src/user.rs`: the fd slot is now an index into a per-task
+  open-file table — the Linux files_struct/`struct file` split.
+  `OpenFile {kind, pos, refs}` holds the seek offset, so dup'd slots
+  genuinely share position. FdKind::{Stdin, Console, File} unchanged;
+  std streams still pre-seeded 0/1/2.
+- `kernel/src/syscall.rs`: lseek(8), dup(32), dup2(33). lseek takes
+  a signed off: SEEK_SET/CUR/END via checked_add, EINVAL on a
+  negative result, seek-past-EOF is legal (reads then EOF). ESPIPE
+  for Stdin/Console like Linux devices. dup picks the lowest free
+  slot; dup2 validates old first, releases the target's ref, and is
+  a no-op when old==new — all inside a FIXED 16-slot table, which is
+  the CVE-2025-39756 lesson applied: a user-chosen fd number can
+  never size an allocation here.
+- `kernel/user/fstest.S` grew to 19 checks with the real fidelity
+  proof: read 'M' via fd3, 'O' via dup'd fd4, 'T' via dup2'd fd9
+  after close(fd4) — the OFD survives with remaining refs and the
+  offset is genuinely shared. dup(99)->EBADF, dup2(3,9999)->EBADF.
+- Debug path worth noting: the first run showed exit(9) and a DBG
+  printk trace proved every new syscall was returning correct EBADF —
+  the NEW checks were running on fd3 AFTER the close test had closed
+  it. Test bug, not kernel bug; reopening motd.txt fixed it. The
+  errno discipline the rung enforces is what made the diagnosis
+  one serial trace instead of a guessing game.
+- Audit run-52 (standard): 0 confirmed; RC-52-1..4 rejected with
+  reasons; NV-52-1..3 (OFD share policy for fork — replaces NV-51-3,
+  OFD flags for O_APPEND/cloexec, atomic refs under scheduler).
+  cve.now: CVE-2025-39756 was the design input for the fixed bound.
