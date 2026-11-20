@@ -377,3 +377,50 @@ the task model now supports fork/clone/wait as the next rung.
 - Audit run-57 (standard): 0 confirmed, 9 rejected, NV-57-1..5
   (O_NONBLOCK/O_CLOEXEC unimplemented, >4KiB writes, SIGPIPE,
   per-byte translate perf, no readiness API).
+
+## signals (commit pending, audit run-58)
+
+- `rt_sigaction(13)` / `rt_sigreturn(15)` / `kill(62)`. Task grows
+  `pending` (bit sig-1, sigs 1..=31) and `handlers[31]` (0=SIG_DFL,
+  1=SIG_IGN, else a user handler VA).
+- **Delivery at every resume point**: `deliver_current` runs at the
+  end of each syscall; `deliver_for` runs inside `pick_ready` and
+  the timer `tick`, so a signal pending on a *non-running* task
+  lands before it resumes. A default-fatal signal marks the task
+  Exited right there; a handler pushes `[signo][interrupted UCtx]`
+  (168B) onto the task's own user stack through its own tables
+  (inactive spaces included), then redirects rip=handler,
+  rsp=frame, rdi=signo. One signal per resume, Linux-style.
+- **rt_sigreturn treats the frame as hostile user memory** — the
+  whole point of the CVE-2014-9322 / SROP family: it restores the
+  pushed UCtx but pins cs=0x33/ss=0x2b, clears TF/NT/IOPL, bounds
+  rip and rsp to canonical user ranges (rsp may sit at stack_top,
+  so the byte BELOW it must be writable). A bad frame kills the
+  task with SIGSEGV.
+- **Real wstatus**: `exit_status` holds `code<<8` for exit() and
+  the bare signo for signal death — wait4 reports 15 for the
+  SIGTERM'd child. `task_exit_inner` pends SIGCHLD on the parent
+  (default-ignore, or delivered to a caught handler).
+- **EINTR model**: `kill` wakes a Blocked task with rax=-EINTR only
+  when the signal's disposition isn't ignored (SIG_IGN or
+  default-ignore signals never interrupt a sleep); all three block
+  paths (wait4, pipe read, pipe write) also check `pending` BEFORE
+  sleeping. The woken ctx delivers the handler at next pick;
+  sigreturn resumes the interrupted call's -EINTR return.
+- Disposition lifecycle: fork inherits handlers but not pending;
+  exec resets caught handlers to default and preserves SIG_IGN.
+  SIGKILL/SIGSTOP refuse every disposition change.
+- Boot proof: `sigtest` — sigaction install/EINVAL/uncatchable,
+  ESRCH; parent blocked on empty pipe -> child's kill -> handler
+  writes marker -> sigreturn -> read returns -EINTR; child's
+  self-SIGTERM dies silently, wait4 collects status 15;
+  exit(0), zero leak.
+- Audit run-58 (standard): 0 confirmed after one self-review fix
+  (SIGKILL was SIG_IGN-able -> unkillable-by-signal task; now
+  EINVAL like Linux), 6 rejected candidates, NV-58-1..5 (no
+  credential check on kill — no UID model yet; no
+  sigprocmask/siginfo/SA_* flags or SA_RESTART; user faults still
+  halt the kernel — a forged sigframe rip at an unmapped/NX page is
+  a new trigger of that pre-existing class; sigreturn accepts rsp
+  in any writable range like Linux; signals coalesce by mask —
+  queued counts absent).
