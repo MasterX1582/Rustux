@@ -17,6 +17,7 @@ pub mod bitmap;
 pub mod bitops;
 pub mod crc;
 pub mod fmt;
+pub mod font;
 pub mod genradix;
 pub mod hash;
 pub mod idr;
