@@ -197,11 +197,16 @@ run-18 clean.
 covering every `-ENOMEM` path) → `klib::assoc_array` (keyring edit-script
 state machine; port fixed gen_key modulus, split-node post-increment,
 and destroy_subtree off-by-one vs the model).
-`lib/kstrtox.c`+`lib/hexdump.c`+`lib/string_helpers.c` (11667 cases) —
-diff-green port including the glibc `snprintf(size>PTRDIFF_MAX)` quirk
-in `string_get_size`; adoption pending, with merges into
-`klib::string` (sysfs_streq/match_string/strim/upper/lower) and
-`klib::seqbuf` (hex_dump overlap) to be reconciled, not duplicated.
+`lib/kstrtox.c`+`lib/hexdump.c`+`lib/string_helpers.c` (11667 cases) →
+`klib::kstrtox` + `klib::string_helpers` — merge-adopted: full
+`kstrto*`/`_parse_integer` surface incl. `*_from_user` variants,
+`string_get_size` with the glibc `snprintf(size>PTRDIFF_MAX)` quirk
+preserved verbatim, `string_(un)escape`/`kstrdup_*` on caller-owned
+buffers; composites folded into `klib::string`
+(`sysfs_streq`/`match_string`/`strim`/`upper`/`lower`/`memcpy_and_pad`/
+`string_is_terminated`); hexdump reconciled into `klib::seqbuf`
+(existing bodies were already source-identical — exported `HEX_ASC`,
+added `hex_to_bin`/`hex2bin`/`bin2hex`). 327 tests; audit run-20 clean.
 
 ### Wave 2 — core services (custom shims needed)
 
