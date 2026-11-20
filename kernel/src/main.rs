@@ -902,7 +902,8 @@ fn main() -> Status {
                 && base + size > d.phys_start
         })
     };
-    if let Some((e_base, e_mac)) = e1000::probe(bar_is_mmio) {
+    let e1000_dev = e1000::probe(bar_is_mmio);
+    if let Some((e_base, e_mac)) = e1000_dev {
         let tx_ok = e1000::tx_selftest(e_base, e_mac);
         kprintln!(con, "rustux: e1000: tx datapath self-test {tx_ok}");
         if tx_ok {
@@ -936,6 +937,14 @@ fn main() -> Status {
                 "rustux: apic: {} PIT ch0 IRQs delivered via I/O APIC -> own IDT",
                 apic::PIT_TICKS.load(core::sync::atomic::Ordering::Relaxed) - p0
             );
+        }
+
+        // Interrupts are live now — the NIC's MSI path: a message write
+        // straight to the LAPIC, no IOAPIC line. TX the ARP probe, the
+        // reply raises vector 0xf3 through our IDT.
+        if let Some((e_base, e_mac)) = e1000_dev {
+            let msi_ok = e1000::irq_selftest(e_base, e_mac);
+            kprintln!(con, "rustux: e1000: MSI receive path {msi_ok}");
         }
 
         // The interactive payoff: a bounded window where every IRQ1

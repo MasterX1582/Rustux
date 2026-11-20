@@ -33,8 +33,13 @@ pub fn write32(bus: u8, dev: u8, f: u8, off: u8, v: u32) {
     }
 }
 
-fn read16_pub(bus: u8, dev: u8, f: u8, off: u8) -> u16 {
-    read16(bus, dev, f, off)
+/// 16-bit config write — CF8/CFC only moves whole dwords, so this is
+/// a read-modify-write of the aligned dword containing `off`.
+pub fn write16(bus: u8, dev: u8, f: u8, off: u8, v: u16) {
+    let shift = (off as u32 & 2) * 8;
+    let w = read32(bus, dev, f, off);
+    let w = (w & !(0xffff_u32 << shift)) | (v as u32) << shift;
+    write32(bus, dev, f, off, w);
 }
 
 /// Locate a function by vendor/device ID. Returns (bus, dev, fn).
@@ -68,7 +73,7 @@ pub const CMD_BUS_MASTER: u16 = 1 << 2;
 
 /// Read-modify-write OR of command-register bits.
 pub fn command_or(bus: u8, dev: u8, f: u8, bits: u16) -> u16 {
-    let v = read16_pub(bus, dev, f, 0x04);
+    let v = read16(bus, dev, f, 0x04);
     let nv = v | bits;
     if nv != v {
         let w = read32(bus, dev, f, 0x04) & !(0xffff) | nv as u32;
@@ -82,11 +87,92 @@ pub fn bar_raw(bus: u8, dev: u8, f: u8, slot: u8) -> u32 {
     read32(bus, dev, f, 0x10 + slot * 4)
 }
 
-fn read16(bus: u8, dev: u8, f: u8, off: u8) -> u16 {
+/// Command bit 10: INTx emulation off (drivers using MSI set this).
+pub const CMD_INTX_DISABLE: u16 = 1 << 10;
+
+/// Walk the capability list (offset 0x34) for capability `id`.
+/// Returns the capability's config offset.
+pub fn find_cap(bus: u8, dev: u8, f: u8, id: u8) -> Option<u8> {
+    // Status bit 4 = capability list present.
+    if read16(bus, dev, f, 0x06) & (1 << 4) == 0 {
+        return None;
+    }
+    let mut off = read8(bus, dev, f, 0x34) & !3;
+    let mut hops = 0;
+    while off >= 0x40 && hops < 48 {
+        if read8(bus, dev, f, off) == id {
+            return Some(off);
+        }
+        off = read8(bus, dev, f, off + 1) & !3;
+        hops += 1;
+    }
+    None
+}
+
+/// MSI-X capability: table/PBA locations decoded and resolved to
+/// physical addresses inside the BAR they live in.
+pub struct MsixCap {
+    /// Config offset of the capability.
+    pub off: u8,
+    /// Physical address of the MSI-X table (identity-mapped).
+    pub table: usize,
+    /// Number of table vectors (table size field + 1).
+    pub nvec: u32,
+}
+
+/// Locate and decode the MSI-X capability (id 0x11).
+pub fn msix_cap(bus: u8, dev: u8, f: u8) -> Option<MsixCap> {
+    let off = find_cap(bus, dev, f, 0x11)?;
+    let ctrl = read16(bus, dev, f, off + 2);
+    let nvec = (ctrl & 0x7ff) as u32 + 1;
+    let tbl = read32(bus, dev, f, off + 4);
+    let bir = (tbl & 7) as u8;
+    if bir > 5 {
+        return None;
+    }
+    let bar = bar_raw(bus, dev, f, bir);
+    if bar == 0 || bar == u32::MAX || bar & 1 != 0 {
+        return None;
+    }
+    let base = (bar & !0xf) as usize;
+    Some(MsixCap {
+        off,
+        table: base + (tbl & !7) as usize,
+        nvec,
+    })
+}
+
+/// One 16-byte MSI-X table entry: {addr_lo, addr_hi, data, ctrl}.
+/// `vec` is the IDT vector the LAPIC delivers; `dest` its LAPIC ID.
+/// `masked` keeps a vector quiet until software unmasks it.
+pub unsafe fn msix_set(cap: &MsixCap, v: u32, vec: u8, dest: u8, masked: bool) {
+    if v >= cap.nvec {
+        return;
+    }
+    let e = (cap.table + v as usize * 16) as *mut u32;
+    // SAFETY: caller guarantees `table` is the MSI-X MMIO window.
+    unsafe {
+        e.write_volatile(0xfee0_0000 | (dest as u32) << 12);
+        e.add(1).write_volatile(0);
+        e.add(2).write_volatile(vec as u32);
+        e.add(3).write_volatile(masked as u32);
+    }
+}
+
+/// Flip the capability on: MSI-X enable (bit15), function mask off
+/// (bit14), and silence INTx on the function. The message-control
+/// field is 16-bit — write16 does the aligned dword RMW it needs.
+pub fn msix_enable(bus: u8, dev: u8, f: u8, cap: &MsixCap) {
+    let ctrl = read16(bus, dev, f, cap.off + 2);
+    write16(bus, dev, f, cap.off + 2, (ctrl | 0x8000) & !0x4000);
+    command_or(bus, dev, f, CMD_INTX_DISABLE);
+}
+
+pub fn read16(bus: u8, dev: u8, f: u8, off: u8) -> u16 {
     (read32(bus, dev, f, off) >> ((off as u32 & 2) * 8)) as u16
 }
 
-fn read8(bus: u8, dev: u8, f: u8, off: u8) -> u8 {
+pub fn read8(bus: u8, dev: u8, f: u8, off: u8) -> u8 {
     (read32(bus, dev, f, off) >> ((off as u32 & 3) * 8)) as u8
 }
 

@@ -21,6 +21,8 @@ pub const IRQ_TIMER: u64 = 0xf0;
 pub const IRQ_PIT: u64 = 0xf1;
 /// PS/2 keyboard IRQ vector.
 pub const IRQ_KBD: u64 = 0xf2;
+/// MSI vector programmed into the e1000's message data.
+pub const IRQ_NET: u64 = 0xf3;
 /// Spurious interrupt vector — hardware requires the low nibble be 0xf.
 pub const IRQ_SPURIOUS: u64 = 0xff;
 
@@ -118,6 +120,10 @@ pub fn irq_dispatch(vec: u64) {
         }
         IRQ_KBD => {
             crate::kbd::on_irq();
+            eoi();
+        }
+        IRQ_NET => {
+            crate::e1000::on_irq();
             eoi();
         }
         IRQ_SPURIOUS => {} // per spec: no EOI on a spurious interrupt
@@ -234,7 +240,7 @@ fn ioapic_write(reg: u32, v: u32) {
 /// physical destination). x2APIC IDs wider than 8 bits can't be expressed
 /// — QEMU's BSP is 0 either way; documented limitation until we route
 /// logical destinations.
-fn lapic_id() -> u32 {
+pub fn lapic_id() -> u32 {
     if X2APIC.load(Ordering::Relaxed) {
         // SAFETY: x2APIC confirmed in init().
         unsafe { rdmsr(0x802).0 }

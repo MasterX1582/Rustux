@@ -243,3 +243,31 @@ compat, modules vs fixed ABI decision, userspace distro boot.
   differential testing anyway).
 - `unsafe` policy: allowed only at hardware boundaries (port I/O, MMIO, paging,
   context switch), always with `// SAFETY:` comments — same bar `gate` enforces.
+
+## Don't port the bugs (standing rule)
+
+The record/diff/gate pipeline verifies *behavioral* equivalence on a corpus —
+it will happily certify a faithful port of a function that contains a latent
+security flaw the corpus never exercises. Port the semantics, not the CVEs.
+
+Concrete rules, derived from real Linux CVE classes (e.g. CVE-2026-99304 —
+u32 count arithmetic wrapping before a size_t bounds check in the Ceph
+wire parser):
+
+- **Wire-supplied counts/lengths are hostile.** Every parser of
+  network packets, filesystem/protocol messages, firmware tables, or
+  device-supplied data must compute bounds with `checked_add` /
+  `checked_mul` / `saturating_*`, never `+`/`*` on narrow types that
+  can wrap. In release mode Rust wraps silently — same as C.
+- **Bounds-check against the actual slice**, then read via `get()` —
+  never raw-pointer offset math on untrusted data. The e1000 RX path
+  already follows this (`len >= 42` gate before ARP field reads).
+- **Check CVE history per ported unit.** When a `ports/<unit>` target
+  has known upstream fixes (integer-overflow bounds checks, UAF,
+  refcount bugs), the port must adopt the *fixed* semantics and the
+  audit must note the divergence-from-C as intentional.
+- **unsafe blocks are the blind spot.** The compiler can't help inside
+  them; DMA/MMU-facing code gets the standard audit profile, not quick.
+- **Rust buys us the memory-safety half of the CVE landscape for free;
+  the logic half (validation, locking, arithmetic) still has to be
+  engineered** — that's what the per-wave audits are for.

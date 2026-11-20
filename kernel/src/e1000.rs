@@ -10,6 +10,7 @@
 use crate::kalloc;
 use crate::log::printk;
 use crate::pci;
+use core::sync::atomic::Ordering;
 
 const VENDOR: u16 = 0x8086;
 const DEVICE: u16 = 0x10d3; // 82574L, QEMU's e1000e model
@@ -28,6 +29,8 @@ const TDBAH: usize = 0x3804;
 const TDLEN: usize = 0x3808;
 const TDH: usize = 0x3810;
 const TDT: usize = 0x3818;
+const IMS: usize = 0x00d0; // write 1s unmask causes
+const IVAR: usize = 0x00e4; // cause -> MSI-X vector map
 const RCTL: usize = 0x0100;
 const RDBAL: usize = 0x2800;
 const RDBAH: usize = 0x2804;
@@ -57,6 +60,21 @@ const RCTL_MPE: u32 = 1 << 4; // multicast promiscuous
 const RCTL_BAM: u32 = 1 << 15; // broadcast accept
 const RXD_STA_DD: u8 = 0x01;
 const RXD_STA_EOP: u8 = 0x02;
+
+// ICR/IMS interrupt-cause bits we use (82574).
+const ICR_RXDMT0: u32 = 1 << 4; // rx desc minimum threshold hit
+const ICR_RXT0: u32 = 1 << 7; // rx timer expired
+const ICR_RXQ0: u32 = 1 << 20; // rx queue 0 (the MSI-X-era cause)
+const ICR_OTHER: u32 = 1 << 24; // link/status group
+
+/// Device coordinates, saved at probe so late init can program MSI.
+static BDF: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(u32::MAX);
+/// MSI interrupts delivered — read for the boot proof.
+pub static IRQS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+static MMIO: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 /// Legacy RX descriptor (16 bytes). The NIC writes len/sta back when a
 /// frame lands in the buffer we posted.
@@ -96,6 +114,7 @@ unsafe fn wr(base: usize, off: usize, v: u32) {
 /// overlap RAM before we touch it. On success returns (MMIO base, MAC).
 pub fn probe(is_mmio: impl Fn(u64, u64) -> bool) -> Option<(usize, [u8; 6])> {
     let (bus, dev, f) = pci::find(VENDOR, DEVICE)?;
+    BDF.store((bus as u32) << 8 | (dev as u32) << 3 | f as u32, Ordering::Relaxed);
     printk(format_args!(
         "rustux: e1000: found {VENDOR:04x}:{DEVICE:04x} at {bus:02x}:{dev:02x}.{f}"
     ));
@@ -147,6 +166,7 @@ pub fn probe(is_mmio: impl Fn(u64, u64) -> bool) -> Option<(usize, [u8; 6])> {
     if status & (1 << 1) != 0 {
         printk(format_args!("rustux: e1000: link UP"));
     }
+    MMIO.store(base, Ordering::Relaxed);
     Some((base, mac))
 }
 
@@ -191,8 +211,9 @@ pub fn tx_once(base: usize, frame: &[u8]) -> bool {
 
     // SAFETY: `base` is the bound MMIO window; offsets are the 82574
     // TX-block registers. Identity map => &*ring is also the DMA addr.
+    // Interrupt masking is the CALLER's choice — masking here would
+    // clobber an IMS unmask done before the transmit (MSI-X path).
     unsafe {
-        wr(base, IMC, u32::MAX); // polling mode: mask every cause
         let _ = rd(base, ICR); // drain pending causes
         wr(base, TDBAL, ring as u32);
         wr(base, TDBAH, ((ring as usize) >> 32) as u32);
@@ -261,6 +282,121 @@ pub fn tx_selftest(base: usize, mac: [u8; 6]) -> bool {
     frame[13] = 0xb5;
     frame[14..20].copy_from_slice(b"rustux");
     tx_once(base, &frame[..60])
+}
+
+/// MSI interrupt handler — the device wrote to the LAPIC's message
+/// window; reading ICR acknowledges the causes device-side.
+pub fn on_irq() {
+    let base = MMIO.load(Ordering::Relaxed);
+    if base == 0 {
+        return;
+    }
+    // SAFETY: base is the bound MMIO window; ICR is read-to-clear.
+    let icr = unsafe { rd(base, ICR) };
+    IRQS.fetch_add(1, Ordering::Relaxed);
+    if icr & (ICR_RXDMT0 | ICR_RXT0 | ICR_RXQ0) != 0 {
+        RX_IRQS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// RX-caused MSI count — the IRQ-side proof a packet triggered it.
+pub static RX_IRQS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// Interrupt-driven receive: enable MSI-X (per-vector message writes
+/// to the LAPIC instead of an IOAPIC line), IVAR-map the RXQ0 cause to
+/// table vector 0, unmask it in IMS, transmit the ARP request, then
+/// wait for vector IRQ_NET to fire.
+/// Requires interrupts already enabled (`sti`).
+pub fn irq_selftest(base: usize, mac: [u8; 6]) -> bool {
+    let bdf = BDF.load(Ordering::Relaxed);
+    if bdf == u32::MAX {
+        return false;
+    }
+    let (bus, dev, f) = (
+        (bdf >> 8) as u8,
+        ((bdf >> 3) & 0x1f) as u8,
+        (bdf & 7) as u8,
+    );
+    let dest = crate::apic::lapic_id() as u8;
+    let Some(cap) = pci::msix_cap(bus, dev, f) else {
+        printk(format_args!("rustux: e1000: no MSI-X capability"));
+        return false;
+    };
+    // Vector 0 carries the RX interrupt; the other four stay masked.
+    // SAFETY: `cap.table` is the device MSI-X BAR window the
+    // capability decoded — inside our identity map.
+    unsafe {
+        pci::msix_set(&cap, 0, crate::apic::IRQ_NET as u8, dest, false);
+        for v in 1..cap.nvec {
+            pci::msix_set(&cap, v, 0, 0, true);
+        }
+    }
+    pci::msix_enable(bus, dev, f, &cap);
+    printk(format_args!(
+        "rustux: e1000: MSI-X on ({} vectors, table @{:#x}) -> vec {:#x} dest-lapic {dest}",
+        cap.nvec,
+        cap.table,
+        crate::apic::IRQ_NET
+    ));
+
+    let Some((ring, bufs)) = rx_init(base) else {
+        return false;
+    };
+    // IVAR maps causes to vectors: RXQ0 -> entry 0 = MSI-X vector 0
+    // (valid bit set). Then unmask RXQ0 + OTHER in IMS.
+    // SAFETY: bound window, architected registers.
+    unsafe {
+        wr(base, IVAR, 0x8);
+        wr(base, IMS, ICR_RXQ0 | ICR_OTHER);
+        let _ = rd(base, ICR); // clear stale causes
+    }
+
+    // Same ARP probe as the polling test — this time the reply raises
+    // vector 0xf3 instead of being discovered by a DD poll.
+    let mut fr = [0u8; 60];
+    fr[..6].copy_from_slice(&[0xff; 6]);
+    fr[6..12].copy_from_slice(&mac);
+    fr[12] = 0x08;
+    fr[13] = 0x06;
+    fr[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 1]);
+    fr[22..28].copy_from_slice(&mac);
+    fr[28..32].copy_from_slice(&[10, 0, 2, 15]);
+    fr[38..42].copy_from_slice(&[10, 0, 2, 2]);
+    let before = IRQS.load(Ordering::Relaxed);
+    if !tx_once(base, &fr) {
+        return false;
+    }
+
+    // Up to ~1.5s: hlt until the MSI (or any IRQ) wakes us.
+    let t0 = crate::apic::TICKS.load(Ordering::Relaxed);
+    let mut got_reply = false;
+    while IRQS.load(Ordering::Relaxed) == before
+        && crate::apic::TICKS.load(Ordering::Relaxed) - t0 < 150
+    {
+        // SAFETY: hlt wakes on any delivered IRQ; IF is set.
+        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
+    }
+    let delivered = IRQS.load(Ordering::Relaxed) - before;
+    // The IRQ already fired — now just harvest the reply descriptor.
+    for d in 0..N_RX {
+        // SAFETY: NIC wrote sta/len; buffer is ours.
+        let (sta, len) = unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+        if sta & RXD_STA_DD != 0 && len >= 42 {
+            let p = unsafe { bufs.add(d * RX_BUF) };
+            if unsafe { *p.add(12) } == 0x08 && unsafe { *p.add(13) } == 0x06 {
+                got_reply = true;
+            }
+        }
+    }
+    printk(format_args!(
+        "rustux: e1000: {} MSI IRQs on vec {:#x} ({} rx-caused), reply {}",
+        delivered,
+        crate::apic::IRQ_NET,
+        RX_IRQS.load(Ordering::Relaxed),
+        if got_reply { "received" } else { "missing" }
+    ));
+    delivered > 0 && got_reply
 }
 
 /// Bring up the RX ring: 8 descriptors, each pointing at its own 2 KiB

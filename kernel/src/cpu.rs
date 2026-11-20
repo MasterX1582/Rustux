@@ -275,6 +275,7 @@ stub!(stub_bp, 3);
 stub!(stub_irq_timer, "0xf0");
 stub!(stub_irq_pit, "0xf1");
 stub!(stub_irq_kbd, "0xf2");
+stub!(stub_irq_net, "0xf3");
 stub!(stub_irq_spurious, "0xff");
 
 /// Install our GDT (reload CS via far return, data segments via ax), TSS
@@ -332,7 +333,7 @@ pub fn init() {
         core::arch::asm!("ltr {0:x}", in(reg) TSS_SEL, options(nostack, preserves_flags));
     }
 
-    let gates: [(usize, u64, u8); 15] = [
+    let gates: [(usize, u64, u8); 16] = [
         (3, stub_bp as *const () as u64, 0),
         (6, stub_ud as *const () as u64, 0),
         (8, stub_df as *const () as u64, 1), // IST1: dedicated DF stack
@@ -347,6 +348,7 @@ pub fn init() {
         (0xf0, stub_irq_timer as *const () as u64, 0),
         (0xf1, stub_irq_pit as *const () as u64, 0),
         (0xf2, stub_irq_kbd as *const () as u64, 0),
+        (0xf3, stub_irq_net as *const () as u64, 0),
         (0xff, stub_irq_spurious as *const () as u64, 0),
     ];
     for v in 0..256 {
