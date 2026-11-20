@@ -1,8 +1,9 @@
 //! linux-rust kernel entry point.
 //!
-//! Boots under UEFI (OVMF in QEMU). Today: bring up serial, prove we run, exit
-//! QEMU cleanly through the isa-debug-exit device. Memory map, page tables,
-//! ExitBootServices and the first ported kernel units come next.
+//! Boots under UEFI (OVMF in QEMU). Serial + GOP framebuffer consoles, the
+//! adopted klib unit proofs, then ExitBootServices and the firmware memory
+//! map — after which we run on owned hardware only. Page tables, interrupts,
+//! and the first allocator come next.
 
 #![no_main]
 #![no_std]
