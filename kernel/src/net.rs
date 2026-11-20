@@ -268,3 +268,218 @@ pub fn build_echo_request(
 
     14 + total
 }
+
+// ---- IPv6 / NDP ----
+//
+// Minimal link-local IPv6: fixed 40-byte header (no extension-header
+// walking — callers require next==58 directly), EUI-64 link-local
+// addressing, ICMPv6 with the pseudo-header checksum, and the two
+// NDP messages needed to resolve a peer on-link (NS/NA + SLLA/TLLA).
+// Fragments cannot occur: no reassembly exists and extension headers
+// are rejected outright.
+
+pub const ET_IPV6: u16 = 0x86dd;
+pub const NH_ICMPV6: u8 = 58;
+
+/// A validated IPv6 datagram (fixed header only).
+pub struct Ipv6<'a> {
+    pub src: [u8; 16],
+    pub dst: [u8; 16],
+    pub next: u8,
+    pub hop: u8,
+    pub payload: &'a [u8],
+}
+
+pub fn parse_ipv6(buf: &[u8]) -> Option<Ipv6<'_>> {
+    if buf.len() < 40 || buf[0] >> 4 != 6 {
+        return None;
+    }
+    let plen = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    if plen > buf.len() - 40 {
+        return None;
+    }
+    let mut src = [0u8; 16];
+    src.copy_from_slice(&buf[8..24]);
+    let mut dst = [0u8; 16];
+    dst.copy_from_slice(&buf[24..40]);
+    Some(Ipv6 {
+        src,
+        dst,
+        next: buf[6],
+        hop: buf[7],
+        payload: &buf[40..40 + plen],
+    })
+}
+
+/// EUI-64 link-local address from a MAC (u/l bit flipped, fffe insert).
+pub fn ll_addr(mac: [u8; 6]) -> [u8; 16] {
+    let mut a = [0u8; 16];
+    a[0] = 0xfe;
+    a[1] = 0x80;
+    a[8] = mac[0] ^ 0x02;
+    a[9..11].copy_from_slice(&mac[1..3]);
+    a[11] = 0xff;
+    a[12] = 0xfe;
+    a[13..16].copy_from_slice(&mac[3..6]);
+    a
+}
+
+/// Solicited-node multicast address ff02::1:ffXX:XXXX for `target`.
+pub fn solicited_node(target: &[u8; 16]) -> [u8; 16] {
+    let mut a = [0u8; 16];
+    a[0] = 0xff;
+    a[1] = 0x02;
+    a[11] = 0x01;
+    a[12] = 0xff;
+    a[13..16].copy_from_slice(&target[13..16]);
+    a
+}
+
+/// IPv6 multicast MAC 33:33:XX:XX:XX:XX (low 32 bits of the v6 addr).
+pub fn mcast_mac(addr: &[u8; 16]) -> [u8; 6] {
+    [0x33, 0x33, addr[12], addr[13], addr[14], addr[15]]
+}
+
+/// ICMPv6 checksum over pseudo-header + message (RFC 4443).
+pub fn csum6(src: &[u8; 16], dst: &[u8; 16], plen: u32, next: u8, msg: &[u8]) -> u16 {
+    let mut tail = [0u8; 8];
+    tail[..4].copy_from_slice(&plen.to_be_bytes());
+    tail[7] = next;
+    // Adding one's-complement sums == complement of the total, mod 0xffff.
+    let s = csum16(src) as u32
+        + csum16(dst) as u32
+        + csum16(&tail) as u32
+        + csum16(msg) as u32;
+    let s = (s & 0xffff) + (s >> 16);
+    ((s + (s >> 16)) & 0xffff) as u16
+}
+
+/// An ICMPv6 message whose checksum was verified by the caller
+/// (csum6 over the IPv6 pseudo-header).
+pub struct Icmp6<'a> {
+    pub ty: u8,
+    pub code: u8,
+    pub rest: &'a [u8],
+}
+
+pub fn parse_icmp6(msg: &[u8]) -> Option<Icmp6<'_>> {
+    if msg.len() < 4 {
+        return None;
+    }
+    Some(Icmp6 {
+        ty: msg[0],
+        code: msg[1],
+        rest: &msg[4..],
+    })
+}
+
+fn put_eth_v6(f: &mut [u8], dst_mac: [u8; 6], src_mac: [u8; 6]) -> usize {
+    f[..6].copy_from_slice(&dst_mac);
+    f[6..12].copy_from_slice(&src_mac);
+    f[12..14].copy_from_slice(&ET_IPV6.to_be_bytes());
+    14
+}
+
+fn put_ip6(
+    f: &mut [u8],
+    at: usize,
+    plen: u16,
+    hop: u8,
+    src: &[u8; 16],
+    dst: &[u8; 16],
+) {
+    f[at] = 0x60;
+    f[at + 1..at + 4].copy_from_slice(&[0, 0, 0]);
+    f[at + 4..at + 6].copy_from_slice(&plen.to_be_bytes());
+    f[at + 6] = NH_ICMPV6;
+    f[at + 7] = hop;
+    f[at + 8..at + 24].copy_from_slice(src);
+    f[at + 24..at + 40].copy_from_slice(dst);
+}
+
+fn finish_icmp6(f: &mut [u8], src: &[u8; 16], dst: &[u8; 16], at: usize, plen: usize) {
+    let ck = csum6(src, dst, plen as u32, NH_ICMPV6, &f[at..at + plen]);
+    f[at + 2..at + 4].copy_from_slice(&ck.to_be_bytes());
+}
+
+/// Ethernet + IPv6 + ICMPv6 Neighbor Solicitation (hop 255, SLLA option).
+pub fn build_ns(
+    f: &mut [u8],
+    src_mac: [u8; 6],
+    us: &[u8; 16],
+    target: &[u8; 16],
+) -> usize {
+    // eth(14) + ip6(40) + icmp(4+4+16) + slla(8) = 82
+    if f.len() < 82 {
+        return 0;
+    }
+    let mc = solicited_node(target);
+    let at = put_eth_v6(f, mcast_mac(&mc), src_mac);
+    put_ip6(f, at, 32, 255, us, &mc);
+    let ic = at + 40;
+    f[ic] = 135;
+    f[ic + 1] = 0;
+    f[ic + 2..ic + 4].copy_from_slice(&[0, 0]);
+    f[ic + 4..ic + 8].copy_from_slice(&[0; 4]);
+    f[ic + 8..ic + 24].copy_from_slice(target);
+    f[ic + 24] = 1; // SLLA option, len 1 (=8B)
+    f[ic + 25] = 1;
+    f[ic + 26..ic + 32].copy_from_slice(&src_mac);
+    finish_icmp6(f, us, &mc, ic, 32);
+    82
+}
+
+/// Ethernet + IPv6 + ICMPv6 Neighbor Advertisement (S|O flags, TLLA option).
+pub fn build_na(
+    f: &mut [u8],
+    dst_mac: [u8; 6],
+    src_mac: [u8; 6],
+    us: &[u8; 16],
+    dst: &[u8; 16],
+) -> usize {
+    if f.len() < 82 {
+        return 0;
+    }
+    let at = put_eth_v6(f, dst_mac, src_mac);
+    put_ip6(f, at, 32, 255, us, dst);
+    let ic = at + 40;
+    f[ic] = 136;
+    f[ic + 1] = 0;
+    f[ic + 2..ic + 4].copy_from_slice(&[0, 0]);
+    f[ic + 4..ic + 8].copy_from_slice(&0x6000_0000u32.to_be_bytes()); // S|O
+    f[ic + 8..ic + 24].copy_from_slice(us);
+    f[ic + 24] = 2; // TLLA option
+    f[ic + 25] = 1;
+    f[ic + 26..ic + 32].copy_from_slice(&src_mac);
+    finish_icmp6(f, us, dst, ic, 32);
+    82
+}
+
+/// Ethernet + IPv6 + ICMPv6 echo (ty 128 request / 129 reply, hop 64).
+pub fn build_echo6(
+    f: &mut [u8],
+    ty: u8,
+    dst_mac: [u8; 6],
+    src_mac: [u8; 6],
+    us: &[u8; 16],
+    dst: &[u8; 16],
+    id: u16,
+    seq: u16,
+    payload: &[u8],
+) -> usize {
+    let plen = 8 + payload.len();
+    if f.len() < 14 + 40 + plen {
+        return 0;
+    }
+    let at = put_eth_v6(f, dst_mac, src_mac);
+    put_ip6(f, at, plen as u16, 64, us, dst);
+    let ic = at + 40;
+    f[ic] = ty;
+    f[ic + 1] = 0;
+    f[ic + 2..ic + 4].copy_from_slice(&[0, 0]);
+    f[ic + 4..ic + 6].copy_from_slice(&id.to_be_bytes());
+    f[ic + 6..ic + 8].copy_from_slice(&seq.to_be_bytes());
+    f[ic + 8..ic + 8 + payload.len()].copy_from_slice(payload);
+    finish_icmp6(f, us, dst, ic, plen);
+    14 + 40 + plen
+}

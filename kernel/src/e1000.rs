@@ -835,3 +835,183 @@ pub fn ipv8_demo(base: usize, mac: [u8; 6], con: &mut crate::Console) {
         }
     }
 }
+
+/// IPv6 two-node demo: real NDP (NS -> NA -> SLLA/TLLA) then
+/// ICMPv6 echo request/reply over link-local addresses.
+/// Same MAC-last-byte role gate as ipv8_demo (:01 initiator,
+/// :02 responder). Runs after ipv8_demo on the socket pair.
+pub fn ipv6_selftest(base: usize, mac: [u8; 6], con: &mut crate::Console) {
+    let role = mac[5];
+    if role != 0x01 && role != 0x02 {
+        return;
+    }
+    let us = crate::net::ll_addr(mac);
+    let mut peer_mac = mac;
+    peer_mac[5] = if role == 0x01 { 0x02 } else { 0x01 };
+    let peer = crate::net::ll_addr(peer_mac);
+    let Some((ring, bufs)) = rx_init(base) else {
+        return;
+    };
+    const ID: u16 = 0x8606;
+    const SEQ: u16 = 7;
+
+    let mut f = [0u8; 128];
+    // Initiator state: phase 0 = NS pending, phase 1 = echo pending.
+    let mut phase = 0u8;
+    let mut learned_mac = [0u8; 6];
+    let mut sent = false;
+    let mut rounds = 0u32;
+    let mut seen = 0u32;
+
+    if role == 0x01 {
+        printk(format_args!("rustux: ipv6: initiator up, resolving peer ll"));
+    } else {
+        printk(format_args!("rustux: ipv6: responder listening (indef)"));
+    }
+    let mut i = 0u32;
+    loop {
+        for d in 0..N_RX {
+            // SAFETY: same contract as arp_selftest.
+            let (sta, len) = unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+            if sta & RXD_STA_DD == 0 {
+                continue;
+            }
+            if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, d as u32);
+                }
+                continue;
+            }
+            let buf = unsafe {
+                core::slice::from_raw_parts(bufs.add(d * RX_BUF), len as usize)
+            };
+            seen += 1;
+            let et = u16::from_be_bytes([buf[12], buf[13]]);
+            if et == crate::net::ET_IPV6 && buf.len() >= 54 {
+                let src_mac: [u8; 6] = buf[6..12].try_into().unwrap();
+                if let Some(ip) = crate::net::parse_ipv6(&buf[14..]) {
+                    if ip.next == crate::net::NH_ICMPV6
+                        && crate::net::csum6(
+                            &ip.src, &ip.dst,
+                            ip.payload.len() as u32, ip.next, ip.payload,
+                        ) == 0
+                    {
+                        if let Some(m) = crate::net::parse_icmp6(ip.payload)
+                        {
+                            if role == 0x02 {
+                                if m.ty == 135 && ip.hop == 255
+                                    && m.rest.len() >= 20
+                                    && m.rest[4..20] == us
+                                    && ip.src != [0u8; 16]
+                                {
+                                    let them: [u8; 16] =
+                                        ip.src.try_into().unwrap();
+                                    let n = crate::net::build_na(
+                                        &mut f, src_mac, mac, &us, &them,
+                                    );
+                                    if n != 0 && tx_once(base, &f[..n.max(60)])
+                                    {
+                                        printk(format_args!(
+                                            "rustux: ipv6: NS for us -> \
+                                             sent NA (peer resolved us)"
+                                        ));
+                                    }
+                                } else if m.ty == 128 && ip.dst == us {
+                                    let id = u16::from_be_bytes(
+                                        [m.rest[0], m.rest[1]]);
+                                    let seq = u16::from_be_bytes(
+                                        [m.rest[2], m.rest[3]]);
+                                    let n = crate::net::build_echo6(
+                                        &mut f, 129, src_mac, mac, &us,
+                                        &ip.src, id, seq,
+                                        b"rustux6 reply",
+                                    );
+                                    if n != 0 && tx_once(base, &f[..n.max(60)])
+                                    {
+                                        printk(format_args!(
+                                            "rustux: ipv6: echo req \
+                                             seq={seq} -> replied"
+                                        ));
+                                        return;
+                                    }
+                                }
+                            } else if m.ty == 136 && ip.hop == 255
+                                && phase == 0
+                                && ip.src == peer
+                                && ip.dst == us
+                                && m.rest.len() >= 20
+                                && m.rest[4..20] == peer
+                            {
+                                learned_mac = src_mac;
+                                phase = 1;
+                                sent = false;
+                                printk(format_args!(
+                                    "rustux: ipv6: NA received, \
+                                     peer resolved"
+                                ));
+                            } else if m.ty == 129 && phase == 1
+                                && ip.src == peer
+                                && ip.dst == us
+                                && m.rest.len() >= 4
+                                && u16::from_be_bytes(
+                                    [m.rest[0], m.rest[1]]) == ID
+                                && u16::from_be_bytes(
+                                    [m.rest[2], m.rest[3]]) == SEQ
+                            {
+                                printk(format_args!(
+                                    "rustux: ipv6: echo reply seq={SEQ} \
+                                     ({len}B native 0x86dd)"
+                                ));
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            // SAFETY: reposting a consumed descriptor.
+            unsafe {
+                (*ring.add(d)).sta = 0;
+                wr(base, RDT, d as u32);
+            }
+        }
+        i += 1;
+        if role == 0x01 {
+            rounds += 1;
+            if rounds % 64_000_000 == 0 {
+                crate::log::printk(format_args!(
+                    "rustux: ipv6: ini hb r={rounds} ph={phase} seen={seen}"
+                ));
+                crate::log::drain(con);
+            }
+            if rounds == u32::MAX {
+                printk(format_args!("rustux: ipv6: no reply (peer down?)"));
+                return;
+            }
+            if !sent || rounds % 4_000_000 == 0 {
+                let n = if phase == 0 {
+                    crate::net::build_ns(&mut f, mac, &us, &peer)
+                } else {
+                    crate::net::build_echo6(
+                        &mut f, 128, learned_mac, mac, &us, &peer,
+                        ID, SEQ, b"rustux6",
+                    )
+                };
+                if n != 0 {
+                    let _ = tx_once(base, &f[..n.max(60)]);
+                }
+                sent = true;
+            }
+        } else {
+            if i % 64_000_000 == 0 {
+                crate::log::printk(format_args!(
+                    "rustux: ipv6: resp hb iters={i} frames={seen}"
+                ));
+                crate::log::drain(con);
+            }
+            if i == u32::MAX {
+                i = 0;
+            }
+        }
+    }
+}
