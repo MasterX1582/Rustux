@@ -642,3 +642,180 @@ pub fn ping_selftest(base: usize, mac: [u8; 6]) -> bool {
         }
     }
 }
+
+/// IPv8 two-node demo (draft-thain-ipv8, experimental).
+/// Role is selected by our MAC's last byte: 0x01 = initiator,
+/// 0x02 = responder; anything else skips (normal slirp boots).
+/// The initiator broadcasts an IPv8 echo request (ARP8 does not
+/// exist — its spec was never submitted); the responder learns the
+/// sender's MAC from the received frame and unicasts the reply.
+/// Addresses: A = RN 0.0.0.1 / 10.0.0.1, B = RN 0.0.0.2 / 10.0.0.2.
+pub fn ipv8_demo(base: usize, mac: [u8; 6]) {
+    let role = mac[5];
+    if role != 0x01 && role != 0x02 {
+        return; // single-node boot: no peer configured
+    }
+    let us8 = crate::net::Addr8 {
+        rn: u32::from_be_bytes([0, 0, 0, role]),
+        local: [10, 0, 0, role],
+    };
+    let Some((ring, bufs)) = rx_init(base) else {
+        return;
+    };
+    const ID: u16 = 0x8088;
+    const SEQ: u16 = 1;
+
+    if role == 0x01 {
+        printk(format_args!("rustux: ipv8: initiator up, broadcast echo req"));
+        let peer8 = crate::net::Addr8 {
+            rn: 0x00000002,
+            local: [10, 0, 0, 2],
+        };
+        let mut f = [0u8; 128];
+        let flen = crate::net::build_ipv8_echo(
+            &mut f, 8, [0xff; 6], mac, &peer8, &us8, ID, SEQ, b"rustux ipv8",
+        );
+        if flen == 0 {
+            return;
+        }
+        let mut sent = false;
+        let mut rounds = 0u32;
+        loop {
+            for d in 0..N_RX {
+                // SAFETY: same contract as arp_selftest.
+                let (sta, len) =
+                    unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+                if sta & RXD_STA_DD == 0 {
+                    continue;
+                }
+                if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
+                    unsafe {
+                        (*ring.add(d)).sta = 0;
+                        wr(base, RDT, ((d + 1) % N_RX) as u32);
+                    }
+                    continue;
+                }
+                let buf = unsafe {
+                    core::slice::from_raw_parts(
+                        bufs.add(d * RX_BUF),
+                        len as usize,
+                    )
+                };
+                let et = u16::from_be_bytes([buf[12], buf[13]]);
+                if et == crate::net::ET_IPV8 {
+                    if let Some(ip) = crate::net::parse_ipv8(&buf[14..]) {
+                        if ip.proto == 1
+                            && ip.src_rn == peer8.rn
+                            && ip.src == peer8.local
+                            && ip.dst == us8.local
+                            && ip.dst_rn == us8.rn
+                        {
+                            if let Some(m) =
+                                crate::net::parse_icmp(ip.payload)
+                            {
+                                if m.ty == 0 && m.code == 0
+                                    && m.id == ID && m.seq == SEQ
+                                {
+                                    printk(format_args!(
+                                        "rustux: ipv8: echo reply \
+                                         rn{:#x} {}.{}.{}.{} seq={} \
+                                         ({len}B native 0x8080)",
+                                        ip.src_rn, ip.src[0], ip.src[1],
+                                        ip.src[2], ip.src[3], m.seq
+                                    ));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                // SAFETY: reposting a consumed descriptor.
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                }
+            }
+            rounds += 1;
+            if rounds == 20_000_000 {
+                printk(format_args!("rustux: ipv8: no reply (peer down?)"));
+                return;
+            }
+            if !sent || rounds % 4_000_000 == 0 {
+                let _ = tx_once(base, &f[..flen.max(60)]);
+                sent = true;
+            }
+        }
+    }
+
+    // Responder: bounded listen for an IPv8 echo request, then reply.
+    printk(format_args!("rustux: ipv8: responder listening ~10s"));
+    let mut i = 0u32;
+    loop {
+        for d in 0..N_RX {
+            // SAFETY: same contract as arp_selftest.
+            let (sta, len) =
+                unsafe { ((*ring.add(d)).sta, (*ring.add(d)).len) };
+            if sta & RXD_STA_DD == 0 {
+                continue;
+            }
+            if sta & RXD_STA_EOP == 0 || len < 14 || len as usize > RX_BUF {
+                unsafe {
+                    (*ring.add(d)).sta = 0;
+                    wr(base, RDT, ((d + 1) % N_RX) as u32);
+                }
+                continue;
+            }
+            let buf = unsafe {
+                core::slice::from_raw_parts(bufs.add(d * RX_BUF), len as usize)
+            };
+            let et = u16::from_be_bytes([buf[12], buf[13]]);
+            if et == crate::net::ET_IPV8 && buf.len() >= 14 + 28 {
+                let dst_mac: [u8; 6] =
+                    buf[6..12].try_into().unwrap(); // learned sender MAC
+                if let Some(ip) = crate::net::parse_ipv8(&buf[14..]) {
+                    if ip.proto == 1
+                        && ip.dst == us8.local
+                        && ip.dst_rn == us8.rn
+                    {
+                        if let Some(m) = crate::net::parse_icmp(ip.payload)
+                        {
+                            if m.ty == 8 {
+                                let them = crate::net::Addr8 {
+                                    rn: ip.src_rn,
+                                    local: ip.src,
+                                };
+                                let mut r = [0u8; 128];
+                                let rlen = crate::net::build_ipv8_echo(
+                                    &mut r, 0, dst_mac, mac, &them, &us8,
+                                    m.id, m.seq, b"rustux ipv8 reply",
+                                );
+                                if rlen != 0
+                                    && tx_once(base, &r[..rlen.max(60)])
+                                {
+                                    printk(format_args!(
+                                        "rustux: ipv8: echo req from \
+                                         rn{:#x} {}.{}.{}.{} seq={} -> \
+                                         replied",
+                                        ip.src_rn, ip.src[0], ip.src[1],
+                                        ip.src[2], ip.src[3], m.seq
+                                    ));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // SAFETY: reposting a consumed descriptor.
+            unsafe {
+                (*ring.add(d)).sta = 0;
+                wr(base, RDT, ((d + 1) % N_RX) as u32);
+            }
+        }
+        i += 1;
+        if i == 40_000_000 {
+            printk(format_args!("rustux: ipv8: listen timed out"));
+            return;
+        }
+    }
+}
