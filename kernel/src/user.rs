@@ -30,14 +30,21 @@ const PHYS_MASK: u64 = 0x000f_ffff_ffff_f000;
 
 /// User stack: 16 pages high in the user window.
 const USTACK_VA: u64 = 0x5556_0000_0000;
+/// mmap's first-fit arena — 4 TiB of user window kept free of the
+/// ELF image (~0x4000…) and the stack (0x5556…).
+const MMAP_LO: u64 = 0x6000_0000_0000;
+const MMAP_HI: u64 = 0x7000_0000_0000;
 const USTACK_PAGES: u64 = 16;
 
 /// Per-task kernel stack for SYSCALL entries — replaces the shared
 /// static stack so a task's kernel state can't bleed into the next.
 const KSTACK_SIZE: usize = 16384;
 
-/// Maximum distinct user VA ranges recorded for syscall validation.
-const MAX_RANGES: usize = 8;
+/// Maximum distinct user VA ranges recorded for syscall validation —
+/// the vm_max_map_count analog: mmap/mprotect splits consume slots,
+/// brk/ELF/stack hold permanent ones. Overflow fails the op (ENOMEM),
+/// never silently maps unvalidated VA.
+const MAX_RANGES: usize = 32;
 
 /// Max resident tasks — a hard bound so spawn can't exhaust the
 /// kernel heap by enqueueing forever.
@@ -509,12 +516,17 @@ pub struct Task {
     /// kmalloc'd syscall stack; top is the rsp the entry stub loads.
     kstack_base: u64,
     kstack_top: u64,
-    /// [lo, hi, writable) address ranges user pointers may legally
-    /// reference. The syscall layer's user-pointer gate walks exactly
-    /// this table; writable marks ranges the kernel may write INTO
-    /// (read() target buffers must be user-writable, like Linux).
-    ranges: [(u64, u64, bool); MAX_RANGES],
+    /// [lo, hi) address ranges user pointers may legally reference,
+    /// with access bits (RNG_R=1 / RNG_W=2). The syscall layer's
+    /// user-pointer gate walks exactly this table — PROT_NONE entries
+    /// (flags 0) reserve VA but fail both gates, like Linux EFAULT.
+    ranges: [(u64, u64, u8); MAX_RANGES],
     nranges: usize,
+    /// Program break bookkeeping: brk_base is the aligned end of the
+    /// loaded image (heap start), brk_cur the current break in bytes
+    /// (page granularity underneath, like Linux VMAs).
+    brk_base: u64,
+    brk_cur: u64,
     /// fd slots -> GLOBAL OFD indices; 0/1/2 pre-seeded std streams.
     fds: [Option<u8>; MAX_FDS],
     /// Saved user context for switches — fabricated at spawn, then
@@ -717,6 +729,8 @@ fn map_page(t: &mut Task, va: u64, flags: u64) -> Option<u64> {
 /// Populate `t`'s address space from the ELF image. All header fields
 /// are hostile — every extent is checked before use.
 fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
+    t.brk_base = 0;
+    t.brk_cur = 0;
     // Copy the kernel PML4 — its entries are supervisor-only, so user
     // code can't reach kernel memory through them even though the
     // mappings are shared.
@@ -780,10 +794,14 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
             }
             v += PAGE;
         }
-        if t.nranges < MAX_RANGES {
-            t.ranges[t.nranges] = (p.va, mend, p.flags & elf::PF_W != 0);
-            t.nranges += 1;
+        if t.nranges >= MAX_RANGES {
+            return false;
         }
+        let fl = ((p.flags & elf::PF_R != 0) as u8)
+            | ((p.flags & elf::PF_W != 0) as u8) << 1;
+        t.ranges[t.nranges] = (p.va, mend, fl);
+        t.nranges += 1;
+        t.brk_base = t.brk_base.max((mend + PAGE - 1) & !(PAGE - 1));
     }
     for i in 0..USTACK_PAGES {
         if map_page(t, USTACK_VA + i * PAGE, USER | WRITE | NX).is_none() {
@@ -791,10 +809,12 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
         }
     }
     t.stack_top = USTACK_VA + USTACK_PAGES * PAGE;
-    if t.nranges < MAX_RANGES {
-        t.ranges[t.nranges] = (USTACK_VA, t.stack_top, true);
-        t.nranges += 1;
+    if t.nranges >= MAX_RANGES {
+        return false;
     }
+    t.ranges[t.nranges] = (USTACK_VA, t.stack_top, RNG_R | RNG_W);
+    t.nranges += 1;
+    t.brk_cur = t.brk_base;
     true
 }
 
@@ -808,8 +828,10 @@ fn load(img: &[u8]) -> Option<Task> {
         stack_top: 0,
         kstack_base: 0,
         kstack_top: 0,
-        ranges: [(0, 0, false); MAX_RANGES],
+        ranges: [(0, 0, 0); MAX_RANGES],
         nranges: 0,
+        brk_base: 0,
+        brk_cur: 0,
         fds: {
             const NONE: Option<u8> = None;
             [NONE; MAX_FDS]
@@ -860,9 +882,14 @@ fn load(img: &[u8]) -> Option<Task> {
     Some(t)
 }
 
+/// Range-table access bits — mirror PROT_READ/PROT_WRITE.
+const RNG_R: u8 = 1;
+const RNG_W: u8 = 2;
+
 /// Is `[va, va+len)` wholly inside a mapped user range? This is THE
 /// user-pointer gate for the syscall layer — checked arithmetic only.
-/// `need_write` restricts to ranges the kernel may write into.
+/// `need_write` demands RNG_W (kernel writes into the buffer);
+/// otherwise RNG_R suffices — a PROT_NONE VMA fails both.
 fn range_check(va: u64, len: u64, need_write: bool) -> bool {
     if len == 0 {
         return false;
@@ -873,10 +900,11 @@ fn range_check(va: u64, len: u64, need_write: bool) -> bool {
     // SAFETY: read-only walk of the task table.
     let i = unsafe { *core::ptr::addr_of!(CUR_I) };
     let cur = unsafe { (*core::ptr::addr_of!(TASKS)).get(i).and_then(|s| s.as_ref()) };
+    let want = if need_write { RNG_W } else { RNG_R };
     cur.is_some_and(|p| {
         p.ranges[..p.nranges]
             .iter()
-            .any(|&(lo, hi, w)| va >= lo && end <= hi && (!need_write || w))
+            .any(|&(lo, hi, fl)| va >= lo && end <= hi && fl & want != 0)
     })
 }
 
@@ -889,6 +917,475 @@ pub fn range_ok(va: u64, len: u64) -> bool {
 /// user-writable — the Linux rule for read()-target buffers.
 pub fn range_ok_w(va: u64, len: u64) -> bool {
     range_check(va, len, true)
+}
+
+// --- memory management (brk/mmap/munmap/mprotect) -------------------
+//
+// VMAs are the `ranges` table itself: every mapped interval has an
+// entry, so the syscall gate, first-fit allocation, and teardown all
+// see the same truth. Pages are mapped eagerly (alloc_frame zeroes);
+// PROT_NONE is a present-but-supervisor leaf — the VMA reserves the
+// VA, user access faults, mprotect can restore USER later.
+
+/// Flush the TLB after user-page-table edits on the current address
+/// space — same reload exec uses (user leaves carry no GLOBAL bit).
+fn flush_tlb() {
+    // SAFETY: reloading the current cr3 only flushes the TLB.
+    unsafe { core::arch::asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _) };
+}
+
+/// Drop `va`'s leaf mapping in `t`'s address space: free the backing
+/// frame and clear the PTE. Intermediate tables stay allocated —
+/// teardown (reap/exec's free_user_mappings) reclaims them in bulk.
+/// No-op on an absent or huge mapping.
+fn unmap_page(t: &mut Task, va: u64) {
+    let mut tab = t.pml4;
+    for shift in [39u64, 30, 21] {
+        let e = rd64(tab + 8 * ((va >> shift) & 0x1ff));
+        if e & PRESENT == 0 || e & (1 << 7) != 0 {
+            return;
+        }
+        tab = e & PHYS_MASK;
+    }
+    let ent = tab + 8 * ((va >> 12) & 0x1ff);
+    let e = rd64(ent);
+    if e & PRESENT != 0 {
+        kalloc::free_frame(e & PHYS_MASK);
+        wr64(ent, 0);
+    }
+}
+
+/// PTE address of `va`'s present leaf under `t.pml4` — mprotect's
+/// rewrite target. None on absent or huge-page traversal.
+fn leaf_ent(t: &Task, va: u64) -> Option<u64> {
+    let mut tab = t.pml4;
+    for shift in [39u64, 30, 21] {
+        let e = rd64(tab + 8 * ((va >> shift) & 0x1ff));
+        if e & PRESENT == 0 || e & (1 << 7) != 0 {
+            return None;
+        }
+        tab = e & PHYS_MASK;
+    }
+    let ent = tab + 8 * ((va >> 12) & 0x1ff);
+    (rd64(ent) & PRESENT != 0).then_some(ent)
+}
+
+/// Append a range entry; false when the table is full — callers
+/// pre-check capacity before mutating page tables so ops stay atomic.
+fn range_add(t: &mut Task, lo: u64, hi: u64, fl: u8) -> bool {
+    if lo >= hi {
+        return true; // empty VMA is a no-op
+    }
+    if t.nranges >= MAX_RANGES {
+        return false;
+    }
+    t.ranges[t.nranges] = (lo, hi, fl);
+    t.nranges += 1;
+    true
+}
+
+/// Compact `t`'s range table after a rewrite — drops empty entries
+/// and merges adjacent intervals with identical flags, so repeated
+/// split cycles can't permanently consume the bounded table.
+fn range_compact(t: &mut Task) {
+    let mut w = 0usize;
+    let mut out = [(0u64, 0u64, 0u8); MAX_RANGES];
+    for &(lo, hi, fl) in &t.ranges[..t.nranges] {
+        if lo >= hi {
+            continue;
+        }
+        if w > 0 {
+            let p = &mut out[w - 1];
+            if p.1 == lo && p.2 == fl {
+                p.1 = hi;
+                continue;
+            }
+        }
+        out[w] = (lo, hi, fl);
+        w += 1;
+    }
+    t.ranges = out;
+    t.nranges = w;
+}
+
+/// Entries needed after clipping [a,b) out of `t`'s table — partial
+/// intersections split in two. Used to fail ops atomically before a
+/// single page table entry is touched (no half-applied munmap).
+fn clip_entry_count(t: &Task, a: u64, b: u64) -> usize {
+    let mut n = 0usize;
+    for &(lo, hi, _) in &t.ranges[..t.nranges] {
+        if lo >= b || hi <= a {
+            n += 1; // untouched
+        } else {
+            n += (lo < a) as usize + (hi > b) as usize;
+        }
+    }
+    n
+}
+
+/// Remove [a,b) from every range entry — splits partial overlaps,
+/// drops covered ones, then compacts. Caller pre-checked capacity.
+fn range_clip(t: &mut Task, a: u64, b: u64) {
+    for i in 0..t.nranges {
+        let (lo, hi, fl) = t.ranges[i];
+        if lo >= b || hi <= a {
+            continue;
+        }
+        t.ranges[i] = if lo < a {
+            (lo, a, fl) // left remnant; right piece appended below
+        } else if hi > b {
+            (b, hi, fl)
+        } else {
+            (0, 0, 0)
+        };
+        if lo < a && hi > b {
+            // Middle cut — the right remnant needs a fresh slot.
+            t.ranges[t.nranges] = (b, hi, fl);
+            t.nranges += 1;
+        }
+    }
+    range_compact(t);
+}
+
+/// Is [a,b) fully covered by (possibly several) range entries?
+/// mprotect's precondition — Linux ENOMEMs over unmapped VA.
+fn range_covered(t: &Task, a: u64, b: u64) -> bool {
+    let mut cur = a;
+    while cur < b {
+        let mut adv = cur;
+        for &(lo, hi, _) in &t.ranges[..t.nranges] {
+            if lo <= cur && hi > adv {
+                adv = hi;
+            }
+        }
+        if adv == cur {
+            return false;
+        }
+        cur = adv;
+    }
+    true
+}
+
+/// Set access bits on the intersection of every range with [a,b).
+/// Precondition: range_covered passed and capacity was pre-checked.
+fn range_protect(t: &mut Task, a: u64, b: u64, fl: u8) {
+    for i in 0..t.nranges {
+        let (lo, hi, ofl) = t.ranges[i];
+        if lo >= b || hi <= a || ofl == fl {
+            continue;
+        }
+        // Emit up to three pieces: unchanged left, reprotected middle,
+        // unchanged right — the extra slots were counted up front.
+        if lo < a {
+            t.ranges[i] = (lo, a, ofl);
+            t.ranges[t.nranges] = (a, hi.min(b), fl);
+            t.nranges += 1;
+            if hi > b {
+                t.ranges[t.nranges] = (b, hi, ofl);
+                t.nranges += 1;
+            }
+        } else {
+            t.ranges[i] = (a.max(lo), hi.min(b), fl);
+            if hi > b {
+                t.ranges[t.nranges] = (b, hi, ofl);
+                t.nranges += 1;
+            }
+        }
+    }
+    range_compact(t);
+}
+
+/// Slots needed if [a,b) is reprotected on top of `t`'s table —
+/// worst case one clipped entry becomes three.
+fn protect_entry_count(t: &Task, a: u64, b: u64) -> usize {
+    let mut n = 0usize;
+    for &(lo, hi, _) in &t.ranges[..t.nranges] {
+        if lo >= b || hi <= a {
+            n += 1;
+        } else {
+            n += 1 + (lo < a) as usize + (hi > b) as usize;
+        }
+    }
+    n
+}
+
+/// First-fit a `len`-page VMA in the mmap arena — holes are just
+/// space between recorded ranges, so munmap'd VA is reused naturally.
+fn mmap_find(t: &Task, len: u64) -> Option<u64> {
+    let mut c = MMAP_LO;
+    loop {
+        let end = c.checked_add(len)?;
+        if end > MMAP_HI {
+            return None;
+        }
+        let mut bump = 0u64;
+        for &(lo, hi, _) in &t.ranges[..t.nranges] {
+            if lo < end && hi > c {
+                bump = bump.max(hi);
+            }
+        }
+        if bump == 0 {
+            return Some(c);
+        }
+        c = (bump + PAGE - 1) & !(PAGE - 1);
+    }
+}
+
+/// prot → leaf-flag bits for user PTEs: PROT_NONE yields a
+/// present-supervisor page (no USER bit) — VMA-reserved, faulting.
+fn prot_leaf(prot: u64) -> u64 {
+    if prot == 0 {
+        return 0; // PRESENT only — supervisor leaf
+    }
+    let mut fl = USER;
+    if prot & 2 != 0 {
+        fl |= WRITE;
+    }
+    if prot & 4 == 0 {
+        fl |= NX;
+    }
+    fl
+}
+
+/// prot → range access bits for the syscall-pointer gate.
+fn prot_rng(prot: u64) -> u8 {
+    ((prot & 1 != 0) as u8) | ((prot & 2 != 0) as u8) << 1
+}
+
+/// brk(addr): set the program break — page-granular growth at
+/// brk_base. Returns the NEW break on success, the CURRENT one on
+/// any failure (the Linux contract — never an errno).
+pub fn sys_brk(addr: u64) -> u64 {
+    const BRK_CAP: u64 = 256 << 20; // bounded heap: 256 MiB
+    let Some(t) = cur_mut() else { return 0 };
+    if t.brk_base == 0 || addr < t.brk_base {
+        return t.brk_cur;
+    }
+    let Some(new_end) = addr
+        .checked_add(PAGE - 1)
+        .map(|v| v & !(PAGE - 1))
+    else {
+        return t.brk_cur;
+    };
+    if new_end < t.brk_base || new_end - t.brk_base > BRK_CAP {
+        return t.brk_cur;
+    }
+    // The heap may not grow into another mapping (Linux's collision
+    // check) — the heap's own VMA (lo == brk_base) doesn't count.
+    let old_end = (t.brk_cur + PAGE - 1) & !(PAGE - 1);
+    if new_end > old_end
+        && t.ranges[..t.nranges].iter().any(|&(lo, hi, _)| {
+            lo != t.brk_base && lo < new_end && hi > old_end
+        })
+    {
+        return t.brk_cur;
+    }
+    if new_end > old_end {
+        // Grow: the heap VMA grows in place or is re-added (a munmap
+        // may have eaten it). Ensure the slot exists BEFORE mapping
+        // so a full table can't leave pages mapped-but-ungated.
+        let has_vma = t.ranges[..t.nranges]
+            .iter()
+            .any(|&(lo, _, _)| lo == t.brk_base);
+        if !has_vma && t.nranges >= MAX_RANGES {
+            return t.brk_cur;
+        }
+        let mut v = old_end.max(t.brk_base);
+        while v < new_end {
+            if map_page(t, v, USER | WRITE | NX).is_none() {
+                // Roll back this syscall's partial growth.
+                let mut u = old_end.max(t.brk_base);
+                while u < v {
+                    unmap_page(t, u);
+                    u += PAGE;
+                }
+                return t.brk_cur;
+            }
+            v += PAGE;
+        }
+        if has_vma {
+            for r in t.ranges[..t.nranges].iter_mut() {
+                if r.0 == t.brk_base {
+                    r.1 = r.1.max(new_end);
+                    r.2 = RNG_R | RNG_W;
+                }
+            }
+        } else {
+            range_add(t, t.brk_base, new_end, RNG_R | RNG_W);
+        }
+    } else if new_end < old_end {
+        let mut v = new_end;
+        while v < old_end {
+            unmap_page(t, v);
+            v += PAGE;
+        }
+        for r in t.ranges[..t.nranges].iter_mut() {
+            if r.0 == t.brk_base {
+                r.1 = new_end;
+            }
+        }
+        flush_tlb();
+    }
+    t.brk_cur = addr;
+    addr
+}
+
+/// mmap(addr, len, prot, flags, fd, off): anonymous private mappings
+/// only — the malloc substrate. FD-backed and shared mappings are
+/// ENODEV until file-backed VMAs exist. MAP_FIXED replaces whatever
+/// is at `addr` (inside the user window — kernel slots are off
+/// limits unconditionally).
+pub fn sys_mmap(
+    addr: u64,
+    len: u64,
+    prot: u64,
+    flags: u64,
+    _fd: u64,
+    _off: u64,
+) -> u64 {
+    const ENODEV: u64 = (-19i64) as u64;
+    const ENOMEM: u64 = (-12i64) as u64;
+    const MAP_PRIVATE: u64 = 0x02;
+    const MAP_FIXED: u64 = 0x10;
+    const MAP_ANON: u64 = 0x20;
+    let Some(t) = cur_mut() else { return ENOMEM };
+    if len == 0 || prot > 7 || flags & MAP_PRIVATE == 0 {
+        return EINVAL;
+    }
+    if flags & MAP_ANON == 0 {
+        return ENODEV; // file-backed mmap is a later rung
+    }
+    let Some(len) = len.checked_add(PAGE - 1).map(|v| v & !(PAGE - 1))
+    else {
+        return ENOMEM;
+    };
+    let va = if addr != 0 {
+        if addr & (PAGE - 1) != 0
+            || addr < elf::USER_VA_LO
+            || addr.checked_add(len).is_none_or(|e| e > elf::USER_VA_HI)
+        {
+            return if flags & MAP_FIXED != 0 { EINVAL } else { ENOMEM };
+        }
+        if flags & MAP_FIXED != 0 {
+            // Replace semantics: free the overlapped pages AND clip
+            // their VMA entries — map_page would otherwise union-keep
+            // the stale frames. Atomic: capacity checked up front.
+            if clip_entry_count(t, addr, addr + len) >= MAX_RANGES {
+                return ENOMEM;
+            }
+            let mut v = addr;
+            while v < addr + len {
+                unmap_page(t, v);
+                v += PAGE;
+            }
+            range_clip(t, addr, addr + len);
+            // Freed frames' stale translations must go before user
+            // code can run — else they alias whatever the buddy hands
+            // those frames to next (cross-task UAF).
+            flush_tlb();
+            addr
+        } else if t.ranges[..t.nranges]
+            .iter()
+            .any(|&(lo, hi, _)| lo < addr + len && hi > addr)
+        {
+            // Hint collides — fall back to first-fit like Linux.
+            let Some(v) = mmap_find(t, len) else { return ENOMEM };
+            v
+        } else {
+            addr
+        }
+    } else {
+        let Some(v) = mmap_find(t, len) else { return ENOMEM };
+        v
+    };
+    if t.nranges >= MAX_RANGES {
+        return ENOMEM;
+    }
+    let leaf = prot_leaf(prot);
+    let mut v = va;
+    while v < va + len {
+        if map_page(t, v, leaf).is_none() {
+            let mut u = va;
+            while u < v {
+                unmap_page(t, u);
+                u += PAGE;
+            }
+            return ENOMEM;
+        }
+        v += PAGE;
+    }
+    range_add(t, va, va + len, prot_rng(prot));
+    va
+}
+
+/// munmap(addr, len): Linux never fails on an aligned range — holes
+/// and foreign areas are silent no-ops. Pages are freed, range
+/// entries clipped/split, one TLB flush at the end.
+pub fn sys_munmap(addr: u64, len: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EINVAL };
+    if len == 0 || addr & (PAGE - 1) != 0 {
+        return EINVAL;
+    }
+    // Clip to the user window — wild VA is not an error, just
+    // nothing-to-do (Linux's permissive semantic). Length rounds UP
+    // to whole pages like Linux: unmapping 1 byte still zaps the page.
+    let lo = addr.max(elf::USER_VA_LO);
+    let len = match len.checked_add(PAGE - 1) {
+        Some(v) => v & !(PAGE - 1),
+        None => u64::MAX - (PAGE - 1),
+    };
+    let hi = addr.saturating_add(len).min(elf::USER_VA_HI);
+    if lo >= hi {
+        return 0;
+    }
+    if clip_entry_count(t, lo, hi) > MAX_RANGES {
+        return (-12i64) as u64; // ENOMEM — atomic bail before touching
+    }
+    let mut v = lo;
+    while v < hi {
+        unmap_page(t, v);
+        v += PAGE;
+    }
+    range_clip(t, lo, hi);
+    flush_tlb();
+    0
+}
+
+/// mprotect(addr, len, prot): every page in the range must be mapped
+/// (Linux ENOMEMs over holes); flags flip on leaf and VMA alike,
+/// with VMA splits where the coverage is partial.
+pub fn sys_mprotect(addr: u64, len: u64, prot: u64) -> u64 {
+    const ENOMEM: u64 = (-12i64) as u64;
+    let Some(t) = cur_mut() else { return ENOMEM };
+    if addr & (PAGE - 1) != 0 || prot > 7 {
+        return EINVAL;
+    }
+    if len == 0 {
+        return 0;
+    }
+    let Some(end) = addr.checked_add(len) else { return ENOMEM };
+    if addr < elf::USER_VA_LO || end > elf::USER_VA_HI {
+        return ENOMEM;
+    }
+    let hi = (end + PAGE - 1) & !(PAGE - 1);
+    if !range_covered(t, addr, hi)
+        || protect_entry_count(t, addr, hi) > MAX_RANGES
+    {
+        return ENOMEM;
+    }
+    let leaf = prot_leaf(prot);
+    let mut v = addr;
+    while v < hi {
+        // A covered range implies a mapped page — an absent leaf
+        // here means the invariant broke; fail rather than guess.
+        let Some(ent) = leaf_ent(t, v) else { return ENOMEM };
+        let e = rd64(ent);
+        wr64(ent, (e & PHYS_MASK) | PRESENT | leaf);
+        v += PAGE;
+    }
+    range_protect(t, addr, hi, prot_rng(prot));
+    flush_tlb();
+    0
 }
 
 // --- fd layer -----------------------------------------------------
@@ -3530,6 +4027,8 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         kstack_top: 0,
         ranges: p.ranges,
         nranges: p.nranges,
+        brk_base: p.brk_base,
+        brk_cur: p.brk_cur,
         fds: p.fds,
         ctx: {
             let mut x = *ctx;
