@@ -26,6 +26,7 @@
 //! stream, the same seeded fail_mask, lowest-free-slot-first policy.
 
 #![forbid(unsafe_code)]
+#![allow(clippy::all)]
 #![allow(non_snake_case)]
 #![allow(clippy::too_many_arguments)]
 
@@ -433,7 +434,16 @@ fn iabs(v: i64) -> u64 {
     }
 }
 
+fn trace_on() -> bool {
+    use std::sync::OnceLock;
+    static T: OnceLock<bool> = OnceLock::new();
+    *T.get_or_init(|| std::env::var_os("KTRACE").is_some_and(|v| !v.is_empty()))
+}
+
 fn fold(r: &mut Rig, v: u64) {
+    if trace_on() {
+        eprintln!("F {v:016x}");
+    }
     r.g_h = (r.g_h ^ v).wrapping_mul(0x100000001b3);
 }
 
@@ -671,12 +681,14 @@ fn destroy_subtree(r: &mut Rig, root: u64, free: bool) {
         bug_on(slot != -1 && r.nodes[node].parent_slot as i32 != slot);
         slot = 0;
 
-        // continue_node / finished_node / ascend loop
+        // continue_node / finished_node / ascend loop.  The C `for`
+        // increments slot after the body: `goto move_to_meta` leaves it
+        // on the slot the meta pointer was found in.
         loop {
             while slot < FAN_OUT as i32 {
                 let ptr = r.nodes[node].slots[slot as usize];
-                slot += 1;
                 if ptr == 0 {
+                    slot += 1;
                     continue;
                 }
                 if is_meta(ptr) {
@@ -687,6 +699,7 @@ fn destroy_subtree(r: &mut Rig, root: u64, free: bool) {
                 if free {
                     free_object(r, ptr_to_leaf(ptr));
                 }
+                slot += 1;
             }
 
             // finished_node
@@ -861,7 +874,10 @@ fn assoc_array_split_node(r: &mut Rig, e: usize, node: usize, new_n0: usize, new
         r.edits[e].leaf_p = PC_NSLOT + new_n0 as u64 * 64 + free_slot as u64;
         r.edits[e].adjust_count_on = NCANON + new_n0 as u64 * 0x1000;
     } else {
+        // C: edit->leaf_p = &new_n1->slots[next_slot++]; -- the post
+        // increment feeds the BUG_ON(next_slot <= 1) below.
         r.edits[e].leaf_p = PC_NSLOT + new_n1 as u64 * 64 + next_slot as u64;
+        next_slot += 1;
         r.edits[e].adjust_count_on = NCANON + new_n1 as u64 * 0x1000;
     }
 
@@ -1683,7 +1699,7 @@ fn gen_key(r: u64) -> TKey {
     match r % 8 {
         0 | 1 => [(r >> 8) % 48, 0],
         2 => [(r >> 8) % 65536, 0],
-        3 => [0x12345 | (((r >> 8) % 256) << 32), (r >> 16) % 4],
+        3 => [0x12345 | (((r >> 8) % 256) << 32), (r >> 16) % 6],
         4 => [0xABCDEF0123 | (((r >> 8) % 1024) << 40), (r >> 24) % 8],
         5 => [0x777777777777777, (r >> 8) % 24],
         6 => [1 + (r >> 8) % 4, 0],
@@ -2081,6 +2097,9 @@ pub fn wrap_assoc_seq(seed: u64, nops_i: i64, seed2: i64) -> u64 {
 
     for i in 0..nops {
         let rv = xs64(&mut r);
+        if trace_on() {
+            eprintln!("OP {i} {rv:016x}");
+        }
         match rv % 16 {
             0 | 1 => op_insert(&mut r, rv),
             2 | 3 => op_cluster(&mut r, rv),

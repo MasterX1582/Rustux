@@ -9,6 +9,7 @@
     {
       "name": "wrap_assoc_seq",
       "file": "wrappers.c",
+      "line": 890,
       "params": [
         { "name": "seed", "ts_type": "int", "optional": false, "rest": false, "native_type": "uint64_t" },
         { "name": "nops_i", "ts_type": "int", "optional": false, "rest": false, "native_type": "int64_t" },

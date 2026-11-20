@@ -578,6 +578,52 @@ fn main() -> Status {
     }
 
     {
+        use klib::assoc_array::*;
+        let mut nodes = [NODE0; 32];
+        let mut shorts = [SC0; 16];
+        let mut edits = [EDIT0; 4];
+        let mut okey = [[0u64; KW]; 24];
+        let mut orefs = [0i64; 24];
+        let mut aa = AssocArray::new(&mut nodes, &mut shorts, &mut edits, &mut okey, &mut orefs);
+        // Insert three keys (the third forces a node split), apply each
+        // edit script, then find/iterate/delete through the port.
+        let keys: [TKey; 3] = [[0x1111, 0], [0x2222, 0], [0xabc333, 1]];
+        for (i, &k) in keys.iter().enumerate() {
+            aa.okey[i] = k;
+            aa.orefs[i] = 1;
+            let e = assoc_array_insert(&mut aa, &k, leaf_to_ptr(i));
+            if !is_err(e) {
+                assoc_array_apply_edit(&mut aa, edit_i(e));
+            }
+        }
+        let hit = assoc_array_find(&mut aa, &[0x2222, 0]);
+        let mut cnt = 0u64;
+        let _ = assoc_array_iterate(
+            &mut aa,
+            &mut |_r: &mut AssocArray, c: &mut u64, _l: u64| -> i32 {
+                *c += 1;
+                0
+            },
+            &mut cnt,
+        );
+        let e = assoc_array_delete(&mut aa, &[0x1111, 0]);
+        if e != 0 && !is_err(e) {
+            assoc_array_apply_edit(&mut aa, edit_i(e));
+        }
+        let after_del = aa.nr_leaves_on_tree;
+        assoc_array_destroy(&mut aa);
+        let _ = writeln!(
+            com1,
+            "linux-rust: klib::assoc_array: find={:#x} iter={} del->leaves={} root={} (verified port of lib/assoc_array.c)",
+            hit, cnt, after_del, aa.root
+        );
+        assert_eq!(hit, leaf_to_ptr(1));
+        assert_eq!(cnt, 3);
+        assert_eq!(after_del, 2);
+        assert_eq!(aa.root, 0);
+    }
+
+    {
         use klib::percpu_counter::PercpuCounter;
         let mut lanes = [0i64; 4];
         let mut c = PercpuCounter::new();

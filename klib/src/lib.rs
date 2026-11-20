@@ -11,6 +11,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod assoc_array;
 pub mod bcd;
 pub mod bitmap;
 pub mod bitops;
