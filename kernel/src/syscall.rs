@@ -209,6 +209,25 @@ const NR_RECVFROM: u64 = 45;
 const NR_SHUTDOWN: u64 = 48;
 const NR_BIND: u64 = 49;
 const NR_LISTEN: u64 = 50;
+const NR_READV: u64 = 19;
+const NR_WRITEV: u64 = 20;
+const NR_IOCTL: u64 = 16;
+const NR_NANOSLEEP: u64 = 35;
+const NR_UNAME: u64 = 63;
+const NR_GETTIMEOFDAY: u64 = 96;
+const NR_GETUID: u64 = 102;
+const NR_GETGID: u64 = 104;
+const NR_GETEUID: u64 = 107;
+const NR_GETEGID: u64 = 108;
+const NR_ARCH_PRCTL: u64 = 158;
+const NR_GETTID: u64 = 186;
+const NR_SET_TID_ADDRESS: u64 = 218;
+const NR_CLOCK_GETTIME: u64 = 228;
+const NR_CLOCK_NANOSLEEP: u64 = 230;
+const NR_EXIT_GROUP: u64 = 231;
+const NR_SET_ROBUST_LIST: u64 = 273;
+const NR_PRLIMIT64: u64 = 302;
+const NR_GETRANDOM: u64 = 318;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -235,6 +254,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
     // Args 4-6 ride r10/r8/r9 per the syscall ABI (arg4 is r10,
     // never rcx — that's the CPU-clobbered return address).
     let (a4, a5, a6) = (ctx.r10, ctx.r8, ctx.r9);
+
     ctx.rax = match nr {
         // fd_read validates the write-target range itself because only
         // it knows how many bytes the source will actually produce;
@@ -281,8 +301,30 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         // dirfd and flags are ABI-shape only.
         NR_NEWFSTATAT => sys_newfstatat(a2, a3),
         NR_EXECVE => sys_execve(ctx, a1, a2, a3),
+        NR_READV => user::fd_readv(ctx, a1, a2, a3),
+        NR_WRITEV => sys_writev(ctx, a1, a2, a3),
+        NR_IOCTL => user::sys_ioctl(),
+        NR_NANOSLEEP => user::sys_nanosleep(ctx, a1, a2),
+        NR_UNAME => user::sys_uname(a1),
+        NR_GETTIMEOFDAY => user::sys_gettimeofday(a1, a2),
+        NR_GETUID | NR_GETGID | NR_GETEUID | NR_GETEGID => 0,
+        NR_ARCH_PRCTL => user::sys_arch_prctl(a1, a2),
+        NR_GETTID => user::sys_gettid(),
+        NR_SET_TID_ADDRESS => user::sys_set_tid_address(),
+        NR_CLOCK_GETTIME => user::sys_clock_gettime(a1, a2),
+        NR_CLOCK_NANOSLEEP => user::sys_clock_nanosleep(ctx, a1, a2, a3, a4),
+        // No threads — the group is the task.
+        NR_EXIT_GROUP => sys_exit(a1),
+        NR_SET_ROBUST_LIST => user::sys_set_robust_list(a1, a2),
+        NR_PRLIMIT64 => user::sys_prlimit64(a1, a2, a3, a4),
+        NR_GETRANDOM => user::sys_getrandom(a1, a2, a3),
         NR_EXIT => sys_exit(a1),
-        _ => ENOSYS,
+        _ => {
+            // Bring-up aid: real binaries probe ABI surface. Linux
+            // returns ENOSYS the same way; we just name the number.
+            log::printk(format_args!("rustux: enosys: nr {nr}"));
+            ENOSYS
+        }
     };
     // Signals deliver on the way back to user mode — a handler
     // redirects this ctx; a default-fatal signal never returns.
@@ -344,10 +386,11 @@ fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
 
 /// execve(path, argv, envp): resolve the name in the initrd, verify it
 /// is a loadable ELF BEFORE touching the address space, then let
-/// user::exec rebuild it. argv/envp are accepted for ABI shape but
-/// not yet consumed — a stack-args rung will land with fork
-/// (CVE-2022-49264's argv==NULL discipline applies then).
-fn sys_execve(ctx: &mut user::UCtx, path: u64, _argv: u64, _envp: u64) -> u64 {
+/// user::exec rebuild it — including the real initial stack
+/// (argc/argv/envp/auxv) that ELF entry code reads at [rsp]
+/// (CVE-2022-49264's argv==NULL discipline: argc=0 gets the binary
+/// name as argv0, matching what glibc launchers always produce).
+fn sys_execve(ctx: &mut user::UCtx, path: u64, argv: u64, envp: u64) -> u64 {
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
@@ -362,7 +405,20 @@ fn sys_execve(ctx: &mut user::UCtx, path: u64, _argv: u64, _envp: u64) -> u64 {
     if elf::parse(img).is_none() {
         return ENOEXEC;
     }
-    if !user::exec(img, ctx) {
+    // Copy argv/envp out of the OLD address space before exec tears
+    // it down — collect_exec_args gate-checks every slot and string.
+    let mut args = user::ExecArgs::empty();
+    let r = user::collect_exec_args(argv, envp, &mut args);
+    if r != 0 {
+        return r;
+    }
+    if args.argc == 0 {
+        let n = name.len().min(user::EXEC_STR_CAP - 1);
+        args.argv[0][..n].copy_from_slice(&name[..n]);
+        args.argv_len[0] = n + 1;
+        args.argc = 1;
+    }
+    if !user::exec(img, ctx, &args) {
         // The address space is already torn down; the task cannot
         // safely resume. Kill it — the run() loop reaps as usual.
         sys_exit(127);
@@ -398,6 +454,41 @@ fn sys_write(ctx: &mut user::UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     // user output is lost before it reaches the console.
     log::drain_task();
     len
+}
+
+/// writev(fd, iov, cnt): gather-write each iovec through sys_write —
+/// the console-fanout and pipe paths stay identical to write(). The
+/// vector itself is gate-checked; each element re-validates its own
+/// buffer inside sys_write. (readv lives in user.rs with fd_read.)
+fn sys_writev(ctx: &mut user::UCtx, fd: u64, iov: u64, cnt: u64) -> u64 {
+    if cnt == 0 {
+        return 0;
+    }
+    if cnt > 32 || !user::range_ok(iov, cnt * 16) {
+        return EINVAL;
+    }
+    let mut done = 0u64;
+    for i in 0..cnt {
+        // SAFETY: range_ok proved the iovec array readable user memory.
+        let (base, len) = unsafe {
+            (
+                ((iov + i * 16) as *const u64).read_unaligned(),
+                ((iov + i * 16 + 8) as *const u64).read_unaligned(),
+            )
+        };
+        if len == 0 {
+            continue;
+        }
+        let n = sys_write(ctx, fd, base, len);
+        if (n as i64) < 0 {
+            return if done > 0 { done } else { n };
+        }
+        done += n;
+        if n < len {
+            break;
+        }
+    }
+    done
 }
 
 /// exit(code): hand off to the scheduler — resume the next Runnable

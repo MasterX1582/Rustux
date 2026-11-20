@@ -640,7 +640,7 @@ const MSR_EFER: u32 = 0xc000_0080;
 const MSR_STAR: u32 = 0xc000_0081;
 const MSR_LSTAR: u32 = 0xc000_0082;
 const MSR_SFMASK: u32 = 0xc000_0084;
-const MSR_FS_BASE: u32 = 0xc000_0100;
+pub const MSR_FS_BASE: u32 = 0xc000_0100;
 const MSR_GS_BASE: u32 = 0xc000_0101;
 const MSR_KGS_BASE: u32 = 0xc000_0102;
 

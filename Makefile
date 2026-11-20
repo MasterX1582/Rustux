@@ -35,18 +35,23 @@ demo: $(ESP_IMG)
 FORCE:
 
 # Ring-3 milestone images: static ELF64s loaded by kernel/src/elf.rs.
-USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf kernel/user/lstest.elf kernel/user/exectest.elf kernel/user/spinA.elf kernel/user/spinB.elf kernel/user/forktest.elf kernel/user/pipetest.elf kernel/user/sigtest.elf kernel/user/faulttest.elf kernel/user/fputest.elf kernel/user/sigfault.elf kernel/user/polltest.elf kernel/user/udptest.elf kernel/user/tcptest.elf kernel/user/mmtest.elf
+USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf kernel/user/lstest.elf kernel/user/exectest.elf kernel/user/spinA.elf kernel/user/spinB.elf kernel/user/forktest.elf kernel/user/pipetest.elf kernel/user/sigtest.elf kernel/user/faulttest.elf kernel/user/fputest.elf kernel/user/sigfault.elf kernel/user/polltest.elf kernel/user/udptest.elf kernel/user/tcptest.elf kernel/user/mmtest.elf kernel/user/realbin.elf
 INITRD    := initrd.cpio
 
 kernel/user/%.elf: kernel/user/%.S
 	as -o kernel/user/$*.o $<
 	ld -nostdlib -e _start -Ttext 0x555500000000 -o $@ kernel/user/$*.o
 
+# The real-binary proof: GCC static-PIE — glibc self-relocates, so the
+# kernel just maps PT_LOADs at LOAD_BIAS and jumps to entry.
+kernel/user/realbin.elf: kernel/user/realbin.c
+	gcc -static-pie -O2 -o $@ $<
+
 # The initrd: a newc cpio archive carrying the user images plus a data
 # file, read from the ESP by the kernel before ExitBootServices. The
 # archive doubles as the fd layer's read-only root filesystem.
 $(INITRD): $(USER_ELFS) kernel/user/motd.txt tools/mkinitrd.py
-	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/lstest.elf lstest kernel/user/exectest.elf exectest kernel/user/spinA.elf spinA kernel/user/spinB.elf spinB kernel/user/forktest.elf forktest kernel/user/pipetest.elf pipetest kernel/user/sigtest.elf sigtest kernel/user/faulttest.elf faulttest kernel/user/fputest.elf fputest kernel/user/sigfault.elf sigfault kernel/user/polltest.elf polltest kernel/user/udptest.elf udptest kernel/user/tcptest.elf tcptest kernel/user/mmtest.elf mmtest kernel/user/motd.txt motd.txt > $@
+	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/lstest.elf lstest kernel/user/exectest.elf exectest kernel/user/spinA.elf spinA kernel/user/spinB.elf spinB kernel/user/forktest.elf forktest kernel/user/pipetest.elf pipetest kernel/user/sigtest.elf sigtest kernel/user/faulttest.elf faulttest kernel/user/fputest.elf fputest kernel/user/sigfault.elf sigfault kernel/user/polltest.elf polltest kernel/user/udptest.elf udptest kernel/user/tcptest.elf tcptest kernel/user/mmtest.elf mmtest kernel/user/realbin.elf realbin kernel/user/motd.txt motd.txt > $@
 
 $(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml kernel/user/hello.elf FORCE
 	cargo build --release --target $(TARGET) -p kernel

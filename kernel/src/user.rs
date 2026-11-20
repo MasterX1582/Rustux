@@ -133,6 +133,9 @@ enum WaitOn {
     /// recvfrom() on an empty UDP socket: `wait_ptr` is the user
     /// buffer, `wait_len` its cap, `wait_ptr2` the sockaddr out ptr.
     UdpRecv(usize),
+    /// nanosleep(): pure deadline wait — wait_deadline bounds it,
+    /// the return is always 0.
+    Timer,
     /// connect() awaiting SYN-ACK; wait_deadline bounds it.
     TcpConn(usize),
     /// accept() awaiting an established child on the listener.
@@ -418,7 +421,23 @@ pub fn kill(pid: u64, sig: u64) -> u64 {
     let h = t.handlers.get(sig as usize - 1).copied().unwrap_or(SIG_DFL);
     let ignored = h == SIG_IGN || (h == SIG_DFL && sig_default_ignore(sig as usize));
     if t.state == TaskState::Blocked && !ignored {
-        t.ctx.rax = (-4i64) as u64; // -EINTR
+        // A nanosleep interrupted by this signal reports the unslept
+        // remainder in rem (stored in wait_ptr) — Linux semantics.
+        let mut rax: u64 = (-4i64) as u64; // -EINTR
+        if matches!(t.wait_on, WaitOn::Timer) {
+            if t.wait_ptr != 0 {
+                let now = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+                let left = t.wait_deadline.saturating_sub(now);
+                let rem = t.wait_ptr;
+                write_task_bytes(t.pml4, rem, &(left / 100).to_le_bytes());
+                write_task_bytes(t.pml4, rem + 8, &((left % 100) * 10_000_000).to_le_bytes());
+            }
+            // clock_nanosleep's ABI returns EINTR positive.
+            if t.wait_ptr2 != 0 {
+                rax = 4;
+            }
+        }
+        t.ctx.rax = rax;
         t.wait_on = WaitOn::None;
         t.wait_ptr = 0;
         t.wait_len = 0;
@@ -555,6 +574,10 @@ pub struct Task {
     /// Per-signal disposition: 0=SIG_DFL, 1=SIG_IGN, else a user VA
     /// handler. SIGKILL/SIGSTOP can't be overridden (EINVAL).
     handlers: [u64; 31],
+    /// The task's user FS base (TLS pointer) — set via arch_prctl,
+    /// restored to MSR_FS_BASE on every switch like the fx image.
+    /// Users can't desync it: FSGSBASE is never enabled.
+    fs_base: u64,
     /// Per-task FPU/SSE state -- fxsave'd on every way out,
     /// fxrstor'd on every resume so xmm state never crosses tasks.
     fx: FxState,
@@ -802,7 +825,11 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
         }
         let fl = ((p.flags & elf::PF_R != 0) as u8)
             | ((p.flags & elf::PF_W != 0) as u8) << 1;
-        t.ranges[t.nranges] = (p.va, mend, fl);
+        // The VMA covers the whole mapped page range, not just the
+        // segment extent — Linux VMAs are page-aligned too. (Without
+        // this, mprotect on a RELRO sub-page range ENOMEMs on the
+        // page slack before p.va.)
+        t.ranges[t.nranges] = (va0, va1, fl);
         t.nranges += 1;
         t.brk_base = t.brk_base.max((mend + PAGE - 1) & !(PAGE - 1));
     }
@@ -853,6 +880,7 @@ fn load(img: &[u8]) -> Option<Task> {
         handlers: [0; 31],
         // SAFETY: read of the init-time capture.
         fx: unsafe { *core::ptr::addr_of!(INIT_FX) },
+        fs_base: 0,
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
     // global OFD, like separate opens of /dev/console.
@@ -1389,6 +1417,493 @@ pub fn sys_mprotect(addr: u64, len: u64, prot: u64) -> u64 {
     range_protect(t, addr, hi, prot_rng(prot));
     flush_tlb();
     0
+}
+
+// --- process image: exec stack, arch_prctl, misc ABI ----------------
+//
+// Real binaries need the Linux initial-stack contract: argc at [rsp],
+// argv pointers, NULL, envp pointers, NULL, auxv pairs, AT_NULL — and
+// %fs as TLS via arch_prctl. Collected argv strings must be copied
+// BEFORE exec frees the old address space.
+
+/// Bounded exec vectors — kernel-side copies made while the OLD
+/// address space is still mapped. Limits are honest EINVAL/E2BIG
+/// boundaries, not Linux's multi-MB ARG_MAX.
+pub const MAX_EXEC_ARGS: usize = 16;
+pub const MAX_EXEC_ENVS: usize = 8;
+pub const EXEC_STR_CAP: usize = 256;
+
+pub struct ExecArgs {
+    pub argv: [[u8; EXEC_STR_CAP]; MAX_EXEC_ARGS],
+    pub argv_len: [usize; MAX_EXEC_ARGS],
+    pub argc: usize,
+    pub envp: [[u8; EXEC_STR_CAP]; MAX_EXEC_ENVS],
+    pub envp_len: [usize; MAX_EXEC_ENVS],
+    pub envc: usize,
+}
+
+impl ExecArgs {
+    pub const fn empty() -> Self {
+        ExecArgs {
+            argv: [[0; EXEC_STR_CAP]; MAX_EXEC_ARGS],
+            argv_len: [0; MAX_EXEC_ARGS],
+            argc: 0,
+            envp: [[0; EXEC_STR_CAP]; MAX_EXEC_ENVS],
+            envp_len: [0; MAX_EXEC_ENVS],
+            envc: 0,
+        }
+    }
+}
+
+/// Read a NUL-terminated string from `pml4`'s address space —
+/// translate-per-byte like the sleeper paths, so an unmapped string
+/// can't fault the kernel. None on bad memory or overflow.
+fn copy_task_str(pml4: u64, va: u64, dst: &mut [u8]) -> Option<usize> {
+    for (i, slot) in dst.iter_mut().enumerate() {
+        let b = read_task_u(pml4, va + i as u64, 1)? as u8;
+        *slot = b;
+        if b == 0 {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Collect one NUL-terminated pointer array (argv or envp) from the
+/// caller's address space — bounded, every pointer slot gate-checked
+/// before the string walk.
+fn collect_strs(
+    pml4: u64,
+    va_base: u64,
+    dest: &mut [[u8; EXEC_STR_CAP]],
+    destlen: &mut [usize],
+) -> Result<usize, u64> {
+    const E2BIG: u64 = (-7i64) as u64;
+    if va_base == 0 {
+        return Ok(0);
+    }
+    let mut n = 0usize;
+    loop {
+        if n >= dest.len() {
+            return Err(E2BIG);
+        }
+        let slot = va_base + (n as u64) * 8;
+        if !range_ok(slot, 8) {
+            return Err(EFAULT);
+        }
+        let Some(ptr) = read_task_u(pml4, slot, 8) else {
+            return Err(EFAULT);
+        };
+        if ptr == 0 {
+            return Ok(n);
+        }
+        let Some(l) = copy_task_str(pml4, ptr, &mut dest[n]) else {
+            return Err(EFAULT);
+        };
+        destlen[n] = l + 1;
+        n += 1;
+    }
+}
+
+/// Collect execve's argv/envp pointer arrays into `out` — bounded,
+/// read while the OLD address space is still mapped.
+pub fn collect_exec_args(argv_va: u64, envp_va: u64, out: &mut ExecArgs) -> u64 {
+    const E2BIG: u64 = (-7i64) as u64;
+    let Some(t) = cur_mut() else { return E2BIG };
+    match collect_strs(t.pml4, argv_va, &mut out.argv, &mut out.argv_len) {
+        Ok(n) => out.argc = n,
+        Err(e) => return e,
+    }
+    match collect_strs(t.pml4, envp_va, &mut out.envp, &mut out.envp_len) {
+        Ok(n) => out.envc = n,
+        Err(e) => return e,
+    }
+    0
+}
+
+/// Build the Linux initial stack: strings top-down, 16B AT_RANDOM,
+/// then [argc][argv ptrs][NULL][envp ptrs][NULL][auxv][AT_NULL].
+/// Returns the final rsp — launch's ctx needs exactly this.
+fn setup_stack(
+    t: &mut Task,
+    e: &elf::Elf,
+    img: &[u8],
+    args: &ExecArgs,
+) -> Option<u64> {
+    let mut sp = t.stack_top;
+    let mut str_va = |s: &[u8]| -> u64 {
+        sp -= s.len() as u64;
+        write_task_bytes(t.pml4, sp, s);
+        sp
+    };
+    let mut argv = [0u64; MAX_EXEC_ARGS];
+    for (i, (s, &l)) in args.argv.iter().zip(args.argv_len.iter()).enumerate().take(args.argc) {
+        argv[i] = str_va(&s[..l]);
+    }
+    let mut envv = [0u64; MAX_EXEC_ENVS];
+    for (i, (s, &l)) in args.envp.iter().zip(args.envp_len.iter()).enumerate().take(args.envc) {
+        envv[i] = str_va(&s[..l]);
+    }
+    // AT_RANDOM: 16 real bytes — glibc seeds its stack canary here.
+    sp -= 16;
+    let mut rnd = [0u8; 16];
+    rnd[..8].copy_from_slice(&crate::rand::next_u64().to_le_bytes());
+    rnd[8..].copy_from_slice(&crate::rand::next_u64().to_le_bytes());
+    write_task_bytes(t.pml4, sp, &rnd);
+    let at_random = sp;
+    sp &= !15u64;
+    // AT_PHDR needs the VA where the phdr table was mapped — the
+    // PT_LOAD covering e_phoff (headers land in the first segment).
+    let mut at_phdr = 0u64;
+    for p in e.phdrs(img) {
+        if p.ty == elf::PT_LOAD
+            && (p.off..p.off + p.filesz).contains(&(e.phoff() as u64))
+        {
+            at_phdr = p.va + (e.phoff() as u64 - p.off);
+        }
+    }
+    let auxv: [(u64, u64); 16] = [
+        (3, at_phdr),          // AT_PHDR
+        (4, e.phentsize() as u64),
+        (5, e.phnum() as u64),
+        (6, PAGE),             // AT_PAGESZ
+        (7, 0),                // AT_BASE (no interp)
+        (8, 0),                // AT_FLAGS
+        (9, e.entry),          // AT_ENTRY
+        (11, 0),               // AT_UID
+        (12, 0),               // AT_EUID
+        (13, 0),               // AT_GID
+        (14, 0),               // AT_EGID
+        (16, 0),               // AT_HWCAP
+        (17, 100),             // AT_CLKTCK — apic runs at 100Hz
+        (23, 0),               // AT_SECURE
+        (25, at_random),       // AT_RANDOM
+        (0, 0),                // AT_NULL
+    ];
+    let slots = 1 + args.argc + 1 + args.envc + 1 + auxv.len() * 2;
+    sp -= (slots as u64) * 8;
+    sp &= !15u64; // ABI: rsp 16-aligned at entry
+    let w = |v: u64, i: usize| {
+        write_task_bytes(t.pml4, sp + (i as u64) * 8, &v.to_le_bytes());
+    };
+    let mut i = 0;
+    w(args.argc as u64, i);
+    i += 1;
+    for &a in argv.iter().take(args.argc) {
+        w(a, i);
+        i += 1;
+    }
+    w(0, i);
+    i += 1;
+    for &e in envv.iter().take(args.envc) {
+        w(e, i);
+        i += 1;
+    }
+    w(0, i);
+    i += 1;
+    for (k, v) in auxv {
+        w(k, i);
+        w(v, i + 1);
+        i += 2;
+    }
+    Some(sp)
+}
+
+/// arch_prctl(code, addr): x86_64 TLS control. SET_FS installs the
+/// task's FS base (validated inside the user window or zero); GET_FS
+/// writes it through a validated pointer. GS ops are EINVAL — no user
+/// GS protocol exists in this ABI.
+pub fn sys_arch_prctl(code: u64, addr: u64) -> u64 {
+    const EPERM: u64 = (-1i64) as u64;
+    let Some(t) = cur_mut() else { return EPERM };
+    match code {
+        0x1002 => {
+            // ARCH_SET_FS — non-canonical or outside the user window
+            // can't be a TLS block.
+            if addr != 0 && !(elf::USER_VA_LO..elf::USER_VA_HI).contains(&addr) {
+                return EPERM;
+            }
+            t.fs_base = addr;
+            // SAFETY: MSR write of the running task's own FS base.
+            unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, addr) };
+            0
+        }
+        0x1003 => {
+            // ARCH_GET_FS
+            if !range_ok_w(addr, 8) {
+                return EFAULT;
+            }
+            // SAFETY: validated writable user range, current task.
+            unsafe { (addr as *mut u64).write_unaligned(t.fs_base) };
+            0
+        }
+        _ => EINVAL,
+    }
+}
+
+/// uname(buf): Linux struct utsname — 6 fields × 65 bytes.
+pub fn sys_uname(buf: u64) -> u64 {
+    if !range_ok_w(buf, 390) {
+        return EFAULT;
+    }
+    let fields: [&[u8]; 6] = [
+        b"Rustux",
+        b"rustux",
+        b"0.1.0",
+        b"rustux kernel",
+        b"x86_64",
+        b"(none)",
+    ];
+    for (i, f) in fields.iter().enumerate() {
+        // SAFETY: buf validated writable for 390 bytes; each field
+        // starts zeroed at its 65-byte slot.
+        unsafe {
+            core::ptr::write_bytes((buf + i as u64 * 65) as *mut u8, 0, 65);
+            core::ptr::copy_nonoverlapping(
+                f.as_ptr(),
+                (buf + i as u64 * 65) as *mut u8,
+                f.len().min(64),
+            );
+        }
+    }
+    0
+}
+
+/// getrandom(buf, len, flags): ChaCha20 bytes into a validated user
+/// range — capped per call like the copy paths.
+pub fn sys_getrandom(buf: u64, len: u64, _flags: u64) -> u64 {
+    if len > 4096 {
+        return EINVAL;
+    }
+    if len != 0 && !range_ok_w(buf, len) {
+        return EFAULT;
+    }
+    let mut i = 0u64;
+    while i < len {
+        let v = crate::rand::next_u64().to_le_bytes();
+        let n = ((len - i) as usize).min(8);
+        // SAFETY: buf validated writable for len bytes.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                v.as_ptr(),
+                (buf + i) as *mut u8,
+                n,
+            )
+        };
+        i += n as u64;
+    }
+    len
+}
+
+/// ioctl(fd, req, arg): nothing here is a tty — ENOTTY like Linux on
+/// a device that doesn't speak ioctl.
+pub fn sys_ioctl() -> u64 {
+    (-25i64) as u64 // ENOTTY
+}
+
+/// gettid: no threads — the thread id is the process id.
+pub fn sys_gettid() -> u64 {
+    cur_mut().map(|t| t.pid).unwrap_or(0)
+}
+
+/// set_tid_address(ptr): we don't store the pointer (no clear-thread-
+/// tid futex wake yet) — the return is the tid, which is our pid.
+pub fn sys_set_tid_address() -> u64 {
+    cur_mut().map(|t| t.pid).unwrap_or(0)
+}
+
+/// set_robust_list(head, len): record nothing — robust futex wake on
+/// death needs futexes first. Linux EINVALs a wrong struct size.
+pub fn sys_set_robust_list(_head: u64, len: u64) -> u64 {
+    if len != 24 {
+        return EINVAL;
+    }
+    0
+}
+
+/// prlimit64(pid, res, new, old): report RLIM_INFINITY for `old`;
+/// `new` is accepted and ignored (bounded resources are enforced by
+/// the allocator tables, not rlimit).
+pub fn sys_prlimit64(_pid: u64, _res: u64, _new: u64, old: u64) -> u64 {
+    if old != 0 {
+        if !range_ok_w(old, 16) {
+            return EFAULT;
+        }
+        // SAFETY: validated writable user range.
+        unsafe {
+            (old as *mut u64).write_unaligned(u64::MAX);
+            (old as *mut u64).add(1).write_unaligned(u64::MAX);
+        }
+    }
+    0
+}
+
+/// clock_gettime(clk, ts): APIC ticks at 100Hz. Any clock id gets the
+/// same monotonic counter — time domains don't exist yet.
+pub fn sys_clock_gettime(_clk: u64, ts: u64) -> u64 {
+    if !range_ok_w(ts, 16) {
+        return EFAULT;
+    }
+    let t = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    // SAFETY: ts validated writable for 16 bytes.
+    unsafe {
+        (ts as *mut u64).write_unaligned(t / 100);
+        (ts as *mut u64).add(1).write_unaligned((t % 100) * 10_000_000);
+    }
+    0
+}
+
+/// gettimeofday(tv, tz): same counter, {sec,usec} layout.
+pub fn sys_gettimeofday(tv: u64, _tz: u64) -> u64 {
+    if tv != 0 {
+        if !range_ok_w(tv, 16) {
+            return EFAULT;
+        }
+        let t = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        // SAFETY: tv validated writable for 16 bytes.
+        unsafe {
+            (tv as *mut u64).write_unaligned(t / 100);
+            (tv as *mut u64).add(1).write_unaligned((t % 100) * 10_000);
+        }
+    }
+    0
+}
+
+/// nanosleep(req, rem): block until the deadline — WaitOn::Timer
+/// ages in poll_expire alongside the other deadline waits. Signals
+/// interrupt it (rem is zeroed — partial-remain bookkeeping needs
+/// the deadline stored, which we keep simple).
+pub fn sys_nanosleep(ctx: &mut UCtx, req: u64, rem: u64) -> u64 {
+    const EINTR: u64 = (-4i64) as u64;
+    if !range_ok(req, 16) {
+        return EFAULT;
+    }
+    let Some(t) = cur_mut() else { return EINVAL };
+    let sec = unsafe { (req as *const u64).read_unaligned() };
+    let nsec = unsafe { (req as *const u64).add(1).read_unaligned() };
+    if nsec >= 1_000_000_000 {
+        return EINVAL;
+    }
+    let ticks = sec
+        .saturating_mul(100)
+        .saturating_add(nsec.div_ceil(10_000_000));
+    if ticks == 0 {
+        return 0;
+    }
+    if rem != 0 && !range_ok_w(rem, 16) {
+        return EFAULT;
+    }
+    if t.pending != 0 {
+        return EINTR;
+    }
+    t.wait_on = WaitOn::Timer;
+    // wait_ptr carries `rem` — the signal-wake path fills it with
+    // the unslept remainder on EINTR (Linux semantics); a normal
+    // deadline wake leaves it untouched.
+    t.wait_ptr = rem;
+    t.wait_ptr2 = 0; // kernel-style -errno returns
+    t.wait_deadline = crate::apic::TICKS
+        .load(core::sync::atomic::Ordering::Relaxed)
+        .saturating_add(ticks);
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// clock_nanosleep(clk, flags, req, rem): glibc's nanosleep() lands
+/// here, not on nr 35. Unlike every other syscall this ABI returns
+/// POSITIVE errno values (EINTR, EINVAL, EFAULT) directly — the
+/// signal-wake path must know that, so wait_ptr2 flags the mode.
+/// flags bit0 = TIMER_ABSTIME (req is an absolute deadline).
+pub fn sys_clock_nanosleep(
+    ctx: &mut UCtx,
+    _clk: u64,
+    flags: u64,
+    req: u64,
+    rem: u64,
+) -> u64 {
+    const EFAULT_P: u64 = 14;
+    const EINVAL_P: u64 = 22;
+    if !range_ok(req, 16) {
+        return EFAULT_P;
+    }
+    let sec = unsafe { (req as *const u64).read_unaligned() };
+    let nsec = unsafe { (req as *const u64).add(1).read_unaligned() };
+    if nsec >= 1_000_000_000 || flags & !1 != 0 {
+        return EINVAL_P;
+    }
+    let now = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    let ticks = if flags & 1 != 0 {
+        // Absolute deadline measured in boot-time ticks.
+        sec.saturating_mul(100)
+            .saturating_add(nsec.div_ceil(10_000_000))
+            .saturating_sub(now)
+    } else {
+        sec.saturating_mul(100)
+            .saturating_add(nsec.div_ceil(10_000_000))
+    };
+    if ticks == 0 {
+        return 0;
+    }
+    if rem != 0 && !range_ok_w(rem, 16) {
+        return EFAULT_P;
+    }
+    let Some(t) = cur_mut() else { return EINVAL_P };
+    if t.pending != 0 {
+        return 4; // EINTR, positive per this ABI
+    }
+    t.wait_on = WaitOn::Timer;
+    t.wait_ptr = rem;
+    t.wait_ptr2 = 1; // positive-errno wake
+    t.wait_deadline = now.saturating_add(ticks);
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// readv — iovec {base:u64, len:u16 pairs as u64s}. Scatters one
+/// logical read across the vector: after the first element, continue
+/// only while the fd still reports data-ready — a second BLOCKING
+/// read would exceed Linux's "return what's available" semantic.
+/// (writev lives in syscall.rs where the console write path is.)
+pub fn fd_readv(ctx: &mut UCtx, fd: u64, iov: u64, cnt: u64) -> u64 {
+    if cnt == 0 {
+        return 0;
+    }
+    if cnt > 32 || !range_ok(iov, cnt * 16) {
+        return EINVAL;
+    }
+    let mut done = 0u64;
+    for i in 0..cnt {
+        let (base, len) = unsafe {
+            (
+                ((iov + i * 16) as *const u64).read_unaligned(),
+                ((iov + i * 16 + 8) as *const u64).read_unaligned(),
+            )
+        };
+        if len == 0 {
+            continue;
+        }
+        if done > 0 {
+            // POLLIN|POLLERR|POLLHUP = readable-or-terminal — anything
+            // else means the next read would block.
+            let ready = cur_mut()
+                .map(|t| poll_revents(t, fd as i32, 1) & (1 | 8 | 16) != 0)
+                .unwrap_or(false);
+            if !ready {
+                break;
+            }
+        }
+        let n = fd_read(ctx, fd, base, len);
+        if (n as i64) < 0 {
+            return if done > 0 { done } else { n };
+        }
+        done += n;
+        if n < len {
+            break;
+        }
+    }
+    done
 }
 
 // --- fd layer -----------------------------------------------------
@@ -2177,6 +2692,7 @@ fn poll_expire() {
                         k.state = TcpState::Closed;
                     }
                 }
+                WaitOn::Timer => t.ctx.rax = 0, // nanosleep elapsed
                 _ => continue,
             }
             t.wait_on = WaitOn::None;
@@ -3606,15 +4122,19 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
 /// caller parses the ELF first, so the only post-reset failure is
 /// allocator exhaustion — treated as fatal by the caller since the
 /// old program's code pages are already gone.
-pub fn exec(img: &[u8], ctx: &mut UCtx) -> bool {
+pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs) -> bool {
     let Some(t) = cur_mut() else { return false };
     let Some(e) = elf::parse(img) else { return false };
     t.free_user_mappings();
     t.nranges = 0;
     t.stack_top = 0;
+    t.fs_base = 0; // TLS dies with the old image — new one SET_FSs
     if !load_inner(t, &e, img) {
         return false;
     }
+    let Some(rsp) = setup_stack(t, &e, img, args) else {
+        return false;
+    };
     t.entry = e.entry;
     // The pml4 address is unchanged but its contents are entirely
     // new — the TLB still caches the OLD user translations and must
@@ -3630,7 +4150,7 @@ pub fn exec(img: &[u8], ctx: &mut UCtx) -> bool {
     }
     // SAFETY: read of the init-time capture -- exec resets FPU too.
     t.fx = unsafe { *core::ptr::addr_of!(INIT_FX) };
-    *ctx = UCtx::launch(t.entry, t.stack_top);
+    *ctx = UCtx::launch(t.entry, rsp);
     true
 }
 
@@ -3640,13 +4160,26 @@ pub fn exec(img: &[u8], ctx: &mut UCtx) -> bool {
 // non-preemptible (IF is masked on entry, and a tick landing on
 // kernel CS never switches).
 
-/// Enqueue `img` as a Runnable task — fabricate its launch ctx and
-/// take the first free table slot. False on bad image or full table.
-pub fn spawn(img: &[u8]) -> bool {
+/// Enqueue `img` as a Runnable task — build its real initial stack
+/// (argv0 = `name`, no env) and take the first free table slot.
+/// False on bad image or full table.
+pub fn spawn(img: &[u8], name: &str) -> bool {
+    let Some(e) = elf::parse(img) else {
+        return false;
+    };
     let Some(mut t) = load(img) else {
         return false;
     };
-    t.ctx = UCtx::launch(t.entry, t.stack_top);
+    let mut args = ExecArgs::empty();
+    let n = name.len().min(EXEC_STR_CAP - 1);
+    args.argv[0][..n].copy_from_slice(&name.as_bytes()[..n]);
+    args.argv_len[0] = n + 1;
+    args.argc = 1;
+    let Some(rsp) = setup_stack(&mut t, &e, img, &args) else {
+        t.reap();
+        return false;
+    };
+    t.ctx = UCtx::launch(t.entry, rsp);
     t.pid = next_pid();
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     for s in tasks.iter_mut() {
@@ -3710,6 +4243,8 @@ pub fn launch() {
     let (ctx, pml4, kst) = {
         let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
         fxrstor(&t.fx);
+        // SAFETY: MSR write of a task-owned user FS base.
+        unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, t.fs_base) };
         (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
     };
     syscall::set_kstack(kst);
@@ -3729,6 +4264,8 @@ fn switch_to(n: usize) -> ! {
     let (ctx, pml4, kst) = {
         let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
         fxrstor(&t.fx);
+        // SAFETY: MSR write of a task-owned user FS base.
+        unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, t.fs_base) };
         (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
     };
     syscall::set_kstack(kst);
@@ -3857,6 +4394,9 @@ fn resume_ctx(n: usize) -> *const UCtx {
     // the previous task's xmm registers. switch_to/launch do the
     // same; this path was missing it.
     fxrstor(&t.fx);
+    // SAFETY: MSR write of a task-owned user FS base — TLS follows
+    // the task across switches, same as launch/switch_to.
+    unsafe { cpu::wrmsr(cpu::MSR_FS_BASE, t.fs_base) };
     &t.ctx
 }
 
@@ -4052,6 +4592,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         pending: 0,
         handlers: p.handlers,
         fx: p.fx,
+        fs_base: p.fs_base,
     };
     // Either failure frees the (possibly partial) user page-table
     // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs

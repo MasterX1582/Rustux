@@ -4,8 +4,10 @@
 //! silently, or trusted (the CVE-2004-1070..1072 class was unchecked
 //! header arithmetic and unchecked reads in binfmt_elf).
 //!
-//! Scope: static ET_EXEC images only — no PT_INTERP, no dynamic
-//! linking, no relocations. Rejected, not partially loaded.
+//! Scope: static ET_EXEC and self-relocating ET_DYN (static-PIE)
+//! images only — no PT_INTERP, no dynamic linking. Rejected, not
+//! partially loaded. ET_DYN is mapped at LOAD_BIAS and relocates
+//! itself from its own dynamic section, same as Linux's binfmt.
 
 pub const PT_LOAD: u32 = 1;
 pub const PF_X: u32 = 1;
@@ -16,6 +18,7 @@ pub const PF_R: u32 = 4;
 const EHDR_SIZE: usize = 64;
 const PHDR_SIZE: usize = 56;
 const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
 const EM_X86_64: u16 = 0x3e;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
@@ -31,6 +34,11 @@ const MAX_PHNUM: usize = 64;
 /// by anything else.
 pub const USER_VA_LO: u64 = 0x4000_0000_0000;
 pub const USER_VA_HI: u64 = 0x8000_0000_0000;
+
+/// Load bias for ET_DYN images — the same base our test ELFs link at.
+/// Any in-window base works since the image self-relocates; a fixed
+/// one keeps stacks/heap deterministic across task types.
+pub const LOAD_BIAS: u64 = 0x5555_0000_0000;
 
 fn u16le(b: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([b[off], b[off + 1]])
@@ -48,8 +56,11 @@ fn u64le(b: &[u8], off: usize) -> u64 {
 }
 
 /// Validated ELF64 header fields of a static executable.
+/// `entry` and every `phdrs()` `va` are already biased — for ET_DYN
+/// (static-PIE) that's LOAD_BIAS, for ET_EXEC it's 0.
 pub struct Elf {
     pub entry: u64,
+    bias: u64,
     phoff: usize,
     phentsize: usize,
     phnum: usize,
@@ -81,9 +92,13 @@ pub fn parse(b: &[u8]) -> Option<Elf> {
     if b[4] != ELFCLASS64 || b[5] != ELFDATA2LSB {
         return None;
     }
-    if u16le(b, 16) != ET_EXEC || u16le(b, 18) != EM_X86_64 {
+    let ty = u16le(b, 16);
+    if (ty != ET_EXEC && ty != ET_DYN) || u16le(b, 18) != EM_X86_64 {
         return None;
     }
+    // ET_DYN (static-PIE) self-relocates; the loader just picks a
+    // base and adds it to every address. ET_EXEC keeps bias 0.
+    let bias = if ty == ET_DYN { LOAD_BIAS } else { 0 };
     if u32le(b, 20) != 1 {
         return None;
     }
@@ -101,12 +116,14 @@ pub fn parse(b: &[u8]) -> Option<Elf> {
     if end > b.len() {
         return None;
     }
-    // Entry point must be a canonical user address.
+    // Entry point must be a canonical user address after the bias.
+    let entry = entry.checked_add(bias)?;
     if !(USER_VA_LO..USER_VA_HI).contains(&entry) {
         return None;
     }
     Some(Elf {
         entry,
+        bias,
         phoff,
         phentsize,
         phnum,
@@ -114,6 +131,17 @@ pub fn parse(b: &[u8]) -> Option<Elf> {
 }
 
 impl Elf {
+    /// Validated header fields for auxv construction.
+    pub fn phoff(&self) -> usize {
+        self.phoff
+    }
+    pub fn phentsize(&self) -> usize {
+        self.phentsize
+    }
+    pub fn phnum(&self) -> usize {
+        self.phnum
+    }
+
     /// Iterate the validated program headers.
     pub fn phdrs<'a>(&'a self, img: &'a [u8]) -> impl Iterator<Item = Phdr> + 'a {
         (0..self.phnum).map(move |i| {
@@ -124,7 +152,10 @@ impl Elf {
                 ty: u32le(p, 0),
                 flags: u32le(p, 4),
                 off: u64le(p, 8),
-                va: u64le(p, 16),
+                // Load-biased virtual address. Saturating keeps a
+                // hostile non-LOAD va from wrapping; consumers only
+                // act on PT_LOAD, whose range load_inner validates.
+                va: u64le(p, 16).saturating_add(self.bias),
                 filesz: u64le(p, 32),
                 memsz: u64le(p, 40),
                 align: u64le(p, 48),

@@ -1051,7 +1051,7 @@ fn main() -> Status {
                 kprintln!(con, "rustux: task {nm}: skipped (data file)");
                 continue;
             }
-            if user::spawn(img) {
+            if user::spawn(img, nm) {
                 kprintln!(con, "rustux: task {nm}: queued");
                 queued += 1;
             } else {
@@ -1061,7 +1061,7 @@ fn main() -> Status {
     }
     if queued == 0 {
         kprintln!(con, "rustux: initrd: no entries, using embedded ELF");
-        if user::spawn(include_bytes!("../user/hello.elf")) {
+        if user::spawn(include_bytes!("../user/hello.elf"), "hello") {
             queued = 1;
         }
     }
