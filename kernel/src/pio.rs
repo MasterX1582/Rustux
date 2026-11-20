@@ -15,3 +15,23 @@ pub unsafe fn inb(port: u16) -> u8 {
     }
     v
 }
+
+/// Save flags and mask IRQs — the irqsave half of the pair. Returns the
+/// popped rflags; `irq_restore` re-enables IRQs only if they were on.
+#[inline]
+pub fn irq_save() -> u64 {
+    let f: u64;
+    // SAFETY: pushes rflags, then cli; the popped value restores IF later.
+    unsafe {
+        core::arch::asm!("pushfq; cli; pop {}", out(reg) f, options(nomem));
+    }
+    f
+}
+
+/// Restore flags saved by irq_save — re-enables IRQs only if they were on.
+#[inline]
+pub unsafe fn irq_restore(f: u64) {
+    unsafe {
+        core::arch::asm!("push {}; popfq", in(reg) f, options(nomem));
+    }
+}

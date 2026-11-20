@@ -33,24 +33,7 @@ static mut ALLOC: Kalloc = Kalloc {
     cache: [0; N_CLASSES],
 };
 
-/// Save flags and mask IRQs — the irqsave half of the pair.
-#[inline]
-fn irq_save() -> u64 {
-    let f: u64;
-    // SAFETY: pushes rflags, then cli; the popped value restores IF later.
-    unsafe {
-        core::arch::asm!("pushfq; cli; pop {}", out(reg) f, options(nomem));
-    }
-    f
-}
-
-/// Restore flags saved by irq_save — re-enables IRQs only if they were on.
-#[inline]
-unsafe fn irq_restore(f: u64) {
-    unsafe {
-        core::arch::asm!("push {}; popfq", in(reg) f, options(nomem));
-    }
-}
+use crate::pio::{irq_restore, irq_save};
 
 /// Size class for `size` payload bytes, or None when it needs a direct
 /// buddy block (size + header > 4096).
