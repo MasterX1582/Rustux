@@ -94,13 +94,15 @@ impl UCtx {
     }
 }
 
-/// The scheduler's entire state model: Runnable tasks can be picked;
-/// Exited ones are reaped by the next pick (never the running one —
-/// its kstack may be underfoot).
+/// The scheduler's state model: Runnable tasks can be picked; Exited
+/// ones persist as zombies until their parent's wait4 collects them
+/// (or they're orphaned); Blocked tasks sleep inside a syscall whose
+/// resume ctx is already saved — a matching child exit wakes them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TaskState {
     Runnable,
     Exited,
+    Blocked,
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -149,14 +151,39 @@ pub struct Task {
     /// (read() target buffers must be user-writable, like Linux).
     ranges: [(u64, u64, bool); MAX_RANGES],
     nranges: usize,
-    /// fd slots -> OFD indices; 0/1/2 pre-seeded std streams.
+    /// fd slots -> GLOBAL OFD indices; 0/1/2 pre-seeded std streams.
     fds: [Option<u8>; MAX_FDS],
-    /// Open file descriptions shared across dup'd slots.
-    ofds: [Option<OpenFile>; MAX_FDS],
     /// Saved user context for switches — fabricated at spawn, then
     /// snapshotted by the timer IRQ on every preemption.
     ctx: UCtx,
     state: TaskState,
+    /// Process identity — Linux-visible pid and parent pid (0 = none).
+    pid: u64,
+    ppid: u64,
+    /// The exit() argument — consumed by wait4 (status = code<<8).
+    exit_code: u64,
+    /// wait4 target while Blocked: -1 = any child, else a pid.
+    wait_target: i64,
+    /// wait4 status user pointer — validated writable before blocking.
+    wait_status_va: u64,
+}
+
+/// Max open file descriptions system-wide — a hard bound so fd
+/// pressure from one task can't exhaust kernel memory. OFDs are
+/// GLOBAL (not per-task) because fork MUST share them: a child's
+/// fds name the same descriptions — same offsets, same refs —
+/// exactly like Linux's files_struct sharing of struct file.
+static mut OFDS: [Option<OpenFile>; MAX_OFDS] = [const { None }; MAX_OFDS];
+const MAX_OFDS: usize = 64;
+
+/// Process-id allocator — monotonically increasing, never reused.
+static mut NEXT_PID: u64 = 0;
+fn next_pid() -> u64 {
+    unsafe {
+        let p = core::ptr::addr_of_mut!(NEXT_PID);
+        *p += 1;
+        *p
+    }
 }
 
 impl Task {
@@ -204,7 +231,25 @@ impl Task {
         }
     }
 
+    /// Drop every fd's reference on its (global) OFD — Linux's
+    /// exit_files: shared descriptions outlive the task when
+    /// another task still points at them.
+    fn release_fds(&mut self) {
+        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+        for s in self.fds.iter_mut() {
+            if let Some(i) = s.take() {
+                if let Some(o) = ofds.get_mut(i as usize).and_then(|x| x.as_mut()) {
+                    o.refs -= 1;
+                    if o.refs == 0 {
+                        ofds[i as usize] = None;
+                    }
+                }
+            }
+        }
+    }
+
     fn reap(&mut self) {
+        self.release_fds();
         self.free_user_mappings();
         kalloc::free_frame(self.pml4);
         if self.kstack_base != 0 {
@@ -391,27 +436,35 @@ fn load(img: &[u8]) -> Option<Task> {
         kstack_top: 0,
         ranges: [(0, 0, false); MAX_RANGES],
         nranges: 0,
-        // std streams pre-seeded: 0=stdin (EOF), 1/2=serial console —
-        // each gets its own OFD, like separate opens of /dev/console.
         fds: {
             const NONE: Option<u8> = None;
-            let mut f = [NONE; MAX_FDS];
-            f[0] = Some(0);
-            f[1] = Some(1);
-            f[2] = Some(2);
-            f
-        },
-        ofds: {
-            const NONE: Option<OpenFile> = None;
-            let mut o = [NONE; MAX_FDS];
-            o[0] = Some(OpenFile { kind: FdKind::Stdin, pos: 0, refs: 1 });
-            o[1] = Some(OpenFile { kind: FdKind::Console, pos: 0, refs: 1 });
-            o[2] = Some(OpenFile { kind: FdKind::Console, pos: 0, refs: 1 });
-            o
+            [NONE; MAX_FDS]
         },
         ctx: UCtx::ZERO,
         state: TaskState::Runnable,
+        pid: 0,
+        ppid: 0,
+        exit_code: 0,
+        wait_target: 0,
+        wait_status_va: 0,
     };
+    // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
+    // global OFD, like separate opens of /dev/console.
+    {
+        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+        for i in 0..3usize {
+            let Some(oi) = ofds.iter().position(Option::is_none) else {
+                t.reap();
+                return None;
+            };
+            ofds[oi] = Some(OpenFile {
+                kind: if i == 0 { FdKind::Stdin } else { FdKind::Console },
+                pos: 0,
+                refs: 1,
+            });
+            t.fds[i] = Some(oi as u8);
+        }
+    }
     if !load_inner(&mut t, &e, img) {
         t.reap();
         return None;
@@ -468,10 +521,10 @@ const ESPIPE: u64 = (-29i64) as u64;
 const ENOTDIR: u64 = (-20i64) as u64;
 const EISDIR: u64 = (-21i64) as u64;
 
-/// Resolve an fd slot to its OFD.
-fn ofd(t: &mut Task, fd: u64) -> Option<&mut OpenFile> {
+/// Resolve an fd slot to its OFD in the global table.
+fn ofd(t: &mut Task, fd: u64) -> Option<&'static mut OpenFile> {
     let i = *t.fds.get(fd as usize)?.as_ref()?;
-    t.ofds.get_mut(i as usize)?.as_mut()
+    unsafe { (*core::ptr::addr_of_mut!(OFDS)).get_mut(i as usize)?.as_mut() }
 }
 
 /// May `fd` be a write() target? Only the console streams.
@@ -533,13 +586,14 @@ pub fn fd_open(path: &[u8]) -> u64 {
         };
         FdKind::File(data)
     };
-    let Some(oi) = t.ofds.iter().position(Option::is_none) else {
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    let Some(oi) = ofds.iter().position(Option::is_none) else {
         return EMFILE;
     };
     let Some(fi) = t.fds.iter().position(Option::is_none) else {
         return EMFILE;
     };
-    t.ofds[oi] = Some(OpenFile {
+    ofds[oi] = Some(OpenFile {
         kind,
         pos: 0,
         refs: 1,
@@ -593,7 +647,8 @@ pub fn fd_dup(fd: u64) -> u64 {
     let Some(fi) = t.fds.iter().position(Option::is_none) else {
         return EMFILE;
     };
-    if let Some(o) = t.ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs += 1;
     }
     t.fds[fi] = Some(oi);
@@ -615,15 +670,16 @@ pub fn fd_dup2(old: u64, new: u64) -> u64 {
         return new;
     }
     // Release whatever `new` held, then point it at old's OFD.
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     if let Some(prev) = t.fds[new as usize].take() {
-        if let Some(o) = t.ofds.get_mut(prev as usize).and_then(|s| s.as_mut()) {
+        if let Some(o) = ofds.get_mut(prev as usize).and_then(|s| s.as_mut()) {
             o.refs -= 1;
             if o.refs == 0 {
-                t.ofds[prev as usize] = None;
+                ofds[prev as usize] = None;
             }
         }
     }
-    if let Some(o) = t.ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
+    if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs += 1;
     }
     t.fds[new as usize] = Some(oi);
@@ -639,10 +695,11 @@ pub fn fd_close(fd: u64) -> u64 {
         return EBADF;
     };
     let Some(oi) = slot.take() else { return EBADF };
-    if let Some(o) = t.ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs -= 1;
         if o.refs == 0 {
-            t.ofds[oi as usize] = None;
+            ofds[oi as usize] = None;
         }
     }
     0
@@ -714,12 +771,13 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
 
 /// execve: replace the resident task's image. Frees every user
 /// mapping (the SAME pml4/kstack/fds persist — fds surviving exec is
-/// the Linux semantic), reloads from `img`, and redirects the saved
-/// syscall-return context so sysret lands on the new entry with a
-/// clean register file. The caller parses the ELF first, so the only
-/// post-reset failure is allocator exhaustion — treated as fatal by
-/// the caller since the old program's code pages are already gone.
-pub fn exec(img: &[u8]) -> bool {
+/// the Linux semantic), reloads from `img`, and rewrites the syscall
+/// ctx so the return leg lands on the new entry with a clean
+/// register file — the same UCtx every switch resumes through. The
+/// caller parses the ELF first, so the only post-reset failure is
+/// allocator exhaustion — treated as fatal by the caller since the
+/// old program's code pages are already gone.
+pub fn exec(img: &[u8], ctx: &mut UCtx) -> bool {
     let Some(t) = cur_mut() else { return false };
     let Some(e) = elf::parse(img) else { return false };
     t.free_user_mappings();
@@ -734,7 +792,7 @@ pub fn exec(img: &[u8]) -> bool {
     // be flushed or user code could run on freed frames.
     // SAFETY: reloading the current cr3 only flushes the TLB.
     unsafe { core::arch::asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _) };
-    syscall::exec_return(t.entry, t.stack_top);
+    *ctx = UCtx::launch(t.entry, t.stack_top);
     true
 }
 
@@ -751,6 +809,7 @@ pub fn spawn(img: &[u8]) -> bool {
         return false;
     };
     t.ctx = UCtx::launch(t.entry, t.stack_top);
+    t.pid = next_pid();
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     for s in tasks.iter_mut() {
         if s.is_none() {
@@ -762,13 +821,28 @@ pub fn spawn(img: &[u8]) -> bool {
     false
 }
 
-/// Reap every Exited task except the running one (its kstack may be
-/// underfoot), then round-robin for the next Runnable index.
+/// Reap reapable zombies — Exited tasks whose parent can't collect
+/// them (ppid==0 means orphaned, spawned, or already collected) —
+/// except the running one (its kstack may be underfoot). Zombies
+/// with a living parent persist until wait4 or the parent's exit.
 fn pick_next() -> Option<usize> {
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    // Snapshot living pids — a zombie is reapable only when no living
+    // task can still wait4 it. Blocked counts as living.
+    let mut live = [0u64; 16];
+    for (i, s) in tasks.iter().enumerate() {
+        if let Some(t) = s {
+            if t.state != TaskState::Exited {
+                live[i] = t.pid;
+            }
+        }
+    }
     for (i, s) in tasks.iter_mut().enumerate() {
-        if i != cur && s.as_ref().is_some_and(|t| t.state == TaskState::Exited) {
+        let reapable = s.as_ref().is_some_and(|t| {
+            t.state == TaskState::Exited && (t.ppid == 0 || !live.contains(&t.ppid))
+        });
+        if i != cur && reapable {
             s.as_mut().unwrap().reap();
             *s = None;
         }
@@ -803,24 +877,96 @@ pub fn launch() {
     unsafe { syscall::sched_launch(ctx, pml4) };
 }
 
-/// The running task exited: mark it and resume the next Runnable
-/// task's ctx — a direct task-to-task switch that abandons the dead
-/// task's kstack (freed at reap). When nothing remains, unwind to
-/// sched_launch's saved kernel context — i.e. back to main.
-pub fn task_exit() -> ! {
-    if let Some(t) = cur_mut() {
-        t.state = TaskState::Exited;
+/// Resume the chosen task: set its kstack for syscalls and iret
+/// into its saved ctx. Never returns to the caller's context.
+fn switch_to(n: usize) -> ! {
+    unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
+    let (ctx, pml4, kst) = {
+        let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
+        (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
+    };
+    syscall::set_kstack(kst);
+    unsafe { syscall::sched_iret(ctx, pml4) }
+}
+
+/// The running task exited: mark it Exited, orphan its children
+/// (ppid=0 -> their zombies reap immediately), and wake a parent
+/// blocked in wait4 on it — the child's status goes into the
+/// parent's user buffer via physical translation, the pid into its
+/// rax. Then switch to the next Runnable task, or unwind to the
+/// kernel context sched_launch saved when the queue is empty.
+pub fn task_exit(code: u64) -> ! {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let (cpid, cppid) = {
+        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+            t.state = TaskState::Exited;
+            t.exit_code = code;
+            (t.pid, t.ppid)
+        } else {
+            (0, 0)
+        }
+    };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    // Wake a wait-blocked parent whose target just exited.
+    let mut collected = false;
+    for s in tasks.iter_mut() {
+        let Some(p) = s else { continue };
+        if p.state == TaskState::Blocked
+            && p.pid == cppid
+            && (p.wait_target == -1 || p.wait_target == cpid as i64)
+        {
+            // wait4 returns the child's pid; its status was already
+            // validated writable when the parent blocked.
+            p.ctx.rax = cpid;
+            if p.wait_status_va != 0 {
+                if let Some(pa) = translate(p.pml4, p.wait_status_va) {
+                    // SAFETY: pa is a translated, present user frame.
+                    unsafe {
+                        ((pa) as *mut u32)
+                            .write_unaligned(((code & 0xff) << 8) as u32)
+                    };
+                }
+            }
+            p.state = TaskState::Runnable;
+            p.wait_target = 0;
+            p.wait_status_va = 0;
+            collected = true;
+        }
+    }
+    // The parent collected the status — this zombie reaps free.
+    if collected {
+        if let Some(t) = tasks.get_mut(cur).and_then(|x| x.as_mut()) {
+            t.ppid = 0;
+        }
+    }
+    // Orphan cur's children — no one can wait on them now.
+    for s in tasks.iter_mut() {
+        if let Some(t) = s.as_mut() {
+            if t.ppid == cpid && t.state != TaskState::Exited {
+                t.ppid = 0;
+            }
+        }
     }
     if let Some(n) = pick_next() {
-        unsafe { *core::ptr::addr_of_mut!(CUR_I) = n };
-        let (ctx, pml4, kst) = {
-            let t = unsafe { (*core::ptr::addr_of!(TASKS))[n].as_ref().unwrap() };
-            (&t.ctx as *const UCtx, t.pml4, t.kstack_top)
-        };
-        syscall::set_kstack(kst);
-        unsafe { syscall::sched_iret(ctx, pml4) }
+        switch_to(n)
     }
     syscall::terminate()
+}
+
+/// The running task blocked in wait4: its syscall ctx is already
+/// stored in `ctx`. Switch to any Runnable task; if none exists,
+/// idle on hlt until a tick re-arms the pick loop.
+fn block_switch() -> ! {
+    loop {
+        if let Some(n) = pick_next() {
+            switch_to(n)
+        }
+        // Nothing runnable — sleep one tick. A child exiting or any
+        // wake makes the next pick find a Runnable task.
+        // SAFETY: halts with interrupts enabled, masks again after.
+        unsafe { core::arch::asm!("sti", "hlt", "cli", options(nostack)) };
+    }
 }
 
 /// Timer IRQ — called from the sched dispatch stub with the full
@@ -854,6 +1000,216 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
     // SAFETY: pml4 is a live task-owned PML4.
     unsafe { core::arch::asm!("mov cr3, {}", in(reg) t.pml4) };
     &t.ctx
+}
+
+/// Translate a user VA to its identity-mapped physical address under
+/// `pml4` — used to write a wait4 status into a BLOCKED task's
+/// address space while a different task's tables are active.
+fn translate(pml4: u64, va: u64) -> Option<u64> {
+    let mut tab = pml4;
+    for shift in [39u64, 30, 21] {
+        let e = rd64(tab + 8 * ((va >> shift) & 0x1ff));
+        if e & PRESENT == 0 || e & (1 << 7) != 0 {
+            return None;
+        }
+        tab = e & PHYS_MASK;
+    }
+    let e = rd64(tab + 8 * ((va >> 12) & 0x1ff));
+    if e & PRESENT == 0 {
+        return None;
+    }
+    Some((e & PHYS_MASK) | (va & 0xfff))
+}
+
+/// Deep-copy `ppml4`'s user half (slots 128-255) into `c`'s address
+/// space, frame for frame — eager fork semantics (no COW yet; the
+/// honest copy is correct and the refcount machinery isn't worth it
+/// at this scale). Kernel slots are shared by reference like every
+/// load. Returns false on allocation failure — caller reaps `c`.
+fn fork_address_space(c: &mut Task, ppml4: u64) -> bool {
+    for i in 0..128u64 {
+        let e = rd64(ppml4 + 8 * i);
+        if e & PRESENT != 0 {
+            wr64(c.pml4 + 8 * i, e);
+        }
+    }
+    for i in 128..256u64 {
+        let e = rd64(ppml4 + 8 * i);
+        if e & PRESENT == 0 {
+            continue;
+        }
+        let Some(cpdpt) = kalloc::alloc_frame() else { return false };
+        wr64(c.pml4 + 8 * i, cpdpt | PRESENT | WRITE | USER);
+        let pdpt = e & PHYS_MASK;
+        for j in 0..512usize {
+            let pe = rd64(pdpt + 8 * j as u64);
+            if pe & PRESENT == 0 {
+                continue;
+            }
+            if pe & (1 << 7) != 0 {
+                return false; // 1G page — never created for user space
+            }
+            let Some(cpd) = kalloc::alloc_frame() else { return false };
+            wr64(cpdpt + 8 * j as u64, cpd | PRESENT | WRITE | USER);
+            let pd = pe & PHYS_MASK;
+            for k in 0..512usize {
+                let te = rd64(pd + 8 * k as u64);
+                if te & PRESENT == 0 {
+                    continue;
+                }
+                if te & (1 << 7) != 0 {
+                    return false; // 2M page — never created
+                }
+                let Some(cpt) = kalloc::alloc_frame() else { return false };
+                wr64(cpd + 8 * k as u64, cpt | PRESENT | WRITE | USER);
+                let pt = te & PHYS_MASK;
+                for l in 0..512usize {
+                    let le = rd64(pt + 8 * l as u64);
+                    if le & PRESENT == 0 {
+                        continue;
+                    }
+                    let Some(nf) = kalloc::alloc_frame() else { return false };
+                    // SAFETY: both frames are owned, identity-mapped,
+                    // full 4 KiB each — a verbatim copy.
+                    unsafe {
+                        (nf as *mut u8)
+                            .copy_from((le & PHYS_MASK) as *const u8, 4096)
+                    };
+                    // Leaf flags verbatim — USER/RW/NX preserved.
+                    wr64(cpt + 8 * l as u64, nf | (le & !PHYS_MASK));
+                }
+            }
+        }
+    }
+    true
+}
+
+/// fork(): a new task that is a copy of the running one — deep
+/// address-space copy, copied fd table pointing at the SAME global
+/// OFDs (shared offsets — the Linux semantic), and a ctx equal to
+/// the parent's except rax=0. Parent's rax gets the child pid.
+pub fn fork(ctx: &mut UCtx) -> u64 {
+    const EAGAIN: u64 = (-11i64) as u64;
+    const ENOMEM: u64 = (-12i64) as u64;
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let Some(slot) = tasks.iter().position(Option::is_none) else {
+        return EAGAIN;
+    };
+    let Some(p) = tasks.get_mut(cur).and_then(|s| s.as_mut()) else {
+        return EAGAIN;
+    };
+    let mut c = Task {
+        pml4: match kalloc::alloc_frame() {
+            Some(f) => f,
+            None => return ENOMEM,
+        },
+        entry: p.entry,
+        stack_top: p.stack_top,
+        kstack_base: 0,
+        kstack_top: 0,
+        ranges: p.ranges,
+        nranges: p.nranges,
+        fds: p.fds,
+        ctx: {
+            let mut x = *ctx;
+            x.rax = 0; // child sees fork()==0
+            x
+        },
+        state: TaskState::Runnable,
+        pid: next_pid(),
+        ppid: p.pid,
+        exit_code: 0,
+        wait_target: 0,
+        wait_status_va: 0,
+    };
+    // Either failure frees the (possibly partial) user page-table
+    // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs
+    // were never bumped, so release_fds would corrupt the count.
+    if !fork_address_space(&mut c, p.pml4) {
+        c.free_user_mappings();
+        kalloc::free_frame(c.pml4);
+        return ENOMEM;
+    }
+    let ks = kalloc::kmalloc(KSTACK_SIZE) as u64;
+    if ks == 0 {
+        c.free_user_mappings();
+        kalloc::free_frame(c.pml4);
+        return ENOMEM;
+    }
+    c.kstack_base = ks;
+    c.kstack_top = ks + KSTACK_SIZE as u64;
+    // The child shares the parent's OFDs — bump each referenced one.
+    {
+        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+        for s in c.fds.iter().flatten() {
+            if let Some(o) = ofds.get_mut(*s as usize).and_then(|x| x.as_mut()) {
+                o.refs += 1;
+            }
+        }
+    }
+    let cpid = c.pid;
+    tasks[slot] = Some(c);
+    cpid
+}
+
+/// wait4(pid, status_va, flags): collect an exited child's status.
+/// pid=-1 waits for any child; status goes through the (validated)
+/// user pointer as Linux wait status — exit code in bits 8..15.
+/// Blocks when matching children are still running; ECHILD when
+/// there are none to wait for.
+pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
+    const ECHILD: u64 = (-10i64) as u64;
+    const EFAULT_: u64 = (-14i64) as u64;
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let cpid = unsafe { (*core::ptr::addr_of!(TASKS))[cur].as_ref().map(|t| t.pid).unwrap_or(0) };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let relevant = |t: &Task| t.ppid == cpid && (pid == -1 || t.pid == pid as u64);
+    // A collectable zombie first — write status and free it for reap.
+    if let Some(i) = tasks.iter().position(|s| {
+        s.as_ref().is_some_and(|t| relevant(t) && t.state == TaskState::Exited)
+    }) {
+        let t = tasks[i].as_mut().unwrap();
+        if status_va != 0 {
+            if !range_ok_w(status_va, 4) {
+                return EFAULT_;
+            }
+            // SAFETY: validated writable user range in cur's space.
+            unsafe {
+                (status_va as *mut u32)
+                    .write_unaligned(((t.exit_code & 0xff) << 8) as u32)
+            };
+        }
+        let r = t.pid;
+        t.ppid = 0; // collected — the next pick reaps the zombie
+        return r;
+    }
+    if !tasks.iter().flatten().any(relevant) {
+        return ECHILD;
+    }
+    // Live children — validate the status target BEFORE blocking,
+    // then sleep: the exiting child's task_exit writes rax + status.
+    if status_va != 0 && !range_ok_w(status_va, 4) {
+        return EFAULT_;
+    }
+    {
+        let t = tasks[cur].as_mut().unwrap();
+        t.wait_target = pid;
+        t.wait_status_va = status_va;
+        t.ctx = *ctx;
+        t.state = TaskState::Blocked;
+    }
+    block_switch()
+}
+
+/// getpid() -> current task's pid.
+pub fn getpid() -> u64 {
+    cur_mut().map(|t| t.pid).unwrap_or(0)
+}
+
+/// getppid() -> current task's parent pid (0 for spawned roots).
+pub fn getppid() -> u64 {
+    cur_mut().map(|t| t.ppid).unwrap_or(0)
 }
 
 /// End of the scheduling run: reap whatever tasks remain — the last

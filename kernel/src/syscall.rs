@@ -38,91 +38,58 @@ pub fn set_kstack(top: u64) {
     unsafe { *core::ptr::addr_of_mut!(CUR_KSTACK) = top };
 }
 
-/// Saved user rip — normally the rcx SYSCALL captured, but execve
-/// redirects it to the new image's entry. The stub reloads rcx from
-/// here instead of the pushed slot, so a syscall CAN replace where
-/// the user resumes — that is exactly what exec is.
-#[no_mangle]
-static mut SAVED_UIP: u64 = 0;
-
-/// When nonzero the stub zeroes every user-visible GPR before sysret
-/// — an exec'd program must not inherit the caller's registers
-/// (Linux zeroes them; also keeps a stale fd/path pointer out of a
-/// fresh image's hands).
-#[no_mangle]
-static mut ZERO_CTX: u64 = 0;
-
-/// Redirect the pending syscall return: rip/rsp replace what sysret
-/// restores, and user registers are zeroed. Only ever called from
-/// exec while the task's address space has already been rebuilt.
-pub fn exec_return(rip: u64, rsp: u64) {
-    // SAFETY: syscall context — the stub consumes these on its way out.
-    unsafe {
-        *core::ptr::addr_of_mut!(SAVED_UIP) = rip;
-        *core::ptr::addr_of_mut!(USER_RSP) = rsp;
-        *core::ptr::addr_of_mut!(ZERO_CTX) = 1;
-    }
-}
-
 global_asm!(
     "
     .globl syscall_entry
 syscall_entry:
     // rcx=user rip, r11=user rflags; rsp is still the USER stack.
     mov qword ptr [rip + USER_RSP], rsp
-    mov qword ptr [rip + SAVED_UIP], rcx
     mov rsp, qword ptr [rip + CUR_KSTACK]
     and rsp, -16               // kstack top is 16-aligned; belt&braces
-    // Linux ABI: syscall may clobber only rax (ret), rcx and r11 —
-    // every other user register must come back intact. The Rust
-    // handler runs under the Windows x64 convention, which lets it
-    // trash rdx/rsi/r8/r9/r10, so we save the full set it could
-    // touch. rbx/rbp/r12-r15 are callee-saved under Windows and the
-    // handler preserves them for free.
-    push rcx
-    push r11
-    push rdi
-    push rsi
+    // Build a full UCtx on the kstack — every user register plus the
+    // iret frame — so a syscall can copy it (fork) or rewrite it
+    // (exec) with exactly the semantics a task switch resumes.
+    push 0x2b                  // ss
+    push qword ptr [rip + USER_RSP]
+    push r11                   // rflags
+    push 0x33                  // cs
+    push rcx                   // rip
+    push rax                   // ctx.rax = nr (handler overwrites w/ ret)
+    push rcx                   // ctx.rcx = cpu-saved rip (user rcx = rip)
     push rdx
+    push rsi
+    push rdi
     push r8
     push r9
     push r10
-    // Marshal the Linux syscall ABI (nr=rax, args rdi/rsi/rdx) into
-    // the Windows x64 call this kernel uses: rcx,rdx,r8,r9.
-    mov r9, rdx
-    mov r8, rsi
-    mov rdx, rdi
-    mov rcx, rax
+    push r11                   // ctx.r11 = user rflags value
+    push rbx
+    push rbp
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rcx, rsp               // arg: &mut UCtx (Windows x64 ABI)
     call handle_syscall
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbp
+    pop rbx
+    pop r11
     pop r10
     pop r9
     pop r8
-    pop rdx
-    pop rsi
     pop rdi
-    pop r11
-    add rsp, 8                 // saved user rip: reload from SAVED_UIP —
-    mov rcx, qword ptr [rip + SAVED_UIP]  // exec may have redirected it
-    mov rsp, qword ptr [rip + USER_RSP]
-    // execve asks for a clean register file in the new image.
-    cmp qword ptr [rip + ZERO_CTX], 0
-    je 1f
-    mov qword ptr [rip + ZERO_CTX], 0
-    xor eax, eax
-    xor ebx, ebx
-    xor ebp, ebp
-    xor edi, edi
-    xor esi, esi
-    xor edx, edx
-    xor r8d, r8d
-    xor r9d, r9d
-    xor r10d, r10d
-    xor r12d, r12d
-    xor r13d, r13d
-    xor r14d, r14d
-    xor r15d, r15d
-    mov r11d, 0x202            // sane user rflags
-1:
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax                    // ctx.rax = the return value
+    pop rcx                    // frame rip — exec may have redirected it
+    add rsp, 8                 // skip cs slot
+    pop r11                    // frame rflags
+    pop rsp                    // back to the user stack
     sysretq
 
     .globl sched_launch
@@ -216,9 +183,13 @@ const NR_CLOSE: u64 = 3;
 const NR_LSEEK: u64 = 8;
 const NR_DUP: u64 = 32;
 const NR_DUP2: u64 = 33;
-const NR_GETDENTS: u64 = 217;
+const NR_GETPID: u64 = 39;
+const NR_FORK: u64 = 57;
 const NR_EXECVE: u64 = 59;
 const NR_EXIT: u64 = 60;
+const NR_WAIT4: u64 = 61;
+const NR_GETPPID: u64 = 110;
+const NR_GETDENTS: u64 = 217;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -233,12 +204,17 @@ const ENOSYS: u64 = (-38i64) as u64;
 /// the kernel or exhaust memory.
 const MAX_COPY: u64 = 4096;
 
-/// nr=rcx a1..a3=rdx,r8,r9 — entry from the asm stub (Windows x64
-/// call convention), returns the syscall result in rax (negative
-/// errno convention).
+/// ctx=rcx — the asm stub pushed a full UCtx and hands us &mut to it
+/// (Windows x64 call convention). Args live in ctx.{rdi,rsi,rdx}; the
+/// return value goes back through ctx.rax. Handlers may also copy the
+/// whole ctx (fork), rewrite it (exec), block on it (wait4), or
+/// diverge entirely (exit).
 #[no_mangle]
-extern "C" fn handle_syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
-    match nr {
+extern "C" fn handle_syscall(c: *mut user::UCtx) {
+    // SAFETY: the stub built this UCtx on the current task's kstack.
+    let ctx = unsafe { &mut *c };
+    let (nr, a1, a2, a3) = (ctx.rax, ctx.rdi, ctx.rsi, ctx.rdx);
+    ctx.rax = match nr {
         // fd_read validates the write-target range itself because only
         // it knows how many bytes the source will actually produce;
         // the transfer cap is enforced here exactly like sys_write.
@@ -257,11 +233,15 @@ extern "C" fn handle_syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         NR_LSEEK => user::fd_lseek(a1, a2 as i64, a3),
         NR_DUP => user::fd_dup(a1),
         NR_DUP2 => user::fd_dup2(a1, a2),
+        NR_GETPID => user::getpid(),
+        NR_FORK => user::fork(ctx),
+        NR_WAIT4 => user::wait4(ctx, a1 as i64, a2, a3),
+        NR_GETPPID => user::getppid(),
         NR_GETDENTS => user::fd_getdents(a1, a2, a3),
-        NR_EXECVE => sys_execve(a1, a2, a3),
+        NR_EXECVE => sys_execve(ctx, a1, a2, a3),
         NR_EXIT => sys_exit(a1),
         _ => ENOSYS,
-    }
+    };
 }
 
 /// Copy a NUL-terminated user pathname into `name` under the pointer
@@ -310,7 +290,7 @@ fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
 /// user::exec rebuild it. argv/envp are accepted for ABI shape but
 /// not yet consumed — a stack-args rung will land with fork
 /// (CVE-2022-49264's argv==NULL discipline applies then).
-fn sys_execve(path: u64, _argv: u64, _envp: u64) -> u64 {
+fn sys_execve(ctx: &mut user::UCtx, path: u64, _argv: u64, _envp: u64) -> u64 {
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
@@ -325,7 +305,7 @@ fn sys_execve(path: u64, _argv: u64, _envp: u64) -> u64 {
     if elf::parse(img).is_none() {
         return ENOEXEC;
     }
-    if !user::exec(img) {
+    if !user::exec(img, ctx) {
         // The address space is already torn down; the task cannot
         // safely resume. Kill it — the run() loop reaps as usual.
         sys_exit(127);
@@ -368,5 +348,5 @@ fn sys_write(fd: u64, buf: u64, len: u64) -> u64 {
 fn sys_exit(code: u64) -> ! {
     log::printk(format_args!("rustux: user: exit({code})"));
     log::drain_task();
-    user::task_exit()
+    user::task_exit(code)
 }
