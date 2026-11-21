@@ -1082,3 +1082,9 @@ the task model now supports fork/clone/wait as the next rung.
 - Gate honesty: SIGHAND without VM -> EINVAL, THREAD without SIGHAND -> EINVAL (Linux's pairing); tgkill(tgid,tid) now targets the tid task.
 - thrtest proves: shared disposition readback both directions, getpid==leader tgid / gettid==clone tid, ctid futex join, waitpid(thread)->ECHILD, EINVAL pairings.
 - Divergences: exec sighand-reset edits the shared table (Linux unshares on de_thread); leader reap isn't delayed to group exit; no CLONE_FS/SYSVSEM yet.
+
+## run-79 — Debian stub batch (umask/sysinfo/times/getrusage/statfs/getgroups/affinity/prctl/vfork/reboot)
+
+The miscellaneous-ABI rung for the Debian path: ten small syscalls that minimal userspace needs, all real implementations not panics. umask is a per-task field (default 022, masked 0777, inherited through fork and clone_vm — the fs_struct's umask until CLONE_FS shares it). sysinfo reports real uptime and freeram; times/getrusage report honest tick-derived counters; statfs/fstatfs answer RAMFS_MAGIC + 4KiB blocks; getgroups is empty; sched_getaffinity reports CPU0; prctl implements PR_SET_NAME into comm[16]; vfork is plain fork (parent-pause contract is a no-op on the single-CPU model); reboot gates on Linux's magic pair then CAD_ON/OFF no-ops while real RB_* commands drive a 0xCF9 chipset reset.
+
+Self-review caught four honesty bugs before commit: times silently succeeded on bad buf, getrusage zeroed invalid who, statfs left tail fields as caller garbage, reboot accepted any cmd. wiotest's getdents check needed a streaming loop — the dir outgrew its 1KiB buffer when aptest pushed the initrd to 32 records. glibc lesson: times() EFAULT is unobservable through libc because __times re-faults via a deliberate buf probe; raw syscall preserves it. aptest: 17 checks, 0 failures; 31 tasks, zero leak; WSL + native VM.
