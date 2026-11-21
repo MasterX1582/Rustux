@@ -143,6 +143,10 @@ enum WaitOn {
     /// recv/read on an empty TCP stream: `wait_ptr/len` the buffer,
     /// `wait_ptr2` the optional peer sockaddr out ptr.
     TcpRecv(usize),
+    /// read() on an empty tty input queue: `wait_ptr/len` is the
+    /// user buffer — the waker copies through the sleeper's tables
+    /// and deposits the count in ctx.rax, like PipeRead.
+    Stdin,
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -1841,6 +1845,270 @@ static mut TERMIOS: [u8; 36] = [
     0x12, 0x0f, 0x17, 0x16, 0, 0, 0,  // c_cc[19]
 ];
 
+// --- tty input side: scancode -> ldisc -> read() ------------------
+/// Canonical edit buffer (the line being typed) and the completed-
+/// byte queue reads drain. Linux splits these the same way: in
+/// ICANON mode nothing is readable until a newline or VEOF submits.
+const STDIN_LINE: usize = 256;
+const STDIN_READY: usize = 4096;
+static mut LINEBUF: [u8; STDIN_LINE] = [0; STDIN_LINE];
+static mut LINE_LEN: usize = 0;
+static mut READY: [u8; STDIN_READY] = [0; STDIN_READY];
+static mut RD_LEN: usize = 0;
+/// VEOF (^D) on an empty line — one-shot end-of-file for the next
+/// read, which is exactly Linux's empty-flush semantics.
+static mut STDIN_EOF: bool = false;
+
+/// c_lflag as a u32 — the ldisc's view of termios.
+fn t_lflag() -> u32 {
+    // SAFETY: TERMIOS[12..16] is c_lflag, little-endian on x86_64.
+    unsafe {
+        u32::from_le_bytes(
+            *((core::ptr::addr_of!(TERMIOS) as *const u8).add(12) as *const [u8; 4]),
+        )
+    }
+}
+
+/// A c_cc byte by index — VINTR 0, VERASE 2, VKILL 3, VEOF 4...
+fn t_cc(i: usize) -> u8 {
+    // SAFETY: c_cc starts at byte 17 in the 36-byte termios ABI.
+    unsafe { *(core::ptr::addr_of!(TERMIOS) as *const u8).add(17 + i) }
+}
+
+/// Echo one byte through the printk ring — IRQ-safe (irq_save inside)
+/// and identical to how user console writes reach the screen.
+fn stdin_echo(b: u8) {
+    crate::log::printk(format_args!("{}", b as char));
+}
+
+/// Signal the foreground — in our single-pgrp model that's the task
+/// blocked reading stdin; nobody blocked means nobody gets it (a
+/// real ctty/pgrp comes with the shell rung).
+fn stdin_sig(sig: u64) {
+    let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+    let Some(pid) = tasks.iter().flatten().find_map(|t| {
+        (t.state == TaskState::Blocked && t.wait_on == WaitOn::Stdin)
+            .then_some(t.pid)
+    }) else {
+        return;
+    };
+    let _ = kill(pid, sig);
+}
+
+/// Submit the edit buffer to the ready queue — drops the excess if
+/// the queue can't hold it (Linux discards on a full input queue).
+fn stdin_flush_line() {
+    let (n, cap) = unsafe { (LINE_LEN, RD_LEN) };
+    let space = STDIN_READY - cap;
+    let k = n.min(space);
+    if k > 0 {
+        // SAFETY: disjoint static buffers; k <= space by min.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                core::ptr::addr_of!(LINEBUF) as *const u8,
+                (core::ptr::addr_of_mut!(READY) as *mut u8).add(cap),
+                k,
+            );
+            RD_LEN = cap + k;
+        }
+    }
+    unsafe { LINE_LEN = 0 };
+    stdin_wake();
+}
+
+/// Feed one decoded key through the line discipline. Canonical mode
+/// edits LINEBUF (VERASE/VKILL) and submits on '\n'/VEOF; raw mode
+/// pushes straight to the ready queue. ISIG turns VINTR/VQUIT into
+/// signals for the blocked reader — echo honors ECHO/ECHOE.
+fn stdin_key(c: u8) {
+    let lf = t_lflag();
+    let (isig, icanon, echo, echoe) =
+        (lf & 1 != 0, lf & 2 != 0, lf & 8 != 0, lf & 0x10 != 0);
+    let intr = t_cc(0) != 0 && c == t_cc(0); // VINTR  ^C -> SIGINT
+    let quit = t_cc(1) != 0 && c == t_cc(1); // VQUIT  ^\ -> SIGQUIT
+    if isig && (intr || quit) {
+        // Linux flushes input unless NOFLSH; we always flush (the
+        // flag is unset in the cooked defaults).
+        unsafe {
+            LINE_LEN = 0;
+            RD_LEN = 0;
+        };
+        if echo {
+            stdin_echo(b'^');
+            stdin_echo(if intr { b'C' } else { b'\\' });
+            stdin_echo(b'\n');
+        }
+        stdin_sig(if intr { 2 } else { 3 });
+        return;
+    }
+    if !icanon {
+        let cap = unsafe { RD_LEN };
+        if cap < STDIN_READY {
+            unsafe {
+                *(core::ptr::addr_of_mut!(READY) as *mut u8).add(cap) = c;
+                RD_LEN = cap + 1;
+            }
+            stdin_wake();
+        }
+        if echo {
+            stdin_echo(c);
+        }
+        return;
+    }
+    if c == t_cc(2) && t_cc(2) != 0 {
+        // VERASE
+        if unsafe { LINE_LEN } > 0 {
+            unsafe { LINE_LEN -= 1 };
+            if echo && echoe {
+                for b in [0x08u8, b' ', 0x08] {
+                    stdin_echo(b);
+                }
+            }
+        }
+        return;
+    }
+    if c == t_cc(3) && t_cc(3) != 0 {
+        // VKILL — discard the line being edited.
+        unsafe { LINE_LEN = 0 };
+        if echo {
+            stdin_echo(b'\n');
+        }
+        return;
+    }
+    if c == t_cc(4) && t_cc(4) != 0 {
+        // VEOF — submit without a newline; empty line is EOF.
+        if unsafe { LINE_LEN } == 0 {
+            unsafe { STDIN_EOF = true };
+            stdin_wake();
+        } else {
+            stdin_flush_line();
+        }
+        return;
+    }
+    if unsafe { LINE_LEN } < STDIN_LINE {
+        unsafe {
+            *(core::ptr::addr_of_mut!(LINEBUF) as *mut u8).add(LINE_LEN) = c;
+            LINE_LEN += 1;
+        }
+    }
+    if echo {
+        stdin_echo(c);
+    }
+    if c == b'\n' {
+        stdin_flush_line();
+    }
+}
+
+/// Bytes a reader can take right now — completed queue plus the
+/// EOF flag (poll sees it readable like Linux at tty EOF).
+fn stdin_ready() -> usize {
+    if unsafe { STDIN_EOF } {
+        unsafe { RD_LEN.max(1) }
+    } else {
+        unsafe { RD_LEN }
+    }
+}
+
+/// Consume up to `len` ready bytes into `dst` — kernel-side copy for
+/// both the direct path and the sleeper's translate-write path.
+/// Canonical reads stop at the first newline like Linux (one line
+/// per read); raw reads take whatever waits. Returns the count, or
+/// usize::MAX for "would block".
+fn stdin_take(len: usize) -> usize {
+    let avail = unsafe { RD_LEN };
+    if avail == 0 {
+        return if unsafe { STDIN_EOF } {
+            unsafe { STDIN_EOF = false };
+            0
+        } else {
+            usize::MAX
+        };
+    }
+    let mut n = len.min(avail);
+    if t_lflag() & 2 != 0 {
+        // ICANON: at most one line — find the first '\n' inside n.
+        let mut i = 0;
+        while i < n {
+            if unsafe { *(core::ptr::addr_of!(READY) as *const u8).add(i) } == b'\n' {
+                n = i + 1;
+                break;
+            }
+            i += 1;
+        }
+    }
+    n
+}
+
+/// Move `n` consumed bytes out of the ready queue.
+fn stdin_consume(n: usize) {
+    let cap = unsafe { RD_LEN };
+    if n >= cap {
+        unsafe { RD_LEN = 0 };
+        return;
+    }
+    // SAFETY: n < cap; memmove inside the owned queue.
+    unsafe {
+        core::ptr::copy(
+            (core::ptr::addr_of!(READY) as *const u8).add(n),
+            core::ptr::addr_of_mut!(READY) as *mut u8,
+            cap - n,
+        );
+        RD_LEN = cap - n;
+    }
+}
+
+/// The waiter side: a blocked Stdin reader gets bytes copied through
+/// ITS page tables (same discipline as pipe wakes) and the count in
+/// rax; the EOF flag wakes it with 0.
+fn stdin_wake() {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(t) = s.as_mut() else { continue };
+        if t.state != TaskState::Blocked || t.wait_on != WaitOn::Stdin {
+            continue;
+        }
+        let n = stdin_take(t.wait_len as usize);
+        if n == usize::MAX {
+            continue; // still nothing — keep sleeping
+        }
+        let mut done = 0usize;
+        while done < n {
+            let b = unsafe { *(core::ptr::addr_of!(READY) as *const u8).add(done) };
+            match translate(t.pml4, t.wait_ptr + done as u64) {
+                // SAFETY: pa is a present user frame in t's tables.
+                Some(pa) => unsafe { (pa as *mut u8).write(b) },
+                None => break,
+            }
+            done += 1;
+        }
+        stdin_consume(done);
+        t.ctx.rax = if done == 0 && n > 0 {
+            (-14i64) as u64 // EFAULT: buffer vanished mid-sleep
+        } else {
+            done as u64 // 0 for the EOF wake, n otherwise
+        };
+        t.wait_on = WaitOn::None;
+        t.state = TaskState::Runnable;
+    }
+}
+
+/// Pump decoded keys into the ldisc — called from the timer tick
+/// (IRQ-safe: printk and kill both are) so typing echoes live, and
+/// lazily from read/poll so a stale queue never fools a syscall.
+/// Bounded by the 64-entry scancode ring.
+pub fn stdin_pump() {
+    let mut fed = false;
+    while let Some(c) = crate::kbd::poll() {
+        stdin_key(c as u8);
+        fed = true;
+    }
+    // Any input-state change may satisfy a poll(0) waiter the way a
+    // pipe change does — one re-scan per pump, not per key.
+    if fed {
+        wake_pollers();
+    }
+}
+
 /// ioctl(fd, req, arg): the console pair is our one tty — Stdin and
 /// Console OFDs answer the termios/winsize/pgrp family; FIONREAD
 /// reports bytes available per kind on any fd. glibc's isatty() is
@@ -1954,10 +2222,11 @@ pub fn sys_ioctl(fd: u64, req: u64, arg: u64) -> u64 {
                 return EFAULT;
             }
             let avail = match &o.kind {
-                // No input queue exists yet — an honest 0 on both
-                // halves of the tty pair (it's a tty ioctl, not
-                // direction-checked on Linux either).
-                FdKind::Stdin | FdKind::Console => 0u64,
+                // TTY input queue depth — Linux counts the whole
+                // queue here (canonical or not). The write half has
+                // no input side: honest 0 like a tty asked that way.
+                FdKind::Stdin => (unsafe { RD_LEN }) as u64,
+                FdKind::Console => 0u64,
                 FdKind::File(d) => d.len().saturating_sub(o.pos) as u64,
                 FdKind::Ram(i) => vfile(*i)
                     .map_or(0, |v| v.len.saturating_sub(o.pos))
@@ -2429,14 +2698,56 @@ pub fn fd_is_console(fd: u64) -> bool {
 }
 
 /// read(fd, buf, len): File yields up to `len` bytes from its shared
-/// position; Stdin yields EOF; Console and closed slots are EBADF.
+/// position; Stdin drains the tty input queue or blocks until a key
+/// feed wakes the task; Console and closed slots are EBADF.
 /// The kernel validates that [buf, buf+n) is user-writable before
 /// copying — checked arithmetic, no partial writes past the gate.
 pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
+    // Drain any decoded keys sitting in the scancode ring before the
+    // ready check — the tick pump also runs, but a read should never
+    // stall on input that's already decoded.
+    stdin_pump();
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
     match &o.kind {
-        FdKind::Stdin => 0,
+        FdKind::Stdin => {
+            let n = stdin_take(len as usize);
+            match n {
+                usize::MAX => {
+                    // Empty input queue — block like PipeRead: the
+                    // waker copies through our tables and lands the
+                    // count in ctx.rax.
+                    if len == 0 {
+                        return 0;
+                    }
+                    if !range_ok_w(buf, 1) {
+                        return EFAULT;
+                    }
+                    if deliverable(t) {
+                        return (-4i64) as u64; // -EINTR before sleep
+                    }
+                    t.wait_on = WaitOn::Stdin;
+                    t.wait_ptr = buf;
+                    t.wait_len = len;
+                    t.ctx = *ctx;
+                    t.state = TaskState::Blocked;
+                    block_switch()
+                }
+                0 => 0, // VEOF on an empty line — tty EOF
+                _ => {
+                    if !range_ok_w(buf, n as u64) {
+                        return EFAULT;
+                    }
+                    for i in 0..n {
+                        let b = unsafe { *(core::ptr::addr_of!(READY) as *const u8).add(i) };
+                        // SAFETY: validated user window, cur cr3.
+                        unsafe { ((buf + i as u64) as *mut u8).write(b) };
+                    }
+                    stdin_consume(n);
+                    n as u64
+                }
+            }
+        }
         FdKind::Console => EBADF,
         FdKind::Dir => EISDIR,
         FdKind::Udp(i) => udp_recv_or_block(ctx, *i, buf, len, 0),
@@ -3490,9 +3801,16 @@ fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
     };
     let pipes = unsafe { &*core::ptr::addr_of!(PIPES) };
     let r = match &o.kind {
-        // Console writes never block; stdin reads return EOF so they
-        // "never block" either — Linux reports POLLIN at EOF.
-        FdKind::Stdin => POLLIN,
+        // Console writes never block; stdin is readable when the
+        // input queue has bytes (or the EOF flag is pending — Linux
+        // reports POLLIN at tty EOF too).
+        FdKind::Stdin => {
+            if stdin_ready() > 0 {
+                POLLIN
+            } else {
+                0
+            }
+        }
         FdKind::Console => POLLOUT,
         // File and dir reads never block (EOF reads return 0).
         FdKind::File(_) | FdKind::Dir => POLLIN,
@@ -5441,6 +5759,7 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
     deliver_for(cur);
     poll_expire(); // timed poll waits age one tick
     crate::e1000::rx_drain(); // feed socket queues from the live ring
+    stdin_pump(); // feed the tty input queue from the scancode ring
     let Some(n) = pick_ready() else {
         // Nothing else runnable: if cur survived delivery it's the
         // only task — resume its (possibly redirected) ctx. If a

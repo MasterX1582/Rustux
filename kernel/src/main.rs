@@ -8,7 +8,6 @@
 #![no_main]
 #![no_std]
 
-use core::fmt::Write;
 
 use uefi::mem::memory_map::{MemoryMap, MemoryType};
 use uefi::prelude::*;
@@ -990,30 +989,11 @@ fn main() -> Status {
             );
         }
 
-        // The interactive payoff: a bounded window where every IRQ1
-        // scancode is decoded consumer-side and echoed live — real input
-        // through the I/O APIC into our console. Headless runs just wait
-        // the window out.
+        // Decoded keys now feed the tty input queue via the tick-side
+        // stdin pump — read(0)/poll(0) are live for the whole suite,
+        // not a boot-time echo window.
         if kbd_ok {
-            kprintln!(con,
-                "rustux: kbd: type on the guest keyboard -- ~3s echo window"
-            );
-            let e0 = apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            while apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - e0 < 300 {
-                match kbd::poll() {
-                    Some(c) => {
-                        let _ = con.write_char(c);
-                    }
-                    None => {
-                        unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
-                    }
-                }
-            }
-            kprintln!(con,
-                "rustux: kbd: {} scancode IRQs, {} keys decoded",
-                kbd::IRQS.load(core::sync::atomic::Ordering::Relaxed),
-                kbd::DECODED.load(core::sync::atomic::Ordering::Relaxed)
-            );
+            kprintln!(con, "rustux: kbd: decoded input -> tty stdin queue");
         }
     }
 
