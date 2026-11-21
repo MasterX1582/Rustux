@@ -162,6 +162,9 @@ enum FdKind {
     /// Initrd-backed read-only file. Borrows LOADER_DATA — immortal,
     /// so no refcount on the backing bytes is needed.
     File(&'static [u8]),
+    /// RAM-backed scratch file — VFILES[i]. The OFD owns no copy;
+    /// unlink marks the VFile and the last close frees it.
+    Ram(usize),
     /// The flat archive root. pos is the index of the next archive
     /// entry getdents64 should emit — Linux dir offsets are opaque
     /// cookies, ours just happens to be an index.
@@ -541,6 +544,10 @@ struct OpenFile {
     pos: usize,
     /// fd slots pointing at this OFD; freed at zero.
     refs: usize,
+    /// O_APPEND: every write lands at end-of-file regardless of pos.
+    append: bool,
+    /// O_ACCMODE at open (0 rdonly/1 wronly/2 rdwr) — f_mode analogue.
+    accmode: u8,
 }
 
 /// A resident task: every resource it owns, in one owned bundle.
@@ -622,6 +629,97 @@ static mut OFDS: [Option<OpenFile>; MAX_OFDS] = [const { None }; MAX_OFDS];
 /// each (96 worst case) before a single pipe/socket exists — 64 was
 /// a real transient-ENOMEM under scheduling-dependent occupancy.
 const MAX_OFDS: usize = 128;
+
+/// RAM-backed scratch files — the writable half of the flat
+/// namespace. Linux mounts a tmpfs; our tmpfs is this table:
+/// cpio names are read-only, VFILES names are created, written,
+/// truncated, renamed and unlinked. Bounded so untrusted fd churn
+/// can't exhaust frames.
+const MAX_VFILES: usize = 16;
+/// Per-file ceiling — an honest ENOSPC, not an unbounded grow.
+const VFILE_MAX: usize = 1 << 20;
+
+/// A scratch file: kmalloc'd contents + a fixed name slot. `unlinked`
+/// survives removal while fds still name it — Linux's open-unlink
+/// semantics: the OFD keeps working until its last close frees data.
+struct VFile {
+    name: [u8; 32],
+    nlen: usize,
+    data: *mut u8,
+    len: usize,
+    cap: usize,
+    unlinked: bool,
+}
+// SAFETY: VFILES slots own their buffers; single-CPU, IF-masked
+// context means no concurrent access. Raw ptr never escapes.
+static mut VFILES: [Option<VFile>; MAX_VFILES] = [const { None }; MAX_VFILES];
+
+/// Slot of the live VFile named `path`, or None.
+fn vfile_find(path: &[u8]) -> Option<usize> {
+    let vs = unsafe { &*core::ptr::addr_of!(VFILES) };
+    vs.iter().position(|v| {
+        v.as_ref().is_some_and(|v| !v.unlinked && &v.name[..v.nlen] == path)
+    })
+}
+
+/// The VFile backing OFD index `i` — FdKind::Ram names VFILES[i].
+fn vfile(i: usize) -> Option<&'static mut VFile> {
+    let vs = unsafe { &mut *core::ptr::addr_of_mut!(VFILES) };
+    vs.get_mut(i)?.as_mut()
+}
+
+/// Create a VFile named `path` — ENOSPC at the table bound,
+/// ENAMETOOLONG past the name slot. Returns the slot index.
+fn vfile_create(path: &[u8]) -> u64 {
+    const ENOSPC_: u64 = (-28i64) as u64;
+    const ENAMETOOLONG_: u64 = (-36i64) as u64;
+    if path.is_empty() || path.len() > 32 {
+        return ENAMETOOLONG_;
+    }
+    let vs = unsafe { &mut *core::ptr::addr_of_mut!(VFILES) };
+    let Some(i) = vs.iter().position(Option::is_none) else {
+        return ENOSPC_;
+    };
+    let mut v = VFile {
+        name: [0; 32],
+        nlen: path.len(),
+        data: core::ptr::null_mut(),
+        len: 0,
+        cap: 0,
+        unlinked: false,
+    };
+    v.name[..path.len()].copy_from_slice(path);
+    vs[i] = Some(v);
+    i as u64
+}
+
+/// Grow a VFile's buffer to at least `need` bytes — zeroed fresh
+/// region, old bytes copied, old buffer kfree'd. ENOSPC past the cap.
+fn vfile_grow(v: &mut VFile, need: usize) -> u64 {
+    const ENOSPC_: u64 = (-28i64) as u64;
+    if need <= v.cap {
+        return 0;
+    }
+    if need > VFILE_MAX {
+        return ENOSPC_;
+    }
+    let ncap = need.next_power_of_two().clamp(4096, VFILE_MAX);
+    let p = kalloc::kmalloc(ncap);
+    if p.is_null() {
+        return ENOSPC_;
+    }
+    // SAFETY: fresh buffer owns ncap bytes; copy stays inside both.
+    unsafe {
+        core::ptr::write_bytes(p, 0, ncap);
+        if !v.data.is_null() {
+            core::ptr::copy_nonoverlapping(v.data, p, v.len);
+            kalloc::kfree(v.data);
+        }
+    }
+    v.data = p;
+    v.cap = ncap;
+    0
+}
 
 /// Process-id allocator — monotonically increasing, never reused.
 static mut NEXT_PID: u64 = 0;
@@ -927,6 +1025,8 @@ fn load(img: &[u8]) -> Option<Task> {
                 kind: if i == 0 { FdKind::Stdin } else { FdKind::Console },
                 pos: 0,
                 refs: 1,
+                append: false,
+                accmode: if i == 0 { 0 } else { 1 },
             });
             t.fds[i] = Some(oi as u8);
         }
@@ -1911,6 +2011,7 @@ pub fn sys_fstat(fd: u64, statbuf: u64) -> u64 {
         FdKind::Stdin | FdKind::Console => (0o20644u64, 0u64), // S_IFCHR
         FdKind::Dir => (0o40755, 0),
         FdKind::File(d) => (0o100644, d.len() as u64),
+        FdKind::Ram(i) => (0o100644, vfile(*i).map_or(0, |v| v.len) as u64),
         FdKind::Pipe { .. } => (0o10644, 0), // S_IFIFO
         FdKind::Udp(_) | FdKind::Tcp(_) => (0o140777, 0), // S_IFSOCK
     };
@@ -2168,6 +2269,9 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
         FdKind::Udp(i) => udp_recv_or_block(ctx, *i, buf, len, 0),
         FdKind::Tcp(i) => tcp_recv_or_block(ctx, *i, buf, len, 0),
         FdKind::File(data) => {
+            if o.accmode == 1 {
+                return EBADF; // O_WRONLY
+            }
             // pos may sit past EOF after lseek — saturating, not panicking.
             let avail = data.len().saturating_sub(o.pos);
             let n = core::cmp::min(len as usize, avail);
@@ -2182,6 +2286,31 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     data.as_ptr().add(o.pos),
+                    buf as *mut u8,
+                    n,
+                )
+            };
+            o.pos += n;
+            n as u64
+        }
+        FdKind::Ram(i) => {
+            if o.accmode == 1 {
+                return EBADF; // O_WRONLY
+            }
+            let Some(v) = vfile(*i) else { return EBADF };
+            let avail = v.len.saturating_sub(o.pos);
+            let n = core::cmp::min(len as usize, avail);
+            if n == 0 {
+                return 0;
+            }
+            if !range_ok_w(buf, n as u64) {
+                return EFAULT;
+            }
+            // SAFETY: v.data is valid for v.len bytes (vfile_grow
+            // invariant); buf is the validated user window.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    v.data.add(o.pos),
                     buf as *mut u8,
                     n,
                 )
@@ -2250,6 +2379,49 @@ pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     let Some(o) = ofd(t, fd) else { return EBADF };
     if let FdKind::Tcp(i) = &o.kind {
         return tcp_send(*i, buf, len);
+    }
+    if let FdKind::Ram(i) = &o.kind {
+        if o.accmode == 0 {
+            return EBADF; // O_RDONLY
+        }
+        // A zero-length write is a pure no-op — no grow, no len
+        // extension, no pointer validation (Linux semantics).
+        if len == 0 {
+            return 0;
+        }
+        let Some(v) = vfile(*i) else { return EBADF };
+        // O_APPEND lands every write at EOF; pos arithmetic must not
+        // wrap — Linux's answer to overflow is EINVAL.
+        let pos = if o.append { v.len } else { o.pos };
+        let Some(need) = pos.checked_add(len as usize) else {
+            return EINVAL;
+        };
+        if len > 0 && !range_ok(buf, len) {
+            return EFAULT;
+        }
+        let r = vfile_grow(v, need);
+        if r != 0 {
+            return r;
+        }
+        // SAFETY: v.data owns `need` bytes (grow succeeded); buf is
+        // the validated user window. Gap bytes are already zero —
+        // vfile_grow zero-fills fresh capacity every time.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                buf as *const u8,
+                v.data.add(pos),
+                len as usize,
+            )
+        };
+        v.len = v.len.max(need);
+        o.pos = need;
+        return len;
+    }
+    if matches!(o.kind, FdKind::File(_)) {
+        // Open already refuses writable archive files (EROFS), so a
+        // File OFD is always O_RDONLY — write() answers EBADF, the
+        // fmode check, not the filesystem answer.
+        return EBADF;
     }
     let FdKind::Pipe { id, write } = &o.kind else {
         return EBADF;
@@ -2360,11 +2532,15 @@ pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
         kind: FdKind::Pipe { id: pi, write: false },
         pos: 0,
         refs: 1,
+        append: false,
+        accmode: 0,
     });
     ofds[wo] = Some(OpenFile {
         kind: FdKind::Pipe { id: pi, write: true },
         pos: 0,
         refs: 1,
+        append: false,
+        accmode: 1,
     });
     t.fds[rf] = Some(ro as u8);
     t.fds[wf] = Some(wo as u8);
@@ -2395,6 +2571,20 @@ pub fn newfstatat(path: &[u8], statbuf: u64) -> u64 {
         // The archive root: every member lives directly under it.
         st[2] = 2; // st_nlink
         st[3] = 0o40755; // st_mode: S_IFDIR | 0755 (u64 slot holds u32)
+    } else if let Some(i) = vfile_find(path) {
+        // RAM files shadow the archive — same lookup order as open.
+        let Some(v) = vfile(i) else { return ENOENT };
+        let arc_n = (unsafe { *core::ptr::addr_of!(INITRD) })
+            .map_or(0, |a| crate::cpio::entries(a).count());
+        let vidx = unsafe { &*core::ptr::addr_of!(VFILES) }[..i]
+            .iter()
+            .filter(|s| s.as_ref().is_some_and(|v| !v.unlinked))
+            .count();
+        st[1] = (arc_n + vidx) as u64 + 1; // st_ino — getdents order
+        st[2] = 1; // st_nlink
+        st[3] = 0o100644; // st_mode: S_IFREG | 0644
+        st[6] = v.len as u64; // st_size
+        st[8] = (v.len as u64).div_ceil(512); // st_blocks
     } else {
         let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
             return ENOENT;
@@ -2426,7 +2616,11 @@ pub fn newfstatat(path: &[u8], statbuf: u64) -> u64 {
 
 /// Open-flag values we honor or refuse — O_ACCMODE(3) is the access
 /// mask, O_CLOEXEC the fd flag, O_DIRECTORY a kind check. Anything
-/// writable is EROFS on an archive fs; anything else unknown EINVAL.
+/// writable is EROFS on an archive file; anything else unknown EINVAL.
+const O_CREAT: u64 = 0o100;
+const O_EXCL: u64 = 0o200;
+const O_TRUNC: u64 = 0o1000;
+const O_APPEND: u64 = 0o2000;
 const O_CLOEXEC: u64 = 0o2000000;
 const O_DIRECTORY: u64 = 0o200000;
 const O_NOFOLLOW: u64 = 0o400000;
@@ -2442,33 +2636,60 @@ fn cloexec_set(t: &mut Task, fi: usize, on: bool) {
     }
 }
 
-/// open(path, flags): "" and "." name the archive root (a Dir OFD);
-/// anything else resolves through cpio::find. Accepted flags:
-/// O_RDONLY plus O_CLOEXEC/O_DIRECTORY/O_NOFOLLOW/O_PATH — all
-/// honest on a flat read-only archive (no symlinks to follow,
-/// O_PATH just skips nothing). Write access → EROFS, unknown flag
+/// open(path, flags): "" and "." name the namespace root (a Dir
+/// OFD); names resolve VFILES first then cpio — a scratch file may
+/// shadow an archive name the same way a mount does. Writable
+/// opens land on Ram files only; cpio writes are EROFS, like a
+/// read-only mount. O_CREAT mints a VFile; O_EXCL with it is EEXIST
+/// on either namespace; O_TRUNC needs write access (ignored on
+/// O_RDONLY per Linux); O_APPEND sets per-OFD append. Unknown flag
 /// bits → EINVAL, ENOENT when absent, EMFILE at the table bounds.
 pub fn fd_open(path: &[u8], flags: u64) -> u64 {
     const EROFS: u64 = (-30i64) as u64;
     const ENOTDIR: u64 = (-20i64) as u64;
-    const KNOWN: u64 = O_ACCMODE | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW | O_PATH;
+    const EEXIST: u64 = (-17i64) as u64;
+    const KNOWN: u64 = O_ACCMODE | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW
+        | O_PATH | O_CREAT | O_EXCL | O_TRUNC | O_APPEND;
     if flags & !KNOWN != 0 {
         return EINVAL;
     }
-    if flags & O_ACCMODE != 0 {
-        return EROFS;
-    }
+    let acc = flags & O_ACCMODE;
+    let writing = acc != 0;
     let Some(t) = cur_mut() else { return EBADF };
     let kind = if path.is_empty() || path == b"." {
+        if writing || flags & O_CREAT != 0 {
+            return EISDIR;
+        }
         FdKind::Dir
+    } else if let Some(i) = vfile_find(path) {
+        // RAM file wins over the archive — mount-shadowing order.
+        if flags & (O_CREAT | O_EXCL) == (O_CREAT | O_EXCL) {
+            return EEXIST;
+        }
+        if flags & O_TRUNC != 0 && writing {
+            let Some(v) = vfile(i) else { return ENOENT };
+            v.len = 0;
+        }
+        FdKind::Ram(i)
+    } else if (unsafe { *core::ptr::addr_of!(INITRD) })
+        .is_some_and(|arc| crate::cpio::find(arc, path).is_some())
+    {
+        if writing {
+            return EROFS;
+        }
+        if flags & (O_CREAT | O_EXCL) == (O_CREAT | O_EXCL) {
+            return EEXIST;
+        }
+        let arc = unsafe { *core::ptr::addr_of!(INITRD) }.unwrap();
+        FdKind::File(crate::cpio::find(arc, path).unwrap())
+    } else if flags & O_CREAT != 0 {
+        let r = vfile_create(path);
+        if (r as i64) < 0 {
+            return r;
+        }
+        FdKind::Ram(r as usize)
     } else {
-        let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
-            return ENOENT;
-        };
-        let Some(data) = crate::cpio::find(arc, path) else {
-            return ENOENT;
-        };
-        FdKind::File(data)
+        return ENOENT;
     };
     if flags & O_DIRECTORY != 0 && !matches!(kind, FdKind::Dir) {
         return ENOTDIR;
@@ -2484,10 +2705,146 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
         kind,
         pos: 0,
         refs: 1,
+        append: flags & O_APPEND != 0,
+        accmode: acc as u8,
     });
     t.fds[fi] = Some(oi as u8);
     cloexec_set(t, fi, flags & O_CLOEXEC != 0);
     fi as u64
+}
+
+/// Does `path` name anything in either namespace — access(2)'s only
+/// real question on a flat namespace.
+pub fn fs_exists(path: &[u8]) -> bool {
+    path.is_empty() || path == b"." || vfile_find(path).is_some()
+        || fs_lookup(path).is_some()
+}
+
+/// Drop a VFile's name. Storage dies immediately when no OFD still
+/// references it; otherwise ofd_release frees it at last close —
+/// Linux's open-unlink-keep-working semantics.
+fn vfile_remove(i: usize) {
+    let data = {
+        let Some(v) = vfile(i) else { return };
+        v.unlinked = true;
+        v.data
+    };
+    let live = unsafe { &*core::ptr::addr_of!(OFDS) }
+        .iter()
+        .flatten()
+        .any(|o| matches!(o.kind, FdKind::Ram(j) if j == i));
+    if !live {
+        if !data.is_null() {
+            // SAFETY: data was kmalloc'd at cap; the slot is cleared
+            // right after so nothing can reach it.
+            unsafe { kalloc::kfree(data) };
+        }
+        unsafe { (*core::ptr::addr_of_mut!(VFILES))[i] = None };
+    }
+}
+
+/// unlink(path): the dir and archive are unwritable namespaces —
+/// EISDIR and EROFS. A VFile loses its name; its bytes outlive the
+/// name while any OFD (or fd) still names it.
+pub fn fs_unlink(path: &[u8]) -> u64 {
+    const EROFS_: u64 = (-30i64) as u64;
+    const EISDIR_: u64 = (-21i64) as u64;
+    if path.is_empty() || path == b"." {
+        return EISDIR_;
+    }
+    let Some(i) = vfile_find(path) else {
+        return if fs_lookup(path).is_some() { EROFS_ } else { ENOENT };
+    };
+    vfile_remove(i);
+    0
+}
+
+/// rename(old, new): VFile names only — the archive can't be renamed
+/// (EROFS). Renaming over a live VFile unlinks it; renaming over an
+/// archive name just shadows it (the VFile wins lookups anyway).
+pub fn fs_rename(old: &[u8], new: &[u8]) -> u64 {
+    const EROFS_: u64 = (-30i64) as u64;
+    const EINVAL_: u64 = (-22i64) as u64;
+    const ENAMETOOLONG_: u64 = (-36i64) as u64;
+    if old.is_empty() || new.is_empty() || old == b"." || new == b"." {
+        return EINVAL_;
+    }
+    if new.len() > 32 {
+        return ENAMETOOLONG_;
+    }
+    let Some(i) = vfile_find(old) else {
+        return if fs_lookup(old).is_some() { EROFS_ } else { ENOENT };
+    };
+    if let Some(j) = vfile_find(new) {
+        if j == i {
+            return 0; // rename onto self is a no-op
+        }
+        vfile_remove(j); // rename replaces the target
+    }
+    let Some(v) = vfile(i) else { return ENOENT };
+    v.name = [0; 32];
+    v.name[..new.len()].copy_from_slice(new);
+    v.nlen = new.len();
+    0
+}
+
+/// Shared truncate core: shrink drops len; grow zero-fills the gap
+/// (vfile_grow's fresh capacity is pre-zeroed; same-cap regrow is
+/// not — write_bytes covers both). EFBIG past the per-file ceiling.
+fn vfile_truncate(v: &mut VFile, len: u64) -> u64 {
+    const EFBIG_: u64 = (-27i64) as u64;
+    if len > VFILE_MAX as u64 {
+        return EFBIG_;
+    }
+    let need = len as usize;
+    let r = vfile_grow(v, need);
+    if r != 0 {
+        return r;
+    }
+    if need > v.len {
+        // SAFETY: grow made [0, need) valid; v.len <= need here.
+        unsafe { core::ptr::write_bytes(v.data.add(v.len), 0, need - v.len) };
+    }
+    v.len = need;
+    0
+}
+
+/// truncate(path, len): VFiles only — archive members are EROFS.
+pub fn fs_truncate(path: &[u8], len: u64) -> u64 {
+    const EROFS_: u64 = (-30i64) as u64;
+    const EISDIR_: u64 = (-21i64) as u64;
+    if path.is_empty() || path == b"." {
+        return EISDIR_;
+    }
+    let Some(i) = vfile_find(path) else {
+        return if fs_lookup(path).is_some() { EROFS_ } else { ENOENT };
+    };
+    let Some(v) = vfile(i) else { return ENOENT };
+    vfile_truncate(v, len)
+}
+
+/// ftruncate(fd, len): writable Ram OFD only. Linux's fmode check
+/// gives EINVAL on O_RDONLY; a cpio-file OFD isn't a regular
+/// writable file either — EINVAL there too.
+pub fn fd_ftruncate(fd: u64, len: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    if o.accmode == 0 {
+        return EINVAL;
+    }
+    let FdKind::Ram(i) = o.kind else { return EINVAL };
+    let Some(v) = vfile(i) else { return EBADF };
+    vfile_truncate(v, len)
+}
+
+/// fsync/fdatasync(fd): RAM files have nothing to flush and archive
+/// files nothing to dirty — the honest answer to a valid fd is 0.
+pub fn fd_fsync(fd: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EBADF };
+    if ofd(t, fd).is_none() {
+        return EBADF;
+    }
+    0
 }
 
 /// lseek(fd, off, whence): regular files only — Stdin/Console return
@@ -2506,13 +2863,18 @@ pub fn fd_lseek(fd: u64, off: i64, whence: u64) -> u64 {
         }
         return EINVAL;
     }
-    let FdKind::File(data) = &o.kind else {
-        return ESPIPE;
+    let dlen = match &o.kind {
+        FdKind::File(d) => d.len(),
+        FdKind::Ram(i) => match vfile(*i) {
+            Some(v) => v.len,
+            None => return EBADF,
+        },
+        _ => return ESPIPE,
     };
     let base = match whence {
         0 => 0i64,                       // SEEK_SET
         1 => o.pos as i64,               // SEEK_CUR
-        2 => data.len() as i64,          // SEEK_END
+        2 => dlen as i64,                // SEEK_END
         _ => return EINVAL,
     };
     let Some(np) = base.checked_add(off) else {
@@ -2544,14 +2906,28 @@ pub fn fd_pread(fd: u64, buf: u64, len: u64, pos: i64) -> u64 {
     }
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
-    let FdKind::File(data) = o.kind else { return ESPIPE_ };
+    if o.accmode == 1 {
+        return EBADF; // O_WRONLY — fmode check precedes kind checks
+    }
+    let (data, dlen) = match &o.kind {
+        FdKind::File(d) => (d.as_ptr(), d.len()),
+        FdKind::Ram(i) => match vfile(*i) {
+            Some(v) => (v.data as *const u8, v.len),
+            None => return EBADF,
+        },
+        _ => return ESPIPE_,
+    };
     if len > 0 && !range_ok_w(buf, len) {
         return EFAULT;
     }
-    let p = (pos as usize).min(data.len());
-    let n = (len as usize).min(data.len() - p);
-    // SAFETY: buf validated writable for len >= n bytes.
-    unsafe { (buf as *mut u8).copy_from(data.as_ptr().add(p), n) };
+    let p = (pos as usize).min(dlen);
+    let n = (len as usize).min(dlen - p);
+    if n == 0 {
+        return 0; // also skips .add on a null VFile buffer
+    }
+    // SAFETY: buf validated writable for len >= n bytes; data is a
+    // live cpio slice or a kmalloc'd VFile buffer of dlen bytes.
+    unsafe { (buf as *mut u8).copy_from(data.add(p), n) };
     n as u64
 }
 
@@ -2726,6 +3102,20 @@ fn ofd_release(oi: usize) {
     }
     if let FdKind::Tcp(i) = kind {
         tcp_sock_close(i);
+    }
+    if let FdKind::Ram(i) = kind {
+        // unlinked-while-open storage dies with its last OFD; a
+        // still-linked file is owned by the VFS slot and stays.
+        if let Some(v) = vfile(i) {
+            if v.unlinked {
+                if !v.data.is_null() {
+                    // SAFETY: v.data was kmalloc'd at v.cap; the slot
+                    // goes None right after so nothing can touch it.
+                    unsafe { kalloc::kfree(v.data) };
+                }
+                unsafe { (*core::ptr::addr_of_mut!(VFILES))[i] = None };
+            }
+        }
     }
 }
 
@@ -2933,6 +3323,9 @@ fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
         FdKind::Console => POLLOUT,
         // File and dir reads never block (EOF reads return 0).
         FdKind::File(_) | FdKind::Dir => POLLIN,
+        // A RAM file is a regular file: reads never block at EOF and
+        // writes never block — Linux polls both ready always.
+        FdKind::Ram(_) => POLLIN | POLLOUT,
         // UDP: readable when a datagram queues; send never blocks.
         FdKind::Udp(i) => {
             let socks = unsafe { &*core::ptr::addr_of!(UDPSOCKS) };
@@ -3357,7 +3750,7 @@ pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
         });
         FdKind::Tcp(si)
     };
-    ofds[oi] = Some(OpenFile { kind, pos: 0, refs: 1 });
+    ofds[oi] = Some(OpenFile { kind, pos: 0, refs: 1, append: false, accmode: 2 });
     t.fds[fi] = Some(oi as u8);
     cloexec_set(t, fi, ty & SOCK_CLOEXEC != 0);
     fi as u64
@@ -3718,6 +4111,8 @@ fn tcp_mint_fd(t: &mut Task, ci: usize, ce: bool) -> Result<u64, u64> {
         kind: FdKind::Tcp(ci),
         pos: 0,
         refs: 1,
+        append: false,
+        accmode: 2,
     });
     t.fds[fi] = Some(oi as u8);
     cloexec_set(t, fi, ce);
@@ -4472,12 +4867,31 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
     if !range_ok_w(buf, count) {
         return EFAULT;
     }
-    let Some(arc) = (unsafe { *core::ptr::addr_of!(INITRD) }) else {
-        return 0;
-    };
     let mut off = 0usize;
     let mut idx = o.pos;
-    for (name, _data) in crate::cpio::entries(arc).skip(o.pos) {
+    // The directory is the archive entries [0, arc_n) followed by the
+    // live VFILES — pos walks one virtual concatenation.
+    let mut names: [Option<&[u8]>; 64] = [None; 64];
+    let mut n = 0usize;
+    if let Some(arc) = unsafe { *core::ptr::addr_of!(INITRD) } {
+        for (name, _data) in crate::cpio::entries(arc) {
+            if n >= names.len() {
+                break;
+            }
+            names[n] = Some(name);
+            n += 1;
+        }
+    }
+    for v in unsafe { &*core::ptr::addr_of!(VFILES) }.iter().flatten() {
+        if n >= names.len() {
+            break;
+        }
+        if !v.unlinked {
+            names[n] = Some(&v.name[..v.nlen]);
+            n += 1;
+        }
+    }
+    for name in names[..n].iter().flatten().skip(o.pos) {
         // linux_dirent64: ino@0 u64, off@8 u64, reclen@16 u16,
         // type@18 u8, name@19 NUL-terminated — padded to 8.
         let reclen = (19 + name.len() + 1 + 7) & !7;

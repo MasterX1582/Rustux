@@ -254,6 +254,16 @@ const NR_FCNTL: u64 = 72;
 const NR_OPENAT: u64 = 257;
 const NR_DUP3: u64 = 292;
 const NR_ACCEPT4: u64 = 288;
+const NR_FSYNC: u64 = 74;
+const NR_FDATASYNC: u64 = 75;
+const NR_TRUNCATE: u64 = 76;
+const NR_FTRUNCATE: u64 = 77;
+const NR_RENAME: u64 = 82;
+const NR_CREAT: u64 = 85;
+const NR_UNLINK: u64 = 87;
+const NR_UNLINKAT: u64 = 263;
+const NR_RENAMEAT: u64 = 264;
+const NR_RENAMEAT2: u64 = 276;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -359,6 +369,16 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_FACCESSAT => sys_access(a2),
         NR_READLINK => sys_readlink(a1, a2, a3),
         NR_READLINKAT => sys_readlink(a2, a3, a4),
+        NR_FSYNC | NR_FDATASYNC => user::fd_fsync(a1),
+        NR_TRUNCATE => sys_truncate(a1, a2),
+        NR_FTRUNCATE => user::fd_ftruncate(a1, a2),
+        NR_RENAME => sys_renameat2(u64::MAX, a1, u64::MAX, a2, 0),
+        NR_RENAMEAT => sys_renameat2(a1, a2, a3, a4, 0),
+        NR_RENAMEAT2 => sys_renameat2(a1, a2, a3, a4, a5),
+        // creat(path, mode) = open(path, O_CREAT|O_WRONLY|O_TRUNC).
+        NR_CREAT => sys_openat(u64::MAX, a1, 0o1101, a2),
+        NR_UNLINK => sys_unlinkat(u64::MAX, a1, 0),
+        NR_UNLINKAT => sys_unlinkat(a1, a2, a3),
         NR_GETRLIMIT => user::sys_prlimit64(0, a1, 0, a2),
         NR_CLOCK_GETRES => user::sys_clock_getres(a1, a2),
         NR_SCHED_YIELD => user::sys_sched_yield(ctx),
@@ -506,20 +526,88 @@ fn sys_stat_path(path: u64, statbuf: u64) -> u64 {
     user::newfstatat(name, statbuf)
 }
 
-/// access/faccessat(path, mode): a flat read-only archive only has
-/// existence to report — "/" and real members are accessible.
+/// access/faccessat(path, mode): a flat namespace only has
+/// existence to report — root, archive members, RAM files.
 fn sys_access(path: u64) -> u64 {
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
         Err(e) => return e,
     };
+    if n == 0 {
+        return ENOENT; // access("") is ENOENT, not the root
+    }
     let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    if name.is_empty() || user::fs_lookup(name).is_some() {
+    if user::fs_exists(name) {
         0
     } else {
         ENOENT
     }
+}
+
+/// unlink/unlinkat(dirfd, path, flags): one flat directory, so dirfd
+/// is ABI-shape (FDCWD or a dir fd — same resolution either way).
+/// flags with AT_REMOVEDIR → EISDIR here; rmdir doesn't exist yet.
+fn sys_unlinkat(dirfd: u64, path: u64, flags: u64) -> u64 {
+    const EBADF_: u64 = (-9i64) as u64;
+    const ENOTDIR_: u64 = (-20i64) as u64;
+    const EISDIR_: u64 = (-21i64) as u64;
+    const AT_REMOVEDIR: u64 = 0x200;
+    if flags & AT_REMOVEDIR != 0 {
+        return EISDIR_;
+    }
+    if flags != 0 {
+        return EINVAL;
+    }
+    let dfd = dirfd as u32 as i32;
+    if dfd != -100 && dirfd != u64::MAX {
+        let Some(is_dir) = user::fd_is_dir(dfd as u64) else {
+            return EBADF_;
+        };
+        if !is_dir {
+            return ENOTDIR_;
+        }
+    }
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    user::fs_unlink(name)
+}
+
+/// renameat2(olddirfd, old, newdirfd, new, flags): flat namespace —
+/// both dirfds only gate on dir-ness like openat's; nonzero flags
+/// (RENAME_EXCHANGE/NOREPLACE/WHITEOUT) are EINVAL, renameat passes 0.
+fn sys_renameat2(_odfd: u64, old: u64, _ndfd: u64, new: u64, flags: u64) -> u64 {
+    if flags != 0 {
+        return EINVAL;
+    }
+    let mut oname = [0u8; 257];
+    let on = match copy_user_path(old, &mut oname) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let mut nname = [0u8; 257];
+    let nn = match copy_user_path(new, &mut nname) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let old = if oname[0] == b'/' { &oname[1..on] } else { &oname[..on] };
+    let new = if nname[0] == b'/' { &nname[1..nn] } else { &nname[..nn] };
+    user::fs_rename(old, new)
+}
+
+/// truncate(path, len): getname then the shared VFile truncate.
+fn sys_truncate(path: u64, len: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    user::fs_truncate(name, len)
 }
 
 /// readlink/readlinkat(path, buf, len): "/proc/self/exe" is the only
