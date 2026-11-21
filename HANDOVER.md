@@ -1019,3 +1019,42 @@ the task model now supports fork/clone/wait as the next rung.
   divergences recorded: rsh has no job control/globbing/redirection
   builtins yet, PATH is hardcoded as "/name" for bare commands,
   exit only reports numeric status.
+
+## CLONE_VM — shared address space, real thread memory model (audit run-75)
+
+- clone(flags&CLONE_VM, stack, ...) now builds a task on the SAME
+  pml4 instead of a deep copy: MM_REFS (pml4,users) ledger marks
+  first share at refs=2, each reap decrements, and only the last
+  user frees the user mappings + pml4 frame. The child gets its own
+  kernel stack, its own user rsp on the caller-supplied stack,
+  rax=0, and fs_base=tls when CLONE_SETTLS.
+- exec() on a shared-mm task detaches like exec_mmap: a fresh
+  zeroed pml4 replaces the shared one ONLY after the alloc
+  succeeds; mm_release then decides — siblings alive -> swap in the
+  new pml4, sole survivor -> free mappings and reuse the old one.
+  (Self-review caught the alloc-after-release ordering that would
+  have corrupted the refcount on ENOMEM.)
+- Still per-task: fd tables (OFD refs bumped — Linux would need
+  CLONE_FILES to share), the ranges ledger (sibling mmaps land in
+  the shared page tables — real sharing for user access — but not
+  in other tasks' range_ok view: fails closed, documented),
+  sigmask/pending, and distinct pids — a CLONE_VM child is a
+  normal wait4 child (no CLONE_THREAD group semantics yet).
+- sys_clone flag gate now accepts {SIGCHLD-exit, PARENT_SETTID,
+  CHILD_SETTID, CHILD_CLEARTID, CLONE_VM, CLONE_SETTLS};
+  CLONE_VM requires a nonzero stack (EINVAL) — running a thread
+  on its parent's rsp is unbootable — and plain-fork SETTLS
+  writes the child's fs_base post-fork like Linux.
+- MAX_INITRD bumped 8->16MiB: the archive crossed 8MiB with
+  vmtest.elf inside (read-loop cap returned None — "none found").
+- Proof: kernel/user/vmtest.c (static-pie) — glibc clone(CLONE_VM)
+  child sees the parent's pre-clone shared_val, writes it + an
+  arg pointer through shared memory, exits 7; a
+  CLONE_VM|CLONE_SETTLS child reads fs_base back via
+  arch_prctl(ARCH_GET_FS) equal to the fake-TCB arg; honesty
+  table (FILES/THREAD ENOSYS, no-stack EINVAL). Note: raw
+  syscall(SYS_clone,...,newstack) cannot be used from C — the
+  wrapper's return address sits on the PARENT stack — the glibc
+  clone() wrapper exists precisely to avoid that.
+- Verified: vmtest 0 failures + full suite green, 27 tasks,
+  frames equal, boot PASS x2, native VM verified.
