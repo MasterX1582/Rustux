@@ -362,7 +362,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         // sign-extends. Without the i32 cast, wait4(-1) becomes a
         // search for pid 4294967295 -> ECHILD (found by real dash).
         NR_WAIT4 => user::wait4(ctx, a1 as i32 as i64, a2, a3),
-        NR_KILL => user::kill(a1, a2),
+        NR_KILL => user::kill(a1 as i32 as i64, a2),
         NR_GETPPID => user::getppid(),
         NR_GETDENTS => user::fd_getdents(a1, a2, a3),
         // newfstatat(dirfd, path, buf, flags): the archive is flat —
@@ -410,13 +410,12 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_GETRLIMIT => user::sys_prlimit64(0, a1, 0, a2),
         NR_CLOCK_GETRES => user::sys_clock_getres(a1, a2),
         NR_SCHED_YIELD => user::sys_sched_yield(ctx),
-        // Single-process-group model: pgrp/sid == pid.
-        NR_GETPGRP => user::getpid(),
-        NR_GETPGID | NR_GETSID => {
-            if a1 == 0 { user::getpid() } else { a1 }
-        }
-        NR_SETSID => user::getpid(),
-        NR_SETPGID | NR_SETPRIORITY => 0,
+        NR_GETPGRP => user::sys_getpgrp(),
+        NR_GETPGID => user::sys_getpgid(a1),
+        NR_GETSID => user::sys_getsid(a1),
+        NR_SETSID => user::sys_setsid(),
+        NR_SETPGID => user::sys_setpgid(a1, a2),
+        NR_SETPRIORITY => 0,
         NR_GETPRIORITY => 0,
         NR_UMASK => user::sys_umask(a1),
         NR_SYSINFO => user::sys_sysinfo(a1),

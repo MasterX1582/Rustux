@@ -120,6 +120,10 @@ enum TaskState {
     Runnable,
     Exited,
     Blocked,
+    /// Job-control stop (SIGSTOP/TSTP/TTIN/TTOU, default disp):
+    /// never picked, never a zombie — SIGCONT resumes it, SIGKILL
+    /// pulls it out to die. wait4 reports it under WUNTRACED.
+    Stopped,
 }
 
 /// What a Blocked task sleeps on — wait4's child, or a pipe's
@@ -165,6 +169,8 @@ enum WaitOn {
     /// exits — Linux's vfork_done completion. Uninterruptible by
     /// signals (kill() skips it; pending delivers after resume).
     Vfork(u64),
+    /// wait4(-pgid)/wait4(0): any child in this process group.
+    Group(u64),
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -290,9 +296,15 @@ fn fxrstor(fx: &FxState) {
 const SIG_DFL: u64 = 0;
 const SIG_IGN: u64 = 1;
 const SIGCHLD: usize = 17;
+const SIGCONT: usize = 18;
 const SIGKILL: usize = 9;
 const SIGSTOP: usize = 19;
 const SIGSEGV: usize = 11;
+/// wait4 option bits (Linux ABI): don't block, report stopped
+/// children, report continued children.
+const WNOHANG: u64 = 1;
+const WUNTRACED: u64 = 2;
+const WCONTINUED: u64 = 8;
 /// Bytes pushed on the task's user stack per delivered signal:
 /// restorer (8) + signo (8) + the interrupted UCtx (160).
 const SIGFRAME_SIZE: u64 = 176;
@@ -300,10 +312,17 @@ const SIGFRAME_SIZE: u64 = 176;
 // change must grow the frame and both copy sites with it.
 const _: () = assert!(core::mem::size_of::<UCtx>() == 160);
 
-/// Signals whose default is to do nothing — job-control and
-/// informational signals; everything else kills by default.
+/// Signals whose default is to do nothing — informational only;
+/// everything else kills (or stops, below) by default. 17=SIGCHLD,
+/// 18=SIGCONT, 23=SIGURG, 28=SIGWINCH.
 fn sig_default_ignore(sig: usize) -> bool {
-    matches!(sig, 17 | 18 | 19 | 20 | 23 | 28)
+    matches!(sig, 17 | 18 | 23 | 28)
+}
+
+/// Signals whose default is job-control stop: SIGSTOP(19, also
+/// uncatchable/unblockable), SIGTSTP(20), SIGTTIN(21), SIGTTOU(22).
+fn sig_default_stop(sig: usize) -> bool {
+    matches!(sig, 19 | 20 | 21 | 22)
 }
 
 /// Write `data` into `pml4`'s user space byte-wise — each byte
@@ -341,11 +360,13 @@ fn write_task_bytes_force(pml4: u64, va: u64, data: &[u8]) -> bool {
 /// kills with wait status = bare signo (the Linux wstatus shape).
 /// An unwritable stack kills the task like Linux's delivery SEGV.
 /// Lowest-numbered deliverable signal: pending AND unmasked. SIGKILL
-/// is always deliverable — the mask can't stop it (Linux semantics:
-/// sig_kernel_only signals ignore the blocked set on delivery).
+/// and SIGSTOP are always deliverable — the mask can't stop them
+/// (Linux semantics: sig_kernel_only signals ignore the blocked
+/// set on delivery).
 #[inline]
 fn unmasked_pending(t: &Task) -> Option<usize> {
-    let unmasked = t.pending & (!t.sigmask | (1u32 << (SIGKILL - 1)));
+    const FORCE: u32 = (1 << (SIGKILL - 1)) | (1 << (SIGSTOP - 1));
+    let unmasked = t.pending & (!t.sigmask | FORCE);
     (unmasked != 0).then(|| unmasked.trailing_zeros() as usize + 1)
 }
 
@@ -362,6 +383,17 @@ fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
         match sigt(t).handlers.get(sig - 1).copied().unwrap_or(SIG_DFL) {
             SIG_IGN => {}
             SIG_DFL => {
+                if sig_default_stop(sig) {
+                    // A stop dequeues a pending SIGCONT, transitions
+                    // to Stopped, and tells the parent via the
+                    // WUNTRACED machinery + SIGCHLD.
+                    t.pending &= !(1u32 << (SIGCONT as u8 - 1));
+                    t.state = TaskState::Stopped;
+                    t.stop_sig = sig as u8;
+                    let (cp, cg, cpp) = (t.pid, t.pgid, t.ppid);
+                    child_change(cp, cg, cpp, ((sig as u64) << 8) | 0x7f, WUNTRACED);
+                    return;
+                }
                 if sig_default_ignore(sig) {
                     continue;
                 }
@@ -423,6 +455,14 @@ pub fn fault_signal(signo: u64, ctx: &mut UCtx) -> (u64, u64, u64) {
             if t.state == TaskState::Runnable {
                 return (ctx.rip, ctx.rsp, ctx.rdi);
             }
+            if t.state == TaskState::Stopped {
+                // A job-control stop won the delivery race: resume
+                // at the faulting ctx so SIGCONT re-faults into the
+                // handler path. Diverges — the CONT'd task restarts
+                // from t.ctx via switch_to, never unwinds back here.
+                t.ctx = *ctx;
+                block_switch();
+            }
             // Frame push failed — maybe_deliver already set
             // exit_status=SIGSEGV.
         } else {
@@ -437,13 +477,23 @@ pub fn fault_signal(signo: u64, ctx: &mut UCtx) -> (u64, u64, u64) {
 /// Deliver pending signals into task n's saved ctx for a pick-time
 /// resume; false when the delivery killed it (caller re-picks).
 fn deliver_for(n: usize) -> bool {
-    let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
-    if deliverable(t) {
-        let mut c = t.ctx;
-        maybe_deliver(t, &mut c);
-        t.ctx = c;
+    let st = {
+        let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
+        if deliverable(t) {
+            let mut c = t.ctx;
+            maybe_deliver(t, &mut c);
+            t.ctx = c;
+        }
+        t.state
+    };
+    if st == TaskState::Exited {
+        // A fatal signal landed at pick — task_exit_inner's whole
+        // zombie/wake side still has to run or a wait4-blocked
+        // parent sleeps forever.
+        exit_bookkeeping(n);
+        return false;
     }
-    t.state == TaskState::Runnable
+    st == TaskState::Runnable
 }
 
 /// pick_next + signal delivery: the chosen task's ctx is rewritten
@@ -467,38 +517,61 @@ pub fn deliver_current(ctx: &mut UCtx) {
     if cur == usize::MAX {
         return;
     }
-    let dead = {
+    let (dead, stopped) = {
         let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
         match tasks.get_mut(cur).and_then(|s| s.as_mut()) {
             Some(t) => {
                 maybe_deliver(t, ctx);
-                t.state == TaskState::Exited
+                if t.state == TaskState::Stopped {
+                    // Resume image = the post-syscall ctx — rax keeps
+                    // the syscall's result across the stop.
+                    t.ctx = *ctx;
+                }
+                (t.state == TaskState::Exited, t.state == TaskState::Stopped)
             }
-            None => false,
+            None => (false, false),
         }
     };
     if dead {
         task_exit_inner() // exit_status already carries the signo
     }
+    if stopped {
+        // Never returns — SIGCONT makes us Runnable again later.
+        block_switch();
+    }
 }
 
-/// kill(pid, sig): pend a signal on the target. A blocked target
-/// wakes with -EINTR — the interrupted-syscall semantic (its saved
-/// ctx then delivers the handler on resume). Zombie targets accept
-/// the signal silently like Linux. ESRCH when no such pid.
-pub fn kill(pid: u64, sig: u64) -> u64 {
-    const ESRCH: u64 = (-3i64) as u64;
-    if sig == 0 || sig > 31 {
-        return EINVAL;
-    }
-    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
-    let Some(t) = tasks.iter_mut().flatten().find(|t| t.pid == pid) else {
-        return ESRCH;
-    };
+/// Per-target signal pendent shared by kill()/kill_pgrp: pends the
+/// signal, applies the SIGCONT/STOP/KILL state transitions, and
+/// wakes a Blocked target with -EINTR when the signal interrupts.
+/// Returns Some((pid, pgid, ppid)) when it resumed a Stopped task —
+/// the caller reports the WCONTINUED event to the parent after the
+/// iteration (re-walking TASKS mid-loop would alias the borrow).
+fn pend_one(t: &mut Task, sig: u64) -> Option<(u64, u64, u64)> {
     if t.state == TaskState::Exited {
-        return 0;
+        return None;
     }
-    t.pending |= 1u32 << (sig - 1);
+    let mut contd = None;
+    if sig as usize == SIGCONT {
+        // CONT dequeues pending stops, resumes a stopped task, and
+        // still pends itself — a caught handler wants the event.
+        t.pending &= !(0xfu32 << (SIGSTOP - 1)); // sigs 19..22
+        t.pending |= 1u32 << (SIGCONT - 1);
+        if t.state == TaskState::Stopped {
+            t.state = TaskState::Runnable;
+            t.cont_report = true;
+            contd = Some((t.pid, t.pgid, t.ppid));
+        }
+    } else {
+        if sig as usize == SIGSTOP {
+            t.pending &= !(1u32 << (SIGCONT - 1)); // STOP drops CONT
+        }
+        t.pending |= 1u32 << (sig - 1);
+        if t.state == TaskState::Stopped && sig as usize == SIGKILL {
+            // A stopped task resumes only to die on the next pick.
+            t.state = TaskState::Runnable;
+        }
+    }
     // Wake a blocked target only when the signal actually interrupts:
     // an ignored disposition (SIG_IGN, or a default-ignore signal)
     // must not turn a sleeping syscall into a spurious EINTR.
@@ -528,6 +601,131 @@ pub fn kill(pid: u64, sig: u64) -> u64 {
         t.wait_deadline = 0;
         t.wait_ptr2 = 0;
         t.state = TaskState::Runnable;
+    }
+    contd
+}
+
+/// Parent-side notification of a child's stop/continue event: wake
+/// a wait4 caller whose option flags (carried in wait_len) cover
+/// this event class and whose pid/pgrp selector matches, then
+/// raise the parent's SIGCHLD — Linux's do_notify_parent pair.
+fn child_change(cpid: u64, cpgid: u64, cppid: u64, status: u64, flag: u64) {
+    if cppid == 0 {
+        return;
+    }
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let mut delivered = false;
+    for s in tasks.iter_mut() {
+        let Some(p) = s else { continue };
+        if p.state == TaskState::Blocked
+            && p.pid == cppid
+            && p.wait_len & flag != 0
+            && (p.wait_on == WaitOn::Any
+                || p.wait_on == WaitOn::Child(cpid)
+                || p.wait_on == WaitOn::Group(cpgid))
+        {
+            p.ctx.rax = cpid;
+            if p.wait_ptr != 0 {
+                if let Some(pa) = translate(p.pml4, p.wait_ptr) {
+                    // SAFETY: pa is a writable user dword in p's map.
+                    unsafe { (pa as *mut u32).write_unaligned(status as u32) };
+                }
+            }
+            p.state = TaskState::Runnable;
+            p.wait_on = WaitOn::None;
+            p.wait_ptr = 0;
+            p.wait_len = 0;
+            delivered = true;
+        }
+    }
+    // A delivered report is consumed — without this, the child's
+    // still-set flag makes the NEXT wait4 re-emit the same event.
+    if delivered {
+        if let Some(c) = tasks.iter_mut().flatten().find(|t| t.pid == cpid) {
+            if flag == WUNTRACED {
+                c.stop_sig = 0;
+            }
+            if flag == WCONTINUED {
+                c.cont_report = false;
+            }
+        }
+    }
+    kill(cppid as i64, SIGCHLD as u64);
+}
+
+/// Signal every member of a process group — shared by kill(-pgid),
+/// the tty ^C/^\/^Z path, and the SIGTTIN job-control gate.
+fn kill_pgrp(pgid: u64, sig: u64) {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let mut conts = [(0u64, 0u64, 0u64); MAX_TASKS];
+    let mut ncont = 0usize;
+    for s in tasks.iter_mut() {
+        let Some(t) = s else { continue };
+        if t.pgid == pgid {
+            if let Some(c) = pend_one(t, sig) {
+                conts[ncont] = c;
+                ncont += 1;
+            }
+        }
+    }
+    for c in conts.iter().take(ncont) {
+        child_change(c.0, c.1, c.2, 0xffff, WCONTINUED);
+    }
+}
+
+/// kill(pid, sig): pend a signal on the target set. pid > 0 is one
+/// task; pid == 0 the caller's own group; pid == -1 every task but
+/// the caller; pid < -1 the group -pid. sig 0 is the existence
+/// probe — 0 when a target exists, ESRCH otherwise. Zombie targets
+/// accept the signal silently like Linux.
+pub fn kill(pid: i64, sig: u64) -> u64 {
+    const ESRCH: u64 = (-3i64) as u64;
+    if sig > 31 {
+        return EINVAL;
+    }
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let (my_pid, my_pgid) = tasks
+        .get(cur)
+        .and_then(|s| s.as_ref())
+        .map(|t| (t.pid, t.pgid))
+        .unwrap_or((0, 0));
+    let hits = |t: &Task| {
+        if pid > 0 {
+            t.pid == pid as u64
+        } else if pid == 0 {
+            t.pgid == my_pgid
+        } else if pid == -1 {
+            t.pid != my_pid
+        } else {
+            t.pgid == (-pid) as u64
+        }
+    };
+    if sig == 0 {
+        return if tasks.iter().flatten().any(|t| hits(t)) {
+            0
+        } else {
+            ESRCH
+        };
+    }
+    let mut conts = [(0u64, 0u64, 0u64); MAX_TASKS];
+    let mut ncont = 0usize;
+    let mut found = false;
+    for s in tasks.iter_mut() {
+        let Some(t) = s else { continue };
+        if hits(t) {
+            found = true;
+            if let Some(c) = pend_one(t, sig) {
+                conts[ncont] = c;
+                ncont += 1;
+            }
+        }
+    }
+    if !found {
+        return ESRCH;
+    }
+    for c in conts.iter().take(ncont) {
+        child_change(c.0, c.1, c.2, 0xffff, WCONTINUED);
     }
     0
 }
@@ -696,6 +894,21 @@ pub struct Task {
     /// CLONE_CHILD_CLEARTID address in this task's address space —
     /// zeroed at exit with a futex wake on it (pthread_join's wait).
     clear_ctid: u64,
+    /// Process-group id (pid of the group's leader). Fork/clone
+    /// inherit; setpgid moves a task within its own session.
+    pgid: u64,
+    /// Session id (pid of the session leader). Fork inherits;
+    /// setsid starts a new one and drops the controlling tty.
+    sid: u64,
+    /// Exec'd at least once since fork — blocks a parent's later
+    /// setpgid on it (Linux's EACCES rule).
+    did_exec: bool,
+    /// The signal that stopped this task (0 = not stop-reported).
+    /// wait4 WUNTRACED consumes it once per stop.
+    stop_sig: u8,
+    /// Resumed by SIGCONT since the last WCONTINUED report —
+    /// consumed once per continue, like stop_sig.
+    cont_report: bool,
     /// Per-task FPU/SSE state -- fxsave'd on every way out,
     /// fxrstor'd on every resume so xmm state never crosses tasks.
     fx: FxState,
@@ -1473,6 +1686,13 @@ fn load(img: &[u8]) -> Option<Task> {
         fs_base: 0,
         rseq_va: 0,
         clear_ctid: 0,
+        // Boot session: every spawned task is its own group leader
+        // inside session 1 — the console's owning session.
+        pgid: 0,
+        sid: 1,
+        did_exec: true,
+        stop_sig: 0,
+        cont_report: false,
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
     // global OFD, like separate opens of /dev/console.
@@ -2340,6 +2560,14 @@ static mut TERMIOS: [u8; 36] = [
     0x12, 0x0f, 0x17, 0x16, 0, 0, 0,  // c_cc[19]
 ];
 
+/// The console's owning session and its foreground process group —
+/// Linux's tty->session / tty->pgrp pair. Spawned tasks all start
+/// in session 1; setsid leaves it (losing the ctty), tcsetpgrp
+/// moves the foreground. FG_PGID 0 = unset (console behaves like a
+/// session leader's own group — no job-control gates apply).
+static mut CONSOLE_SID: u64 = 1;
+static mut FG_PGID: u64 = 0;
+
 // --- tty input side: scancode -> ldisc -> read() ------------------
 /// Canonical edit buffer (the line being typed) and the completed-
 /// byte queue reads drain. Linux splits these the same way: in
@@ -2376,10 +2604,25 @@ fn stdin_echo(b: u8) {
     crate::log::printk(format_args!("{}", b as char));
 }
 
-/// Signal the foreground — in our single-pgrp model that's the task
-/// blocked reading stdin; nobody blocked means nobody gets it (a
-/// real ctty/pgrp comes with the shell rung).
+/// Signal the foreground process group — Linux's ldisc sends ^C/
+/// ^\/^Z to the WHOLE foreground pgrp. When no fg group is set we
+/// fall back to the blocked-reader heuristic (single-group boot
+/// tasks, before any shell takes job control).
 fn stdin_sig(sig: u64) {
+    let (fg, csid) = unsafe { (FG_PGID, CONSOLE_SID) };
+    if fg != 0 {
+        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+        if tasks
+            .iter()
+            .flatten()
+            .any(|t| t.pgid == fg && t.sid == csid)
+        {
+            kill_pgrp(fg, sig);
+            return;
+        }
+        // Stale fg group (its last member died) — fall through to
+        // the reader heuristic rather than drop the keystroke.
+    }
     let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
     let Some(pid) = tasks.iter().flatten().find_map(|t| {
         (t.state == TaskState::Blocked && t.wait_on == WaitOn::Stdin)
@@ -2387,7 +2630,7 @@ fn stdin_sig(sig: u64) {
     }) else {
         return;
     };
-    let _ = kill(pid, sig);
+    let _ = kill(pid as i64, sig);
 }
 
 /// Submit the edit buffer to the ready queue — drops the excess if
@@ -2421,7 +2664,8 @@ fn stdin_key(c: u8) {
         (lf & 1 != 0, lf & 2 != 0, lf & 8 != 0, lf & 0x10 != 0);
     let intr = t_cc(0) != 0 && c == t_cc(0); // VINTR  ^C -> SIGINT
     let quit = t_cc(1) != 0 && c == t_cc(1); // VQUIT  ^\ -> SIGQUIT
-    if isig && (intr || quit) {
+    let susp = t_cc(10) != 0 && c == t_cc(10); // VSUSP ^Z -> SIGTSTP
+    if isig && (intr || quit || susp) {
         // Linux flushes input unless NOFLSH; we always flush (the
         // flag is unset in the cooked defaults).
         unsafe {
@@ -2430,10 +2674,10 @@ fn stdin_key(c: u8) {
         };
         if echo {
             stdin_echo(b'^');
-            stdin_echo(if intr { b'C' } else { b'\\' });
+            stdin_echo(if intr { b'C' } else if quit { b'\\' } else { b'Z' });
             stdin_echo(b'\n');
         }
-        stdin_sig(if intr { 2 } else { 3 });
+        stdin_sig(if intr { 2 } else if quit { 3 } else { 20 });
         return;
     }
     if !icanon {
@@ -2695,22 +2939,46 @@ pub fn sys_ioctl(fd: u64, req: u64, arg: u64) -> u64 {
             if !tty {
                 return ENOTTY_;
             }
+            // Linux's rule: the fd must be OUR controlling tty —
+            // a task outside the console's session gets ENOTTY.
+            if t.sid != unsafe { CONSOLE_SID } {
+                return ENOTTY_;
+            }
             if !range_ok_w(arg, 4) {
                 return EFAULT;
             }
-            // One process group model: the fg pgrp is our own.
+            // No fg set yet = the caller's own group (a session
+            // leader's console always fronts its own pgrp).
+            let fg = unsafe { FG_PGID };
+            let g = if fg == 0 { t.pgid } else { fg };
             // SAFETY: arg validated writable for 4 bytes.
-            unsafe { (arg as *mut u32).write_unaligned(t.pid as u32) };
+            unsafe { (arg as *mut u32).write_unaligned(g as u32) };
             0
         }
         TIOCSPGRP => {
             if !tty {
                 return ENOTTY_;
             }
+            if t.sid != unsafe { CONSOLE_SID } {
+                return ENOTTY_;
+            }
             if !range_ok(arg, 4) {
                 return EFAULT;
             }
-            0 // the single pgrp is always foreground
+            // SAFETY: arg validated readable for 4 bytes.
+            let g = unsafe { (arg as *const u32).read_unaligned() } as u64;
+            // The new foreground must be a group inside OUR session
+            // (Linux: EINVAL not-our-tty, EPERM wrong-session group).
+            let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+            let ok = tasks
+                .iter()
+                .flatten()
+                .any(|x| x.pgid == g && x.sid == t.sid);
+            if !ok {
+                return (-1i64) as u64; // EPERM
+            }
+            unsafe { FG_PGID = g };
+            0
         }
         FIONREAD => {
             if !range_ok_w(arg, 4) {
@@ -2942,7 +3210,7 @@ fn wake_vfork_parent_of(child_pid: u64) {
 pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64) -> u64 {
     // With threads, tid names the target task; a bare tgid hits the
     // leader (tgid == leader pid), matching Linux tgkill semantics.
-    kill(if tid != 0 { tid } else { tgid }, sig)
+    kill(if tid != 0 { tid } else { tgid } as i64, sig)
 }
 
 /// rt_sigprocmask(how, set, oldset, sigsetsize): the per-task signal
@@ -3700,6 +3968,35 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     let Some(o) = ofd(t, fd) else { return EBADF };
     match &o.kind {
         FdKind::Stdin => {
+            // Job control: a background pgrp of the console's own
+            // session gets SIGTTIN'd on a tty read — the signal
+            // stops the group so `fg` can bring it forward. An
+            // orphaned group gets EIO; a blocked/ignored SIGTTIN
+            // reads through — Linux's tty_check_change(SIGTTIN).
+            let (fg, csid) = unsafe { (FG_PGID, CONSOLE_SID) };
+            let fg_live = fg != 0
+                && unsafe { &*core::ptr::addr_of!(TASKS) }
+                    .iter()
+                    .flatten()
+                    .any(|x| x.pgid == fg);
+            if t.sid == csid && fg_live && t.pgid != fg {
+                let h = sigt(t)
+                    .handlers
+                    .get(20) // SIGTTIN - 1
+                    .copied()
+                    .unwrap_or(SIG_DFL);
+                let bypass = h == SIG_IGN || t.sigmask & (1 << 20) != 0;
+                if !bypass {
+                    const EIO_: u64 = (-5i64) as u64;
+                    if pgrp_orphaned(t.pgid, t.sid) {
+                        return EIO_;
+                    }
+                    kill_pgrp(t.pgid, 21);
+                    if deliverable(t) {
+                        return (-4i64) as u64; // -EINTR: stop lands
+                    }
+                }
+            }
             let n = stdin_take(len as usize);
             match n {
                 usize::MAX => {
@@ -6971,6 +7268,7 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     t.stack_top = 0;
     t.fs_base = 0; // TLS dies with the old image — new one SET_FSs
     t.rseq_va = 0; // exec implicitly unregisters rseq
+    t.did_exec = true; // pgid/sid persist; parent setpgid now EACCES
     if !load_inner(t, &e, img) {
         return false;
     }
@@ -7048,6 +7346,7 @@ pub fn spawn(img: &[u8], name: &str) -> bool {
     t.ctx = UCtx::launch(t.entry, rsp);
     t.pid = next_pid();
     t.tgid = t.pid;
+    t.pgid = t.pid; // each spawned task leads its own group in sid 1
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     for s in tasks.iter_mut() {
         if s.is_none() {
@@ -7166,46 +7465,43 @@ fn die_signal(signo: u64) -> ! {
 /// Shared exit/signal-death teardown: mark Exited, wake a matching
 /// wait4 parent (status + pid), SIGCHLD the parent if it lives,
 /// orphan children, then switch away or unwind.
-fn task_exit_inner() -> ! {
-    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
-    let (cpid, cppid, wstatus, is_thread) = {
-        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
-        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
-            t.state = TaskState::Exited;
-            (t.pid, t.ppid, t.exit_status, t.tgid != t.pid)
-        } else {
-            (0, 0, 0, false)
-        }
+/// The exit bookkeeping for task index n — fd/sighand/fstab
+/// release, ctid wake, parent wait4 wake + SIGCHLD, child
+/// orphaning. task_exit_inner runs it for cur; deliver_for runs it
+/// when a pick-time signal delivery kills a runnable task — a
+/// signal death at pick would otherwise skip the whole zombie/wake
+/// side and strand a wait4-blocked parent forever.
+fn exit_bookkeeping(n: usize) {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let Some(t) = tasks.get_mut(n).and_then(|s| s.as_mut()) else {
+        return;
     };
+    t.state = TaskState::Exited;
+    let (cpid, cppid, wstatus, is_thread, cpgid) =
+        (t.pid, t.ppid, t.exit_status, t.tgid != t.pid, t.pgid);
     // exit_files(2): the dying task's fds release NOW, not at reap —
     // a pipe writer's OFD must hit refs=0 here so blocked readers
     // see EOF instead of waiting for the scheduler's reaper pass.
     // Scoped before the parent-wake loop: ofd_release can wake other
     // tasks (pipe_end_closed -> wake_pipe_waiters walks TASKS).
     {
-        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
-        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
-            t.release_fds();
-            t.release_sighand();
-            t.release_fstab();
-        }
+        let t = tasks.get_mut(n).and_then(|s| s.as_mut()).unwrap();
+        t.release_fds();
+        t.release_sighand();
+        t.release_fstab();
     }
     // CHILD_CLEARTID: zero *ctid through the dying task's tables and
     // futex-wake whoever sleeps on it — this is exactly pthread_join's
     // wait (glibc futex-waits on the child's tid word).
-    let (ctva, tpml4) = {
-        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
-        tasks
-            .get_mut(cur)
-            .and_then(|s| s.as_mut())
-            .map(|t| (t.clear_ctid, t.pml4))
-            .unwrap_or((0, 0))
-    };
+    let (ctva, tpml4) = tasks
+        .get_mut(n)
+        .and_then(|s| s.as_mut())
+        .map(|t| (t.clear_ctid, t.pml4))
+        .unwrap_or((0, 0));
     if ctva != 0 {
         write_task_bytes(tpml4, ctva, &0u32.to_ne_bytes());
         futex_wake(tpml4, ctva, 1);
     }
-    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     // A non-leader thread is invisible to wait4 and raises no
     // SIGCHLD — pthread_join already got its ctid wake above. Mark
     // the sweep and skip the parent bookkeeping entirely.
@@ -7218,13 +7514,10 @@ fn task_exit_inner() -> ! {
                 }
             }
         }
-        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+        if let Some(t) = tasks.get_mut(n).and_then(|s| s.as_mut()) {
             t.ppid = 0; // never a waitable zombie
         }
-        if let Some(n) = pick_ready() {
-            switch_to(n)
-        }
-        syscall::terminate()
+        return;
     }
     // Wake a wait-blocked parent whose target just exited.
     let mut collected = false;
@@ -7234,6 +7527,7 @@ fn task_exit_inner() -> ! {
             && p.pid == cppid
             && (p.wait_on == WaitOn::Any
                 || p.wait_on == WaitOn::Child(cpid)
+                || p.wait_on == WaitOn::Group(cpgid)
                 || p.wait_on == WaitOn::Vfork(cpid))
         {
             // wait4 returns the child's pid; its status was already
@@ -7260,11 +7554,11 @@ fn task_exit_inner() -> ! {
     }
     // The parent collected the status — this zombie reaps free.
     if collected {
-        if let Some(t) = tasks.get_mut(cur).and_then(|x| x.as_mut()) {
+        if let Some(t) = tasks.get_mut(n).and_then(|x| x.as_mut()) {
             t.ppid = 0;
         }
     }
-    // Orphan cur's children — no one can wait on them now.
+    // Orphan n's children — no one can wait on them now.
     for s in tasks.iter_mut() {
         if let Some(t) = s.as_mut() {
             if t.ppid == cpid && t.state != TaskState::Exited {
@@ -7272,17 +7566,50 @@ fn task_exit_inner() -> ! {
             }
         }
     }
-    // SIGCHLD to the parent — pending only; default disposition
-    // ignores it, a handler sees it on the parent's next resume.
+    // SIGCHLD to the parent — pend_one gives a caught disposition
+    // the same EINTR wake kill() gets, so a handler can break a
+    // parent blocked in a non-wait4 syscall. Default disposition
+    // ignores it; a handler sees it on the parent's next resume.
     if cppid != 0 {
         if let Some(p) = tasks.iter_mut().flatten().find(|t| t.pid == cppid) {
-            p.pending |= 1 << (SIGCHLD - 1);
+            pend_one(p, SIGCHLD as u64);
         }
     }
+}
+
+fn task_exit_inner() -> ! {
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    {
+        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+            t.state = TaskState::Exited;
+        }
+    }
+    exit_bookkeeping(cur);
     if let Some(n) = pick_ready() {
         switch_to(n)
     }
-    syscall::terminate()
+    {
+        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+        if run_over(tasks) {
+            syscall::terminate()
+        }
+    }
+    // Stopped/Blocked tasks remain that a serviced wake or a signal
+    // can still revive — "no runnable" is not "run over".
+    block_switch()
+}
+
+/// End-of-run predicate: every task has Exited, or the survivors can
+/// never run again without console input — a getty-style shell parked
+/// in read(0) can't be woken by anything inside a scripted run, so it
+/// must not hold the suite open. Timer/pipe/Stopped states still idle
+/// (a serviced deadline, an OFD wake, or a SIGCONT can revive them).
+fn run_over(tasks: &[Option<Task>]) -> bool {
+    tasks.iter().flatten().all(|t| {
+        t.state == TaskState::Exited
+            || (t.state == TaskState::Blocked && t.wait_on == WaitOn::Stdin)
+    })
 }
 
 /// The running task blocked in wait4: its syscall ctx is already
@@ -7328,6 +7655,12 @@ fn resume_ctx(n: usize) -> *const UCtx {
 /// pending signals (a default-fatal one kills it here), round-robin
 /// with delivery at the pick, and return the ctx to resume.
 pub fn tick(img: &mut UCtx) -> *const UCtx {
+    // Service deferred wake sources on EVERY tick — including the
+    // kernel-CS frames the hlt-idle loops take, where skipping them
+    // would freeze every Blocked task's deadline and input feed.
+    poll_expire(); // timed poll waits age one tick
+    crate::e1000::rx_drain(); // feed socket queues from the live ring
+    stdin_pump(); // feed the tty input queue from the scancode ring
     if img.cs & 3 != 3 {
         return img;
     }
@@ -7342,18 +7675,28 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
         fxsave(t);
     }
     deliver_for(cur);
-    poll_expire(); // timed poll waits age one tick
-    crate::e1000::rx_drain(); // feed socket queues from the live ring
-    stdin_pump(); // feed the tty input queue from the scancode ring
     let Some(n) = pick_ready() else {
         // Nothing else runnable: if cur survived delivery it's the
-        // only task — resume its (possibly redirected) ctx. If a
-        // default-fatal signal killed it, the queue is empty —
-        // unwind to the kernel frame like the last exit does.
+        // only task — resume its (possibly redirected) ctx. The run
+        // is over only when every task has Exited; Stopped/Blocked
+        // tasks can still be revived (SIGCONT, a serviced deadline,
+        // fed input), so idle on hlt until one is runnable again.
         let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
         match tasks[cur].as_ref() {
             Some(t) if t.state == TaskState::Runnable => return &t.ctx,
-            _ => syscall::terminate(),
+            _ => {
+                if run_over(tasks) {
+                    syscall::terminate()
+                }
+                loop {
+                    // SAFETY: halts with interrupts enabled, masks
+                    // again after — same idiom as block_switch.
+                    unsafe { core::arch::asm!("sti", "hlt", "cli", options(nostack)) };
+                    if let Some(n) = pick_ready() {
+                        return resume_ctx(n);
+                    }
+                }
+            }
         }
     };
     if n == cur {
@@ -7573,6 +7916,11 @@ pub fn fork(ctx: &mut UCtx, files: bool, fs: bool) -> u64 {
         fs_base: p.fs_base,
         rseq_va: 0,
         clear_ctid: 0,
+        pgid: p.pgid,
+        sid: p.sid,
+        did_exec: false, // fork resets the child-exec'd flag
+        stop_sig: 0,
+        cont_report: false,
     };
     // Either failure frees the (possibly partial) user page-table
     // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs
@@ -7718,6 +8066,11 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
         fs_base: if settls { tls } else { p.fs_base },
         rseq_va: 0,
         clear_ctid: 0,
+        pgid: p.pgid,
+        sid: p.sid,
+        did_exec: false,
+        stop_sig: 0,
+        cont_report: false,
     };
     if c.tgid == 0 {
         c.tgid = c.pid; // a non-THREAD clone leads its own group
@@ -7727,18 +8080,36 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
     cpid
 }
 
-/// wait4(pid, status_va, flags): collect an exited child's status.
-/// pid=-1 waits for any child; status goes through the (validated)
-/// user pointer as Linux wait status — exit code in bits 8..15.
-/// Blocks when matching children are still running; ECHILD when
-/// there are none to wait for.
-pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
+/// wait4(pid, status_va, flags): collect a child's status. pid=-1
+/// waits for any child; pid>0 that child; pid==0 any child in the
+/// caller's own process group; pid<-1 any child in group -pid.
+/// WNOHANG returns 0 when nothing is reportable; WUNTRACED also
+/// reports stopped children ((stopsig << 8) | 0x7f), WCONTINUED
+/// continued ones (0xffff). Blocks when matching children are
+/// still running; ECHILD when there are none to wait for.
+pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, flags: u64) -> u64 {
     const ECHILD: u64 = (-10i64) as u64;
     const EFAULT_: u64 = (-14i64) as u64;
+    // __WNOTHREAD/__WALL are no-ops in the single-thread-group
+    // model — accept them silently; anything else is EINVAL.
+    if flags & !(WNOHANG | WUNTRACED | WCONTINUED | 0x20000000 | 0x40000000) != 0 {
+        return EINVAL;
+    }
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
-    let cpid = unsafe { (*core::ptr::addr_of!(TASKS))[cur].as_ref().map(|t| t.pid).unwrap_or(0) };
+    let (cpid, mypgid) = unsafe {
+        (*core::ptr::addr_of!(TASKS))[cur]
+            .as_ref()
+            .map(|t| (t.pid, t.pgid))
+            .unwrap_or((0, 0))
+    };
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
-    let relevant = |t: &Task| t.ppid == cpid && (pid == -1 || t.pid == pid as u64);
+    let relevant = |t: &Task| {
+        t.ppid == cpid
+            && (pid == -1
+                || (pid > 0 && t.pid == pid as u64)
+                || (pid == 0 && t.pgid == mypgid)
+                || (pid < -1 && t.pgid == (-pid) as u64))
+    };
     // A collectable zombie first — write status and free it for reap.
     if let Some(i) = tasks.iter().position(|s| {
         s.as_ref().is_some_and(|t| relevant(t) && t.state == TaskState::Exited)
@@ -7763,11 +8134,57 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
         tasks[i] = None;
         return r;
     }
+    // WUNTRACED: an unreported stopped child → (stopsig << 8) | 0x7f.
+    // stop_sig clears at report — one notification per stop.
+    if flags & WUNTRACED != 0 {
+        if let Some(t) = tasks
+            .iter_mut()
+            .flatten()
+            .find(|t| relevant(t) && t.state == TaskState::Stopped && t.stop_sig != 0)
+        {
+            if status_va != 0 {
+                if !range_ok_w(status_va, 4) {
+                    return EFAULT_;
+                }
+                // SAFETY: validated writable user dword in cur's map.
+                unsafe {
+                    (status_va as *mut u32).write_unaligned(((t.stop_sig as u32) << 8) | 0x7f)
+                };
+            }
+            let r = t.pid;
+            t.stop_sig = 0;
+            return r;
+        }
+    }
+    // WCONTINUED: a child resumed by SIGCONT → 0xffff, once per
+    // continue (cont_report clears at report).
+    if flags & WCONTINUED != 0 {
+        if let Some(t) = tasks
+            .iter_mut()
+            .flatten()
+            .find(|t| relevant(t) && t.cont_report)
+        {
+            if status_va != 0 {
+                if !range_ok_w(status_va, 4) {
+                    return EFAULT_;
+                }
+                // SAFETY: validated writable user dword in cur's map.
+                unsafe { (status_va as *mut u32).write_unaligned(0xffff) };
+            }
+            let r = t.pid;
+            t.cont_report = false;
+            return r;
+        }
+    }
     if !tasks.iter().flatten().any(relevant) {
         return ECHILD;
     }
+    if flags & WNOHANG != 0 {
+        return 0; // children alive, nothing reportable yet
+    }
     // Live children — validate the status target BEFORE blocking,
-    // then sleep: the exiting child's task_exit writes rax + status.
+    // then sleep. wait_len carries the option flags so a stop/
+    // continue notification knows which event class to report.
     if status_va != 0 && !range_ok_w(status_va, 4) {
         return EFAULT_;
     }
@@ -7776,8 +8193,15 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
         if deliverable(t) {
             return (-4i64) as u64; // -EINTR: signal before sleep
         }
-        t.wait_on = if pid == -1 { WaitOn::Any } else { WaitOn::Child(pid as u64) };
+        t.wait_on = if pid == -1 {
+            WaitOn::Any
+        } else if pid > 0 {
+            WaitOn::Child(pid as u64)
+        } else {
+            WaitOn::Group(if pid == 0 { mypgid } else { (-pid) as u64 })
+        };
         t.wait_ptr = status_va;
+        t.wait_len = flags;
         t.ctx = *ctx;
         t.state = TaskState::Blocked;
     }
@@ -7792,6 +8216,164 @@ pub fn getpid() -> u64 {
 /// getppid() -> current task's parent pid (0 for spawned roots).
 pub fn getppid() -> u64 {
     cur_mut().map(|t| t.ppid).unwrap_or(0)
+}
+
+/// getpgrp() -> the caller's own process-group id.
+pub fn sys_getpgrp() -> u64 {
+    cur_mut().map(|t| t.pgid).unwrap_or(0)
+}
+
+/// getpgid(pid) -> pid's process-group id (pid 0 = self); ESRCH
+/// when no such task exists.
+pub fn sys_getpgid(pid: u64) -> u64 {
+    const ESRCH: u64 = (-3i64) as u64;
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    if pid == 0 {
+        return cur_mut().map(|t| t.pgid).unwrap_or(ESRCH);
+    }
+    tasks
+        .iter()
+        .flatten()
+        .find(|t| t.pid == pid)
+        .map(|t| t.pgid)
+        .unwrap_or(ESRCH)
+}
+
+/// getsid(pid) -> pid's session id (pid 0 = self); ESRCH when no
+/// such task exists.
+pub fn sys_getsid(pid: u64) -> u64 {
+    const ESRCH: u64 = (-3i64) as u64;
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    if pid == 0 {
+        return cur_mut().map(|t| t.sid).unwrap_or(ESRCH);
+    }
+    tasks
+        .iter()
+        .flatten()
+        .find(|t| t.pid == pid)
+        .map(|t| t.sid)
+        .unwrap_or(ESRCH)
+}
+
+/// setsid(): become session leader of a new session — fails EPERM
+/// when the caller already leads its own process group (a group
+/// leader can never setsid, like Linux).
+pub fn sys_setsid() -> u64 {
+    const EPERM_: u64 = (-1i64) as u64;
+    let Some(t) = cur_mut() else {
+        return EINVAL;
+    };
+    if t.pgid == t.pid {
+        return EPERM_;
+    }
+    t.sid = t.pid;
+    t.pgid = t.pid;
+    // Losing the ctty is implicit: the console's owner session no
+    // longer matches, so tcgetpgrp/read gates stop applying.
+    t.pid
+}
+
+/// setpgid(pid, pgid): move a task into a process group within its
+/// own session. pid 0 = self; pgid 0 = make target its own group.
+/// Linux's rules: only self or an own child, same session, target
+/// can't be a session leader, a child that already exec'd is EACCES,
+/// and a pre-existing group must live in the target's session.
+pub fn sys_setpgid(pid: u64, pgid: u64) -> u64 {
+    const EPERM_: u64 = (-1i64) as u64;
+    const ESRCH: u64 = (-3i64) as u64;
+    const EACCES_: u64 = (-13i64) as u64;
+    if pid > i32::MAX as u64 || pgid > i32::MAX as u64 {
+        return EINVAL;
+    }
+    let Some(me) = cur_mut() else {
+        return EINVAL;
+    };
+    let (my_pid, my_sid) = (me.pid, me.sid);
+    let target_pid = if pid == 0 { my_pid } else { pid };
+    let new_pgid = if pgid == 0 { target_pid } else { pgid };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let Some(i) = tasks
+        .iter()
+        .position(|s| s.as_ref().is_some_and(|t| t.pid == target_pid))
+    else {
+        return ESRCH;
+    };
+    let (t_ppid, t_sid, t_exec) = {
+        let t = tasks[i].as_ref().unwrap();
+        (t.ppid, t.sid, t.did_exec)
+    };
+    if target_pid != my_pid && t_ppid != my_pid {
+        return ESRCH; // only self or an own child
+    }
+    if t_sid == target_pid {
+        return EPERM_; // session leaders can't change groups
+    }
+    if t_sid != my_sid {
+        return EPERM_; // can't move across sessions
+    }
+    if target_pid != my_pid && t_exec {
+        return EACCES_; // child already exec'd
+    }
+    if new_pgid != target_pid
+        && !tasks
+            .iter()
+            .flatten()
+            .any(|x| x.pgid == new_pgid && x.sid == t_sid)
+    {
+        return EPERM_; // group must exist within the session
+    }
+    let old_pgid = tasks[i].as_ref().unwrap().pgid;
+    tasks[i].as_mut().unwrap().pgid = new_pgid;
+    // A child leaving group g can strand a wait4(-g)/wait4(0) parent:
+    // the exit wake matches the child's pgid AT DEATH, so a departed
+    // child's exit never wakes it. Linux rescans and returns ECHILD
+    // — re-scan here and wake any g-waiting parent whose last child
+    // just left the group.
+    if new_pgid != old_pgid {
+        let mut wakes = [0u64; MAX_TASKS];
+        let mut nw = 0usize;
+        for s in tasks.iter().flatten() {
+            if s.state == TaskState::Blocked && s.wait_on == WaitOn::Group(old_pgid) {
+                wakes[nw] = s.pid;
+                nw += 1;
+            }
+        }
+        for w in wakes[..nw].iter() {
+            let empty = !tasks
+                .iter()
+                .flatten()
+                .any(|c| c.ppid == *w && c.pgid == old_pgid);
+            if empty {
+                if let Some(p) = tasks.iter_mut().flatten().find(|t| t.pid == *w) {
+                    if p.state == TaskState::Blocked
+                        && p.wait_on == WaitOn::Group(old_pgid)
+                    {
+                        p.ctx.rax = (-10i64) as u64; // -ECHILD
+                        p.state = TaskState::Runnable;
+                        p.wait_on = WaitOn::None;
+                        p.wait_ptr = 0;
+                        p.wait_len = 0;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+/// POSIX orphaned-pgrp test: a group is orphaned when no member's
+/// parent is alive AND lives in the same session but a different
+/// group (the bridge that could job-control it back).
+fn pgrp_orphaned(pgid: u64, sid: u64) -> bool {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    tasks
+        .iter()
+        .flatten()
+        .filter(|t| t.pgid == pgid)
+        .all(|m| match tasks.iter().flatten().find(|p| p.pid == m.ppid) {
+            Some(p) => p.state == TaskState::Exited || p.sid != sid || p.pgid == pgid,
+            None => true, // dead/reaped parent
+        })
 }
 
 /// End of the scheduling run: reap whatever tasks remain — the last

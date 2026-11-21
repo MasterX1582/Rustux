@@ -175,6 +175,33 @@ int main(void) {
     n = sh_run("type echo", out, sizeof(out), &code);
     check(strstr(out, "shell builtin") != NULL, "type identifies builtin");
 
+    /* -m job control: a bg job gets its own pgrp; `jobs` lists it.
+       The read builtin stops on SIGTTIN (bg tty read) — the kernel
+       fg-pgrp model makes this real, not bookkeeping. `kill -9 $!`
+       is a pid-direct cleanup backstop: if the job's own pgrp never
+       formed, %1 group-kill misses it and a stray keeps the run
+       alive. */
+    n = sh_run("set -m; { read x; } & jobs; kill -9 %1; kill -9 $!; wait",
+               out, sizeof(out), &code);
+    check(strstr(out, "[1]") != NULL, "bash -m: bg job lists in jobs");
+    if (strstr(out, "[1]") == NULL)
+        printf("    bash said: %s\n", out);
+
+    /* kill -0 -pgid probes a job's process group end-to-end:
+       the for loop retries while the child's setpgid lands. The
+       probe job spins rather than reading the tty — a tty-read job
+       can be left stopped when bash's wait reaps a stop report,
+       and a stopped stray keeps a run alive. Same pid-direct
+       cleanup backstop. */
+    n = sh_run("set -m; { while :; do :; done; } & "
+               "for i in {1..50}; do "
+               "kill -0 -$! && break; done && echo GROK; "
+               "kill -9 %1; kill -9 $!; wait",
+               out, sizeof(out), &code);
+    check(strstr(out, "GROK") != NULL, "bash -m: kill -0 -pgid probe");
+    if (strstr(out, "GROK") == NULL)
+        printf("    bash said: %s\n", out);
+
     printf("bashtest: %d failures, done\n", fails);
     return fails;
 }
