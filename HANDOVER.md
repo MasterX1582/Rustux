@@ -882,3 +882,37 @@ the task model now supports fork/clone/wait as the next rung.
   reentrant-statics extends (release under TASKS borrow, same shape
   as reap).
 - 21 tasks, zero leak, WSL x2.
+
+## Writable file layer + wiotest proof (audit run-71)
+
+- A scratch namespace now shadows the flat archive: VFile slots
+  (16 files, 1MiB each, kmalloc'd buffers) behind FdKind::Ram OFDs.
+  fd_open resolves VFILES first then cpio -- mount-shadow order;
+  archive writes answer EROFS at open, EBADF on an O_RDONLY fd at
+  write (the fmode check, which the suite enforced via fstest).
+- OpenFile carries accmode (f_mode analogue) and append; dup/fork
+  share it through the OFD like Linux. New syscalls: unlink(87)/
+  unlinkat(263), rename(82)/renameat(264)/renameat2(276),
+  truncate(76)/ftruncate(77), creat(85), fsync(74)/fdatasync(75).
+  getdents enumerates archive+VFILES as one virtual directory;
+  newfstatat and access see both namespaces.
+- Open-unlink semantics are real: unlink drops the name while an
+  open OFD keeps the storage readable; last close frees it. Rename
+  over an open target keeps the replaced file alive the same way.
+- Self-review catches fixed pre-commit: zero-length write at pos>len
+  allocated+extended (now early-0); empty-VFile pread UB (n==0 early
+  return); access("") -> ENOENT. Known gaps recorded: renameat
+  skips dirfd validation; no rmdir (AT_REMOVEDIR -> EISDIR);
+  open("") -> EISDIR vs ENOENT.
+- Proof: kernel/user/wiotest.c (static-pie) -- 33 checks: creat,
+  write/read-back, EBADF on both wrong accmodes, fsync, fstat,
+  O_TRUNC, O_APPEND-at-EOF, O_EXCL->EEXIST, ftruncate shrink +
+  grow zero-fill, path truncate, rename + stat-both-sides,
+  open-unlink-still-reads, ENOENT after unlink, EROFS table on
+  archive unlink/rename, access + getdents listing a fresh file:
+  0 failures, exit(0). 22 tasks, zero leak, WSL x3.
+- Audit run-71 (scoped on the diff): the three catches above were
+  correctness/UB-adjacent, not boundary violations; rename/unlink
+  UAF classes (CVE-2022-49349, CVE-2025-21887) structurally absent
+  under the OFD-pins-storage invariant. NV-63-1 reentrant-statics
+  extends (VFILES under OFDS borrow in vfile_remove).
