@@ -942,3 +942,41 @@ the task model now supports fork/clone/wait as the next rung.
   with the exact struct size before copy; TIOCSTI absent by
   omission (no input queue to inject); ldisc CVE family n/a.
   NV-63-1 reentrant-statics extends (TERMIOS cell).
+
+## TTY stdin — IRQ1 to read(0) via a real line discipline (audit run-73)
+
+- The keyboard path now ends at a real input queue, not the
+  framebuffer: kbd IRQ -> 64B scancode ring -> kbd::poll decoder ->
+  stdin_key line discipline (256B canonical edit buffer -> 4KiB
+  ready queue) -> WaitOn::Stdin block/wake. The pump runs in the
+  timer tick (live echo + bounded) and lazily at fd_read entry.
+- Canonical mode edits the line in-place (VERASE erases + echoes
+  backspace-space-backspace under ECHOE, VKILL drops the line) and
+  submits on '\n' or VEOF; VEOF on an empty line is Linux's one-shot
+  EOF (read returns 0 once, the next read blocks again). ICANON off
+  pushes bytes straight to the ready queue. ISIG turns VINTR/VQUIT
+  into SIGINT/SIGQUIT for the blocked reader through kill() — which
+  already owns the EINTR-wake/ignored-check machinery. ECHO goes
+  through printk like every other user-visible byte.
+- poll(0) is honest now — POLLIN only when bytes or the EOF flag
+  wait (the old arm hardcoded POLLIN because stdin meant EOF).
+  FIONREAD reports the ready-queue depth; read(0) on an empty queue
+  blocks with the pipe discipline (wait_ptr/len, waker copies
+  through the sleeper's pml4, EFAULT on a dead mapping, EINTR on a
+  pending signal).
+- The boot-time ~3s echo window in main.rs is gone — it consumed
+  decoded keys that now belong to the queue.
+- Proof: kernel/user/kbdtest.c (static-pie) — isatty, empty-queue
+  FIONREAD/poll-not-ready, then a bounded input window: headless
+  runs hit the poll deadline and exit 0; a LIVE QEMU run injected
+  "hi<ret>" via QMP human-monitor sendkey inside the window and
+  read(0) returned the canonical 3-byte line. 0 failures, 24 tasks,
+  zero leak, boot PASS x2.
+- Fixed mid-rung: a termios tcsetattr roundtrip in kbdtest raced
+  termtest on the shared tty cell (correct Linux semantics — the
+  test was wrong to mutate it during a concurrent suite); removed.
+- Audit run-73 (scoped): 0 confirmed — bounded queues, drop-on-full,
+  no allocation in the feed path, IRQ-safe calls only, translate-
+  gated wake copies, take/consume split means EFAULT loses no input.
+  cve.now: n_tty buffer-swap/ldisc-attach families n/a (no replaceable
+  buffers, no attach path, single CPU). NV-63-1 extends.
