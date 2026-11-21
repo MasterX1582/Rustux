@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <sys/auxv.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
 #include <gnu/libc-version.h>
 
 static int fails = 0;
@@ -28,6 +29,11 @@ int main(int argc, char **argv) {
     printf("dyntest: dynamic ld.so + glibc checks\n");
 
     check(getauxval(AT_BASE) != 0, "AT_BASE names the interp base");
+    /* glibc registered its rseq area at startup: a second call
+       must EBUSY — proof sys_rseq(334) accepted the real one. */
+    errno = 0;
+    check(syscall(SYS_rseq, NULL, 32, 0, 0x53053053) == -1 &&
+          errno == EBUSY, "glibc rseq registered at startup");
     check(getauxval(AT_ENTRY) != 0, "AT_ENTRY names the image entry");
     check(getauxval(AT_PHDR) != 0 && getauxval(AT_PHNUM) > 0,
           "AT_PHDR/AT_PHNUM set");

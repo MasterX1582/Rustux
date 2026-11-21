@@ -230,6 +230,8 @@ const NR_EXIT_GROUP: u64 = 231;
 const NR_SET_ROBUST_LIST: u64 = 273;
 const NR_PRLIMIT64: u64 = 302;
 const NR_GETRANDOM: u64 = 318;
+const NR_RSEQ: u64 = 334;
+const NR_SENDFILE: u64 = 40;
 const NR_STAT: u64 = 4;
 const NR_FSTAT: u64 = 5;
 const NR_LSTAT: u64 = 6;
@@ -424,6 +426,8 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         // Real vfork: shared mm + uninterruptible parent wait until
         // the child execs or exits (sys_vfork in user.rs).
         NR_VFORK => user::sys_vfork(ctx),
+        NR_RSEQ => user::sys_rseq(a1, a2, a3, a4),
+        NR_SENDFILE => user::sys_sendfile(a1, a2, a3, a4),
         NR_SYNC => 0,
         NR_REBOOT => user::sys_reboot(a1, a2, a3),
         NR_CHDIR => sys_chdir(a1),

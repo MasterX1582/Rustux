@@ -16,6 +16,8 @@
 #include <sched.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/sendfile.h>
+#include <fcntl.h>
 
 static int fails;
 static void check(int ok, const char *what) {
@@ -76,9 +78,18 @@ int main(void) {
     check(prctl(PR_SET_NAME, "aptnm", 0, 0, 0) == 0, "PR_SET_NAME ok");
 
     pid_t v = (pid_t)syscall(SYS_vfork);
-    if (v == 0) _exit(11); // child path
+    if (v == 0) {
+        /* The child shares the parent's live stack — any call
+           (even _exit) pushes over the parent's saved return
+           slot. Exit by bare syscall so nothing is pushed. */
+        __asm__ volatile("syscall" ::
+                         "a"(231L) /* exit_group */, "D"(11L)
+                         : "rcx", "r11", "memory");
+        __builtin_unreachable();
+    }
     int st = 0;
-    check(v > 0 && waitpid(v, &st, 0) == v && WEXITSTATUS(st) == 11,
+    pid_t w = waitpid(v, &st, 0);
+    check(v > 0 && w == v && WEXITSTATUS(st) == 11,
           "vfork acts like fork, waitpid works");
 
     errno = 0;
@@ -96,6 +107,39 @@ int main(void) {
     errno = 0;
     check(syscall(SYS_reboot, 0xfee1dead, 672274793, 9999, 0) == -1 &&
           errno == EINVAL, "reboot unknown cmd -> EINVAL");
+
+    /* sendfile(40): file -> pipe, no user bounce. pos-NULL mode
+       consumes the input fd's offset; the pointer form doesn't. */
+    int sfd = open("/motd.txt", O_RDONLY);
+    check(sfd >= 0, "sendfile: open motd");
+    int sp[2];
+    check(pipe(sp) == 0, "sendfile: pipe");
+    ssize_t sn = sendfile(sp[1], sfd, NULL, 1 << 20);
+    struct stat mst;
+    fstat(sfd, &mst);
+    char sbuf[8192], wbuf[8192];
+    ssize_t sr = sn > 0 ? read(sp[0], sbuf, sizeof(sbuf)) : 0;
+    check(sn > 0 && sn == (ssize_t)mst.st_size && sr == sn,
+          "sendfile moved the whole file");
+    int vfd = open("/motd.txt", O_RDONLY);
+    ssize_t vr = read(vfd, wbuf, sizeof(wbuf));
+    close(vfd);
+    check(vr == sr && memcmp(sbuf, wbuf, sr) == 0,
+          "sendfile bytes == file bytes");
+    /* *offset form: start at 4, fd pos must NOT move. */
+    off_t so = 4;
+    long spos0 = lseek(sfd, 0, SEEK_CUR);
+    ssize_t sn2 = sendfile(sp[1], sfd, &so, 8);
+    check(sn2 == 8 && so == 12 && lseek(sfd, 0, SEEK_CUR) == spos0,
+          "sendfile *offset: starts at off, pos untouched");
+    sr = read(sp[0], sbuf, sizeof(sbuf)); // drain
+    errno = 0;
+    check(sendfile(sp[1], sp[0], NULL, 8) == -1 && errno == EINVAL,
+          "sendfile pipe input -> EINVAL");
+    errno = 0;
+    check(sendfile(sfd, sfd, NULL, 8) == -1 && errno == EINVAL,
+          "sendfile non-pipe out -> EINVAL");
+    close(sp[0]); close(sp[1]); close(sfd);
 
     printf("aptest: %d failure%s, done\n", fails, fails == 1 ? "" : "s");
     return fails;

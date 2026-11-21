@@ -690,6 +690,9 @@ pub struct Task {
     /// restored to MSR_FS_BASE on every switch like the fx image.
     /// Users can't desync it: FSGSBASE is never enabled.
     fs_base: u64,
+    /// Registered rseq area VA (0 = none). Per-task like Linux —
+    /// not inherited at fork, implicitly dropped at exec.
+    rseq_va: u64,
     /// CLONE_CHILD_CLEARTID address in this task's address space —
     /// zeroed at exit with a futex wake on it (pthread_join's wait).
     clear_ctid: u64,
@@ -721,9 +724,10 @@ struct FdTab {
     fds: [Option<u8>; MAX_FDS],
 }
 const FDT_EMPTY: FdTab = FdTab { users: 0, cloexec: 0, fds: [None; MAX_FDS] };
-/// 32 tasks plus CLONE_FILES slack — a full table ENOMEMs, never
+/// Task-slot parity plus CLONE_FILES slack (threads share the
+/// leader's table) — a full table ENOMEMs, never
 /// corrupts, same discipline as MM_REFS.
-const MAX_FDTABS: usize = 48;
+const MAX_FDTABS: usize = 64;
 /// Task.fdi sentinel after release — makes a second release_fds a
 /// no-op instead of a double-decrement.
 const FDI_NONE: u8 = u8::MAX;
@@ -795,7 +799,7 @@ struct SigTab {
     handlers: [u64; 31],
 }
 const SIGH_EMPTY: SigTab = SigTab { users: 0, handlers: [0; 31] };
-const MAX_SIGTABS: usize = 48;
+const MAX_SIGTABS: usize = 64;
 /// Task.sigh sentinel after release — second release is a no-op.
 const SIGH_NONE: u8 = u8::MAX;
 static mut SIGTABS: [SigTab; MAX_SIGTABS] = [SIGH_EMPTY; MAX_SIGTABS];
@@ -851,7 +855,7 @@ struct FsTab {
     cwdlen: u8,
 }
 const FS_EMPTY: FsTab = FsTab { users: 0, umask: 0, cwd: [0; 128], cwdlen: 0 };
-const MAX_FSTABS: usize = 48;
+const MAX_FSTABS: usize = 64;
 /// Task.fsi sentinel after release.
 const FSI_NONE: u8 = u8::MAX;
 static mut FSTABS: [FsTab; MAX_FSTABS] = [FS_EMPTY; MAX_FSTABS];
@@ -891,10 +895,11 @@ fn fstab_release(i: u8) {
     ts[i as usize].users -= 1;
 }
 
-/// The shared open-file-description table. 32 tasks hold 3 std OFDs
-/// each (96 worst case) before a single pipe/socket exists — 64 was
-/// a real transient-ENOMEM under scheduling-dependent occupancy.
-const MAX_OFDS: usize = 192;
+/// The shared open-file-description table. 64 tasks hold 3 std OFDs
+/// each (192 worst case) before a single pipe/socket exists — 64
+/// and 192 were both real transient-ENOMEMs under
+/// scheduling-dependent occupancy.
+const MAX_OFDS: usize = 256;
 
 /// RAM-backed scratch files — the writable half of the flat
 /// namespace. Linux mounts a tmpfs; our tmpfs is this table:
@@ -1466,6 +1471,7 @@ fn load(img: &[u8]) -> Option<Task> {
         exe: [0; 128],
         exe_len: 0,
         fs_base: 0,
+        rseq_va: 0,
         clear_ctid: 0,
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
@@ -3050,6 +3056,47 @@ pub fn sys_sched_yield(ctx: &mut UCtx) -> u64 {
     0
 }
 
+/// rseq(rseq, rseq_len, flags, sig): restartable-sequences
+/// registration — glibc calls this once at startup and a 0 return
+/// makes it engage its rseq fast paths. Single-CPU: cpu_id is
+/// always 0, so the kernel only writes the two leading cpu_id
+/// fields once (userspace maintains rseq_cs itself). Per-task:
+/// not inherited at fork, implicitly dropped at exec.
+/// EINVAL on short len/unaligned area/unknown flags/bad sig,
+/// EBUSY on double registration, EINVAL on mismatched unregister.
+pub fn sys_rseq(uaddr: u64, len: u64, flags: u64, sig: u64) -> u64 {
+    const EINVAL_: u64 = (-22i64) as u64;
+    const EBUSY_: u64 = (-16i64) as u64;
+    const EFAULT_: u64 = (-14i64) as u64;
+    const RSEQ_SIG: u64 = 0x53053053;
+    const UNREG: u64 = 1;
+    let Some(t) = cur_mut() else { return EINVAL_ };
+    if len < 32 || uaddr & 31 != 0 || flags & !UNREG != 0 || sig != RSEQ_SIG {
+        return EINVAL_;
+    }
+    if flags & UNREG != 0 {
+        if t.rseq_va == 0 || t.rseq_va != uaddr {
+            return EINVAL_;
+        }
+        t.rseq_va = 0;
+        return 0;
+    }
+    if t.rseq_va != 0 {
+        return EBUSY_;
+    }
+    if !range_ok_w(uaddr, 8) {
+        return EFAULT_;
+    }
+    // cpu_id_start then cpu_id — Linux's write order; both stay 0
+    // on a single CPU (no migration events ever occur).
+    unsafe {
+        (uaddr as *mut u32).write_unaligned(0);
+        ((uaddr + 4) as *mut u32).write_unaligned(0);
+    }
+    t.rseq_va = uaddr;
+    0
+}
+
 /// fstat(fd, statbuf): same 144B stat as newfstatat, mode by OFD
 /// kind — chr for console, fifo for pipes, sock for sockets,
 /// reg/dir for archive entries.
@@ -3897,6 +3944,101 @@ pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
     p.tail += len as usize;
     pipe_wake(id); // new data may unblock readers
     len
+}
+
+/// sendfile(out_fd, in_fd, off_t*, count): fd-to-fd copy without a
+/// user bounce — busybox cp/cat and friends reach for this. in must
+/// be a regular file or VFile (Linux EINVALs non-regular input);
+/// out must be a writable pipe end (fd_write's only writable kind —
+/// other sinks EINVAL honestly). The copy is synchronous into the
+/// ring: a short count means the ring filled (legal sendfile
+/// semantics — callers loop); EAGAIN means the ring had zero room
+/// with input remaining, where Linux would block (documented
+/// divergence — a mid-copy block can't resume the copy loop).
+/// off=NULL consumes in's pos; non-NULL uses/updates *off only.
+pub fn sys_sendfile(out_fd: u64, in_fd: u64, off_va: u64, count: u64) -> u64 {
+    const EINVAL_: u64 = (-22i64) as u64;
+    const EBADF_: u64 = (-9i64) as u64;
+    const EFAULT_: u64 = (-14i64) as u64;
+    const EAGAIN_: u64 = (-11i64) as u64;
+    const EPIPE_: u64 = (-32i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF_ };
+    let pi = {
+        let Some(o) = ofd(t, out_fd) else { return EBADF_ };
+        let FdKind::Pipe { id, write } = o.kind else {
+            return EINVAL_; // unsupported out kind
+        };
+        if !write {
+            return EBADF_; // out is the read end
+        }
+        id
+    };
+    let (src, slen, spos) = {
+        let Some(o) = ofd(t, in_fd) else { return EBADF_ };
+        if o.accmode == 1 {
+            return EBADF_; // input not open for reading
+        }
+        let (p, l) = match &o.kind {
+            FdKind::File(d) => (d.as_ptr(), d.len()),
+            FdKind::Ram(i) => match vfile(*i) {
+                Some(v) => (v.data as *const u8, v.len),
+                None => return EBADF_,
+            },
+            _ => return EINVAL_, // non-regular input, like Linux
+        };
+        if off_va != 0 {
+            if !range_ok(off_va, 8) {
+                return EFAULT_;
+            }
+            // SAFETY: validated user range under current cr3; off_t
+            // is i64 so a negative offset EINVALs like Linux.
+            let v = unsafe { (off_va as *const i64).read_unaligned() };
+            if v < 0 {
+                return EINVAL_;
+            }
+            (p, l, v as usize)
+        } else {
+            (p, l, o.pos)
+        }
+    };
+    let avail = slen.saturating_sub(spos);
+    let want = core::cmp::min(count as usize, avail);
+    if want == 0 {
+        return 0; // input at EOF — nothing to move
+    }
+    let pipes = unsafe { &mut *core::ptr::addr_of_mut!(PIPES) };
+    let Some(p) = pipes.get_mut(pi).and_then(|s| s.as_mut()) else {
+        return EBADF_;
+    };
+    if p.readers == 0 {
+        return EPIPE_;
+    }
+    let room = PIPE_SIZE - (p.tail - p.head);
+    let n = core::cmp::min(want, room);
+    if n == 0 {
+        return EAGAIN_; // full ring, input remains — Linux blocks
+    }
+    for i in 0..n {
+        // SAFETY: src names slen bytes of stable kernel-visible
+        // storage (cpio slice or VFile buffer); the ring index wraps
+        // inside the pipe-owned frame.
+        unsafe {
+            let b = src.add(spos + i).read();
+            ((p.buf + ((p.tail + i) % PIPE_SIZE) as u64) as *mut u8).write(b);
+        }
+    }
+    p.tail += n;
+    pipe_wake(pi); // new data may unblock readers
+    if off_va != 0 {
+        if !range_ok_w(off_va, 8) {
+            return EFAULT_;
+        }
+        // SAFETY: same validated user range as the read above.
+        unsafe { (off_va as *mut i64).write_unaligned((spos + n) as i64) };
+    } else if let Some(o) = ofd(t, in_fd) {
+        o.pos += n;
+    }
+    n as u64
 }
 
 /// pipe2(fds, flags): a kernel ring with a read end and a write end,
@@ -6751,6 +6893,7 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     t.nranges = 0;
     t.stack_top = 0;
     t.fs_base = 0; // TLS dies with the old image — new one SET_FSs
+    t.rseq_va = 0; // exec implicitly unregisters rseq
     if !load_inner(t, &e, img) {
         return false;
     }
@@ -7351,6 +7494,7 @@ pub fn fork(ctx: &mut UCtx, files: bool, fs: bool) -> u64 {
         exe: p.exe,
         exe_len: p.exe_len,
         fs_base: p.fs_base,
+        rseq_va: 0,
         clear_ctid: 0,
     };
     // Either failure frees the (possibly partial) user page-table
@@ -7495,6 +7639,7 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
         exe: p.exe,
         exe_len: p.exe_len,
         fs_base: if settls { tls } else { p.fs_base },
+        rseq_va: 0,
         clear_ctid: 0,
     };
     if c.tgid == 0 {
