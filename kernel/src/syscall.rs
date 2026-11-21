@@ -292,15 +292,12 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
     let (a4, a5, a6) = (ctx.r10, ctx.r8, ctx.r9);
     ctx.rax = match nr {
         // fd_read validates the write-target range itself because only
-        // it knows how many bytes the source will actually produce;
-        // the transfer cap is enforced here exactly like sys_write.
-        NR_READ => {
-            if a3 > MAX_COPY {
-                EINVAL
-            } else {
-                user::fd_read(ctx, a1, a2, a3)
-            }
-        }
+        // it knows how many bytes the source will actually produce.
+        // Linux clamps count to MAX_RW_COUNT and returns what it can —
+        // never EINVAL on a big buffer (a 128KiB stdio read must not
+        // fail). Our cap is the same copy budget sys_write uses; every
+        // fd_read arm already min()s against available data.
+        NR_READ => user::fd_read(ctx, a1, a2, a3.min(MAX_COPY)),
         NR_WRITE => sys_write(ctx, a1, a2, a3),
         NR_PIPE => user::fd_pipe(a1, 0),
         NR_PIPE2 => user::fd_pipe(a1, a2),
