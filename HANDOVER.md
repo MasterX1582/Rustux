@@ -1092,3 +1092,17 @@ Self-review caught four honesty bugs before commit: times silently succeeded on 
 ## run-80 — CLONE_FS + CLONE_SYSVSEM: the full pthread_create flag set now parses
 
 FSTABS is the fs_struct analogue — a users-refcounted ledger carrying umask today (the Task field moved in), shaped to hold cwd/root when the fs grows them. CLONE_FS shares the index so a sibling's umask write lands in the parent's table (clftest proves it through the shared mm); fork duplicates it. CLONE_SYSVSEM is accepted as a true no-op — there is no SysV semundo state to share. The milestone: clone() now accepts glibc pthread_create's entire flag set in one call — VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID — verified end-to-end with a futex join. Also fixed a pre-existing csigh leak on fork's post-literal failure paths. clftest: 17 checks, 0 failures; 32 tasks, zero leak; WSL + native VM.
+
+## run-81 — hierarchical VFS: real directories, per-task cwd, canonical path resolution
+
+The flat-name filesystem becomes a real path layer. canon_path is the single resolution primitive: joins the caller base (task cwd, or a dirfd's stored DirPath) with the raw path, splits on '/', skips empty and '.' components, pops on '..' and CLAMPS at root (the Linux rule — /.. is /). Root is the empty canonical name; every path syscall now canonicalizes at its boundary (openat, stat/newfstatat, access, unlinkat, renameat2 both-args-own-dirfd, truncate, chdir, mkdir/mkdirat, rmdir, getcwd).
+
+Directories are real objects: VDIRS (16 slots) hold explicit mkdir'd dirs; parents of archive/VFile entries are implicit dirs — dir_exists checks vdir match, the /proc pseudo-dirs, then any child under 'p/' across archive, VFILES, and VDIRS. FdKind::Dir became Dir(DirPath) so a directory fd RETAINS which dir it opened — dirfd resolution, fchdir, and per-dir getdents all key off it.
+
+cwd lives in FsTab (run-80's fs_struct) — CLONE_FS siblings share it like Linux; chdir/fchdir write it; getcwd renders '/'+components. mkdir/mkdirat/rmdir are real: EEXIST on existing names, ENOENT on missing parents, ENOTEMPTY when any child (vfile, archive member, or vdir) still lives beneath; open(O_CREAT) requires a real parent dir; O_DIRECTORY|EISDIR/ENOTDIR honesty throughout. getdents64 streams '.', '..', then deduped first-components under the dir with DT_DIR/DT_REG types — a subdir listing shows only its own children.
+
+Two fixes the process caught: dtest found dir_exists/fs_rmdir missed VDIRS children — rmdir could silently drop a NON-EMPTY vdir and orphan its subtree (data-loss class, fixed by covering vdirs in both scans). Audit found chdir/fchdir relied on an implicit 'dir_exists implies <=128' invariant to bound the cwd copy — now explicit ENAMETOOLONG guards. Also bumped MAX_TASKS 32->40 and MAX_OFDS 128->160 (33rd task couldn't spawn) and removed a stale >32 rename gate (name arrays are 128).
+
+Divergences recorded: mkdir mode ignored (no file modes), no permission checks, Dir OFDs hold names not inodes (getdents after the dir is removed relists by name — Linux shows the stale inode listing), cwd cap 128B vs Linux PATH_MAX 4096, no mount/share boundaries so '..' only ever clamps at root.
+
+dtest.c (static-pie, 40+ checks): mkdir/mkdirat, stat S_IFDIR, chdir/getcwd/'..'/relative, openat+fchdir+unlinkat dirfd, per-dir getdents with DT_DIR on dot entries, full EEXIST/ENOENT/ENOTEMPTY/ENOTDIR/EISDIR honesty table — 0 failures, 33 tasks, frames 14455->14455, WSL + native VM.

@@ -5,7 +5,7 @@ that covers it and the verdict. GENERATED from
 `docs/cve-matrix.md` by `tools/cve-ledger.py` — do not edit
 by hand; append to the matrix and regenerate.
 
-**85 unique CVEs recorded.**
+**86 unique CVEs recorded.**
 
 ## klib ports
 
@@ -99,6 +99,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2026-46063 | signals: rt_sigaction/rt_sigreturn/kill + EINTR | frame = [signo][UCtx] pushed onto the task's own stack through its own tables; sigreturn treats it as hostile: cs=0x33/ss=0x2b pinned not restored, TF/NT/IOPL cleared, rip canonic… |
 | CVE-2026-63910 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
 | CVE-2026-63913 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
+| CVE-2026-64400 | hierarchical VFS: per-task cwd in FsTab, canon_path resolution (. .. rel/abs, root-clampe… | 64400 structurally absent: canon clamps .. AT root with no retry/reconstruct path, and there are no mount/share boundaries to escape through (cwd is the only base). getdents-leak… |
 | CVE-2026-64496 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
 | CVE-2026-68120 | ipv6/ndp/icmpv6 | no direct CVEs; frag-header CVEs reinforce the no-extension-headers/no-fragments design; hop==255 + solicited-dst + target==us enforced; pseudo-header csum validated (neg-zero res… |
 | CVE-2026-68124 | terminal ABI: ioctl(16) dispatch — TCGETS/TCSETS-family on the console pair, TIOCGWINSZ r… | every ioctl arg extent is range_ok(_w)-gated with the exact struct size BEFORE any copy (36/8/4B) — the run-68 translate bound already confines arg to the user window; termios is… |
