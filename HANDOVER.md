@@ -1339,3 +1339,38 @@ ring reads silently pile up. Raw-UART breadcrumbs (single-byte outb
 markers) were the working instrument.
 
 42 tasks, frames zero leak, boot PASS x3 WSL. CVE ledger: 95.
+
+## run-90 — interactive bash: UART RX input, /dev/tty, pselect6(270)
+
+Interactive bash now works end-to-end on the serial console.
+`make run-bash` boots a solo initrd whose only task is `-bash`
+(argv0 dash = login shell) — prompt, readline, command execution,
+job control through the real ctty. Verified by driving QEMU's
+`-chardev socket` serial with scripted keystrokes: bytes landed in
+the 16550 RX FIFO, the tick-side stdin pump fed them through the
+ldisc (ICRNL CR->NL), bash's pselect woke, `echo` ran, a fresh
+prompt printed.
+
+What landed:
+- `uart::get_byte()` polled RX (LSR data-ready) — the serial
+  console's input half, drained in stdin_pump (64-byte cap/tick).
+- `/dev/tty` in fd_open: sid==CONSOLE_SID opens the console as an
+  Stdin-kind OFD (read + ioctls); ENXIO outside that session,
+  ENOTDIR under O_DIRECTORY. bash's job-control setup uses it.
+- pselect6(270): the missing piece — bash/readline waits on input
+  via pselect and was treating ENOSYS as EOF (logout at prompt).
+  Real implementation on the poll substrate: three fd_sets scanned
+  through the caller's pml4 via poll_revents, timespec deadline,
+  atomic sigmask swap ({ptr,len} pair, ss_len==8) restored on every
+  wake path (ready/timeout/signal) via psel_restore.
+- run_over() counts Poll/Pselect waits as console-input-blocked —
+  an interactive shell parked on input no longer wedges the suite.
+- iotest: 4 pselect checks (idle pipe, ready pipe, nfds EINVAL).
+
+Suite-run lesson: -bash does NOT belong in the standard initrd —
+it legitimately TIOCSPGRP'd the console foreground, failing a test
+that asserts fg==own pgrp. Real job control working as designed;
+interactive shells get their own image instead.
+
+Audit run-64 scoped to the diff: 0 confirmed. CVE ledger: 95.
+42 tasks, zero leak, boot PASS WSL + interactive socket-driven proof.
