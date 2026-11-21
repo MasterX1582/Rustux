@@ -14,6 +14,15 @@ The C kernel source is the reference and stays untouched in a separate tree
 behavior is recorded to `cases.jsonl`, the Rust port must match every recorded
 case (`diff`) and pass `gate` before it is adopted.
 
+<p align="center">
+  <img src="docs/assets/rustux-boot.gif" alt="Rustux booting under OVMF/QEMU — GOP framebuffer console: memory map, APIC, PCI, e1000 DHCP, then the 19-task userspace suite">
+</p>
+
+*Booting under OVMF/QEMU: memory map, APIC and PCI bring-up, the e1000
+driver doing ARP/IPv4 ping/DHCP over slirp, then the 19-task userspace
+test suite on the GOP framebuffer console (recorded headless via QMP
+screendump).*
+
 ## A world's first
 
 Rustux carries the first known working implementation of
