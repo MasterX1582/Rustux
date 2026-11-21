@@ -51,7 +51,7 @@ _start:
     add %r13, %rax              # buf end
     cmp %rax, %rbx
     jb 4b
-    cmp $29, %ebp
+    cmp $30, %ebp
     je 5f
     inc %r15d
 5:

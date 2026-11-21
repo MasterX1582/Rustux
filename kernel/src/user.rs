@@ -578,12 +578,9 @@ pub struct Task {
     /// (page granularity underneath, like Linux VMAs).
     brk_base: u64,
     brk_cur: u64,
-    /// fd slots -> GLOBAL OFD indices; 0/1/2 pre-seeded std streams.
-    fds: [Option<u8>; MAX_FDS],
-    /// Per-fd O_CLOEXEC bits — fd-level state, so dup clears it and
-    /// fcntl F_SETFD owns it; exec closes every set fd. MAX_FDS=16
-    /// fits a u16.
-    fd_cloexec: u16,
+    /// Index into FDTABS — this task fd table. CLONE_FILES
+    /// children share the parent index; fork duplicates it.
+    fdi: u8,
     /// Saved user context for switches — fabricated at spawn, then
     /// snapshotted by the timer IRQ on every preemption.
     ctx: UCtx,
@@ -636,6 +633,88 @@ pub struct Task {
 /// fds name the same descriptions — same offsets, same refs —
 /// exactly like Linux's files_struct sharing of struct file.
 static mut OFDS: [Option<OpenFile>; MAX_OFDS] = [const { None }; MAX_OFDS];
+
+/// A task fd table — the files_struct analogue. The table is the OFD
+/// owner: users counts referencing TASKS, and each fd slot points at
+/// a global OFD whose refs count one per TABLE, not per task.
+/// CLONE_FILES shares the index (users++); fork duplicates the slots
+/// and bumps each named OFD.
+#[derive(Clone, Copy)]
+struct FdTab {
+    users: u8,
+    /// Per-fd O_CLOEXEC bits — fd-level state, so dup clears it and
+    /// fcntl F_SETFD owns it; exec closes every set fd. MAX_FDS=16
+    /// fits a u16.
+    cloexec: u16,
+    /// fd slots -> GLOBAL OFD indices; 0/1/2 pre-seeded std streams.
+    fds: [Option<u8>; MAX_FDS],
+}
+const FDT_EMPTY: FdTab = FdTab { users: 0, cloexec: 0, fds: [None; MAX_FDS] };
+/// 32 tasks plus CLONE_FILES slack — a full table ENOMEMs, never
+/// corrupts, same discipline as MM_REFS.
+const MAX_FDTABS: usize = 40;
+/// Task.fdi sentinel after release — makes a second release_fds a
+/// no-op instead of a double-decrement.
+const FDI_NONE: u8 = u8::MAX;
+static mut FDTABS: [FdTab; MAX_FDTABS] = [FDT_EMPTY; MAX_FDTABS];
+
+/// The task live fd table. Returns &mut into a global — callers
+/// hold no borrow on FDTABS itself, mirroring the TASKS discipline.
+#[allow(clippy::mut_from_ref)]
+fn fdt(t: &Task) -> &mut FdTab {
+    unsafe { &mut (*core::ptr::addr_of_mut!(FDTABS))[t.fdi as usize] }
+}
+
+/// Take a free table slot (users=1). None means the table is full.
+fn fdtab_alloc() -> Option<u8> {
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(FDTABS) };
+    ts.iter().position(|x| x.users == 0).map(|i| {
+        ts[i] = FDT_EMPTY;
+        ts[i].users = 1;
+        i as u8
+    })
+}
+
+/// Duplicate src slots into a fresh table and bump every named OFD —
+/// the fork side of files_struct sharing.
+fn fdtab_dup(src: u8) -> Option<u8> {
+    let i = fdtab_alloc()? as usize;
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(FDTABS) };
+    ts[i] = FdTab { users: 1, ..ts[src as usize] };
+    let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+    for s in ts[i].fds.iter().flatten() {
+        if let Some(o) = ofds.get_mut(*s as usize).and_then(|x| x.as_mut()) {
+            o.refs += 1;
+        }
+    }
+    Some(i as u8)
+}
+
+/// CLONE_FILES: another task points at the same table.
+fn fdtab_share(i: u8) {
+    unsafe { (*core::ptr::addr_of_mut!(FDTABS))[i as usize].users += 1 };
+}
+
+/// exit_files: drop this task reference; the LAST user releases
+/// each slot OFD exactly like put_files_struct.
+fn fdtab_release(i: u8) {
+    if i == FDI_NONE {
+        return;
+    }
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(FDTABS) };
+    let tb = &mut ts[i as usize];
+    tb.users -= 1;
+    if tb.users != 0 {
+        return;
+    }
+    for s in tb.fds.iter_mut() {
+        if let Some(o) = s.take() {
+            ofd_release(o as usize);
+        }
+    }
+    tb.cloexec = 0;
+}
+
 /// The shared open-file-description table. 32 tasks hold 3 std OFDs
 /// each (96 worst case) before a single pipe/socket exists — 64 was
 /// a real transient-ENOMEM under scheduling-dependent occupancy.
@@ -791,11 +870,12 @@ impl Task {
     /// exit_files: shared descriptions outlive the task when
     /// another task still points at them.
     fn release_fds(&mut self) {
-        for s in self.fds.iter_mut() {
-            if let Some(i) = s.take() {
-                ofd_release(i as usize);
-            }
-        }
+        // CLONE_FILES tables are shared: users counts tasks, and the
+        // last user drops the slots' OFD refs (put_files_struct).
+        // FDI_NONE makes the reap-time second call a no-op.
+        let i = self.fdi;
+        self.fdi = FDI_NONE;
+        fdtab_release(i);
     }
 
     fn reap(&mut self) {
@@ -1048,8 +1128,14 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
 /// failure reaps the partial task — nothing half-allocated escapes.
 fn load(img: &[u8]) -> Option<Task> {
     let e = elf::parse(img)?;
+    let pml4 = kalloc::alloc_frame()?;
+    let Some(fdi) = fdtab_alloc() else {
+        kalloc::free_frame(pml4);
+        return None;
+    };
     let mut t = Task {
-        pml4: kalloc::alloc_frame()?,
+        pml4,
+        fdi,
         entry: e.entry,
         stack_top: 0,
         kstack_base: 0,
@@ -1058,11 +1144,7 @@ fn load(img: &[u8]) -> Option<Task> {
         nranges: 0,
         brk_base: 0,
         brk_cur: 0,
-        fds: {
-            const NONE: Option<u8> = None;
-            [NONE; MAX_FDS]
-        },
-        fd_cloexec: 0,
+
         ctx: UCtx::ZERO,
         state: TaskState::Runnable,
         pid: 0,
@@ -1098,7 +1180,7 @@ fn load(img: &[u8]) -> Option<Task> {
                 append: false,
                 accmode: if i == 0 { 0 } else { 1 },
             });
-            t.fds[i] = Some(oi as u8);
+            fdt(&t).fds[i] = Some(oi as u8);
         }
     }
     if !load_inner(&mut t, &e, img) {
@@ -2353,7 +2435,8 @@ pub fn sys_gettid() -> u64 {
 /// copied), and CHILD_CLEARTID honored-as-noop like a task that dies
 /// with no futex address. CLONE_VM needs a caller stack (running a
 /// thread on its parent's rsp is unbootable); CLONE_SETTLS lands the
-/// child's fs_base. FILES/SIGHAND/THREAD combos honestly ENOSYS.
+/// child's fs_base. CLONE_FILES shares the fd table in either mode.
+/// SIGHAND/THREAD combos honestly ENOSYS.
 /// glibc's fork() lands here, not on nr 57.
 pub fn sys_clone(
     ctx: &mut UCtx,
@@ -2364,6 +2447,7 @@ pub fn sys_clone(
     tls: u64,
 ) -> u64 {
     const ENOSYS_: u64 = (-38i64) as u64;
+    const CLONE_FILES: u64 = 0x0000_0400;
     const CLONE_VM: u64 = 0x0000_0100;
     const CLONE_SETTLS: u64 = 0x0008_0000;
     const PARENT_SETTID: u64 = 0x0010_0000;
@@ -2371,6 +2455,7 @@ pub fn sys_clone(
     const CHILD_SETTID: u64 = 0x0100_0000;
     const SIGMASK: u64 = 0xff;
     const KNOWN: u64 = SIGMASK
+        | CLONE_FILES
         | CLONE_VM
         | CLONE_SETTLS
         | PARENT_SETTID
@@ -2395,10 +2480,11 @@ pub fn sys_clone(
     if ptid != 0 && flags & PARENT_SETTID != 0 && !range_ok_w(ptid, 4) {
         return EFAULT;
     }
+    let files = flags & CLONE_FILES != 0;
     let child = if flags & CLONE_VM != 0 {
-        clone_vm(ctx, stack, tls, flags & CLONE_SETTLS != 0)
+        clone_vm(ctx, stack, tls, flags & CLONE_SETTLS != 0, files)
     } else {
-        fork(ctx)
+        fork(ctx, files)
     };
     if (child as i64) < 0 {
         return child;
@@ -2789,7 +2875,7 @@ const EISDIR: u64 = (-21i64) as u64;
 
 /// Resolve an fd slot to its OFD in the global table.
 fn ofd(t: &mut Task, fd: u64) -> Option<&'static mut OpenFile> {
-    let i = *t.fds.get(fd as usize)?.as_ref()?;
+    let i = *fdt(t).fds.get(fd as usize)?.as_ref()?;
     unsafe { (*core::ptr::addr_of_mut!(OFDS)).get_mut(i as usize)?.as_mut() }
 }
 
@@ -3094,7 +3180,7 @@ pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
         kalloc::free_frame(buf);
         return EMFILE;
     };
-    let mut fis = t
+    let mut fis = fdt(t)
         .fds
         .iter()
         .enumerate()
@@ -3128,8 +3214,8 @@ pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
         append: false,
         accmode: 1,
     });
-    t.fds[rf] = Some(ro as u8);
-    t.fds[wf] = Some(wo as u8);
+    fdt(t).fds[rf] = Some(ro as u8);
+    fdt(t).fds[wf] = Some(wo as u8);
     let ce = flags & O_CLOEXEC != 0;
     cloexec_set(t, rf, ce);
     cloexec_set(t, wf, ce);
@@ -3216,9 +3302,9 @@ const O_ACCMODE: u64 = 3;
 #[inline]
 fn cloexec_set(t: &mut Task, fi: usize, on: bool) {
     if on {
-        t.fd_cloexec |= 1 << fi;
+        fdt(t).cloexec |= 1 << fi;
     } else {
-        t.fd_cloexec &= !(1 << fi);
+        fdt(t).cloexec &= !(1 << fi);
     }
 }
 
@@ -3284,7 +3370,7 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
     let Some(oi) = ofds.iter().position(Option::is_none) else {
         return EMFILE;
     };
-    let Some(fi) = t.fds.iter().position(Option::is_none) else {
+    let Some(fi) = fdt(t).fds.iter().position(Option::is_none) else {
         return EMFILE;
     };
     ofds[oi] = Some(OpenFile {
@@ -3294,7 +3380,7 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
         append: flags & O_APPEND != 0,
         accmode: acc as u8,
     });
-    t.fds[fi] = Some(oi as u8);
+    fdt(t).fds[fi] = Some(oi as u8);
     cloexec_set(t, fi, flags & O_CLOEXEC != 0);
     fi as u64
 }
@@ -3534,26 +3620,26 @@ pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
     match cmd {
         F_GETFD => {
-            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+            if fd as usize >= MAX_FDS || fdt(t).fds[fd as usize].is_none() {
                 return EBADF;
             }
-            ((t.fd_cloexec >> fd) & 1) as u64
+            ((fdt(t).cloexec >> fd) & 1) as u64
         }
         F_SETFD => {
-            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+            if fd as usize >= MAX_FDS || fdt(t).fds[fd as usize].is_none() {
                 return EBADF;
             }
             cloexec_set(t, fd as usize, arg & 1 != 0);
             0
         }
         F_GETFL => {
-            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+            if fd as usize >= MAX_FDS || fdt(t).fds[fd as usize].is_none() {
                 return EBADF;
             }
             0 // O_RDONLY — the only access mode an archive fd has
         }
         F_SETFL => {
-            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+            if fd as usize >= MAX_FDS || fdt(t).fds[fd as usize].is_none() {
                 return EBADF;
             }
             if arg == 0 { 0 } else { EINVAL }
@@ -3585,10 +3671,10 @@ pub fn fd_dup_at(fd: u64, min: u64) -> u64 {
         return EINVAL;
     }
     let Some(t) = cur_mut() else { return EBADF };
-    let Some(&oi) = t.fds.get(fd as usize).and_then(|s| s.as_ref()) else {
+    let Some(&oi) = fdt(t).fds.get(fd as usize).and_then(|s| s.as_ref()) else {
         return EBADF;
     };
-    let Some(fi) = t.fds[min as usize..].iter().position(Option::is_none) else {
+    let Some(fi) = fdt(t).fds[min as usize..].iter().position(Option::is_none) else {
         return EMFILE;
     };
     let fi = fi + min as usize;
@@ -3596,7 +3682,7 @@ pub fn fd_dup_at(fd: u64, min: u64) -> u64 {
     if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs += 1;
     }
-    t.fds[fi] = Some(oi);
+    fdt(t).fds[fi] = Some(oi);
     cloexec_set(t, fi, false);
     fi as u64
 }
@@ -3606,7 +3692,7 @@ pub fn fd_dup_at(fd: u64, min: u64) -> u64 {
 /// class is structurally dead here (fixed bound, EBADF).
 pub fn fd_dup2(old: u64, new: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
-    let Some(&oi) = t.fds.get(old as usize).and_then(|s| s.as_ref()) else {
+    let Some(&oi) = fdt(t).fds.get(old as usize).and_then(|s| s.as_ref()) else {
         return EBADF;
     };
     if new as usize >= MAX_FDS {
@@ -3616,14 +3702,14 @@ pub fn fd_dup2(old: u64, new: u64) -> u64 {
         return new;
     }
     // Release whatever `new` held, then point it at old's OFD.
-    if let Some(prev) = t.fds[new as usize].take() {
+    if let Some(prev) = fdt(t).fds[new as usize].take() {
         ofd_release(prev as usize);
     }
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs += 1;
     }
-    t.fds[new as usize] = Some(oi);
+    fdt(t).fds[new as usize] = Some(oi);
     cloexec_set(t, new as usize, false);
     new
 }
@@ -3654,7 +3740,7 @@ pub fn fd_dup3(old: u64, new: u64, flags: u64) -> u64 {
 /// gets EBADF, which is correct.
 pub fn fd_close(fd: u64) -> u64 {
     let Some(t) = cur_mut() else { return EBADF };
-    let Some(slot) = t.fds.get_mut(fd as usize) else {
+    let Some(slot) = fdt(t).fds.get_mut(fd as usize) else {
         return EBADF;
     };
     let Some(oi) = slot.take() else { return EBADF };
@@ -3894,7 +3980,7 @@ fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
     if !(0..MAX_FDS as i32).contains(&fd) {
         return POLLNVAL;
     }
-    let Some(oi) = t.fds[fd as usize] else {
+    let Some(oi) = fdt(t).fds[fd as usize] else {
         return POLLNVAL;
     };
     let ofds = unsafe { &*core::ptr::addr_of!(OFDS) };
@@ -4410,7 +4496,7 @@ pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     let (Some(oi), Some(fi)) = (
         ofds.iter().position(Option::is_none),
-        t.fds.iter().position(Option::is_none),
+        fdt(t).fds.iter().position(Option::is_none),
     ) else {
         return EMFILE;
     };
@@ -4447,7 +4533,7 @@ pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
         FdKind::Tcp(si)
     };
     ofds[oi] = Some(OpenFile { kind, pos: 0, refs: 1, append: false, accmode: 2 });
-    t.fds[fi] = Some(oi as u8);
+    fdt(t).fds[fi] = Some(oi as u8);
     cloexec_set(t, fi, ty & SOCK_CLOEXEC != 0);
     fi as u64
 }
@@ -4800,7 +4886,7 @@ fn tcp_mint_fd(t: &mut Task, ci: usize, ce: bool) -> Result<u64, u64> {
     let Some(oi) = ofds.iter().position(Option::is_none) else {
         return Err(ENFILE_);
     };
-    let Some(fi) = t.fds.iter().position(Option::is_none) else {
+    let Some(fi) = fdt(t).fds.iter().position(Option::is_none) else {
         return Err(EMFILE);
     };
     ofds[oi] = Some(OpenFile {
@@ -4810,7 +4896,7 @@ fn tcp_mint_fd(t: &mut Task, ci: usize, ce: bool) -> Result<u64, u64> {
         append: false,
         accmode: 2,
     });
-    t.fds[fi] = Some(oi as u8);
+    fdt(t).fds[fi] = Some(oi as u8);
     cloexec_set(t, fi, ce);
     Ok(fi as u64)
 }
@@ -5641,15 +5727,15 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     // O_CLOEXEC dies here: drop each marked fd before the image
     // swap — Linux semantics, and a real leak otherwise (a pipe or
     // socket would survive into a binary that never opened it).
-    let mut ce = t.fd_cloexec;
+    let mut ce = fdt(t).cloexec;
     while ce != 0 {
         let fi = ce.trailing_zeros() as usize;
         ce &= !(1 << fi);
-        if let Some(oi) = t.fds[fi].take() {
+        if let Some(oi) = fdt(t).fds[fi].take() {
             ofd_release(oi as usize);
         }
     }
-    t.fd_cloexec = 0;
+    fdt(t).cloexec = 0;
     // exec() must not destroy a shared mm: when siblings still run
     // on this pml4 (CLONE_VM), the exec'ing thread detaches into a
     // fresh pml4 — Linux's exec_mmap gives it a new mm and the old
@@ -6140,7 +6226,7 @@ fn fork_address_space(c: &mut Task, ppml4: u64) -> bool {
 /// address-space copy, copied fd table pointing at the SAME global
 /// OFDs (shared offsets — the Linux semantic), and a ctx equal to
 /// the parent's except rax=0. Parent's rax gets the child pid.
-pub fn fork(ctx: &mut UCtx) -> u64 {
+pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
@@ -6151,10 +6237,24 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
     let Some(p) = tasks.get_mut(cur).and_then(|s| s.as_mut()) else {
         return EAGAIN;
     };
+    // CLONE_FILES shares the parent's table (users++); otherwise a
+    // private copy with each named OFD ref bumped (fdtab_dup).
+    let cfdi = if files {
+        fdtab_share(p.fdi);
+        p.fdi
+    } else {
+        match fdtab_dup(p.fdi) {
+            Some(i) => i,
+            None => return ENOMEM,
+        }
+    };
     let mut c = Task {
         pml4: match kalloc::alloc_frame() {
             Some(f) => f,
-            None => return ENOMEM,
+            None => {
+                fdtab_release(cfdi);
+                return ENOMEM;
+            }
         },
         entry: p.entry,
         stack_top: p.stack_top,
@@ -6164,8 +6264,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         nranges: p.nranges,
         brk_base: p.brk_base,
         brk_cur: p.brk_cur,
-        fds: p.fds,
-        fd_cloexec: p.fd_cloexec,
+        fdi: cfdi,
         ctx: {
             let mut x = *ctx;
             x.rax = 0; // child sees fork()==0
@@ -6196,25 +6295,18 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
     if !fork_address_space(&mut c, p.pml4) {
         c.free_user_mappings();
         kalloc::free_frame(c.pml4);
+        fdtab_release(cfdi);
         return ENOMEM;
     }
     let ks = kalloc::kmalloc(KSTACK_SIZE) as u64;
     if ks == 0 {
         c.free_user_mappings();
         kalloc::free_frame(c.pml4);
+        fdtab_release(cfdi);
         return ENOMEM;
     }
     c.kstack_base = ks;
     c.kstack_top = ks + KSTACK_SIZE as u64;
-    // The child shares the parent's OFDs — bump each referenced one.
-    {
-        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
-        for s in c.fds.iter().flatten() {
-            if let Some(o) = ofds.get_mut(*s as usize).and_then(|x| x.as_mut()) {
-                o.refs += 1;
-            }
-        }
-    }
     let cpid = c.pid;
     tasks[slot] = Some(c);
     cpid
@@ -6225,7 +6317,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
 /// own kernel stack, its own user rsp on the caller-supplied stack,
 /// and SETTLS wiring when asked. The task is still a distinct
 /// process for wait4 (no CLONE_THREAD group semantics yet).
-fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool) -> u64 {
+fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
@@ -6245,6 +6337,21 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool) -> u64 {
         unsafe { kalloc::kfree(ks as *mut u8) };
         return ENOMEM;
     }
+    // Same table rule as fork — FILES shares, else a bumped copy.
+    let cfdi = if files {
+        fdtab_share(p.fdi);
+        p.fdi
+    } else {
+        match fdtab_dup(p.fdi) {
+            Some(i) => i,
+            None => {
+                // mm_share's +1 must go back — the child never ran.
+                mm_release(p.pml4);
+                unsafe { kalloc::kfree(ks as *mut u8) };
+                return ENOMEM;
+            }
+        }
+    };
     let c = Task {
         pml4: p.pml4, // SHARED — freed by the last mm user at reap
         entry: p.entry,
@@ -6258,8 +6365,7 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool) -> u64 {
         nranges: p.nranges,
         brk_base: p.brk_base,
         brk_cur: p.brk_cur,
-        fds: p.fds,
-        fd_cloexec: p.fd_cloexec,
+        fdi: cfdi,
         ctx: {
             let mut x = *ctx;
             x.rax = 0; // child sees clone()==0
@@ -6283,15 +6389,6 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool) -> u64 {
         fs_base: if settls { tls } else { p.fs_base },
         clear_ctid: 0,
     };
-    // The child shares the parent's OFDs — bump each referenced one.
-    {
-        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
-        for s in c.fds.iter().flatten() {
-            if let Some(o) = ofds.get_mut(*s as usize).and_then(|x| x.as_mut()) {
-                o.refs += 1;
-            }
-        }
-    }
     let cpid = c.pid;
     tasks[slot] = Some(c);
     cpid

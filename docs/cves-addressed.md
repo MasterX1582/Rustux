@@ -5,7 +5,7 @@ that covers it and the verdict. GENERATED from
 `docs/cve-matrix.md` by `tools/cve-ledger.py` — do not edit
 by hand; append to the matrix and regenerate.
 
-**81 unique CVEs recorded.**
+**84 unique CVEs recorded.**
 
 ## klib ports
 
@@ -83,6 +83,8 @@ by hand; append to the matrix and regenerate.
 | CVE-2025-23161 | `pci` | **n/a to mechanism** — our CF8/CFC access has no save/restore arrays; reminder: all config ops must stay IRQ-safe (they are — port I/O only) |
 | CVE-2025-38432 | udp/dhcp (ipv4) | csum field zeroed before csum4 (CVE-2025-38432 fix shape); no MSG_PEEK/socket layer — 2016-10229 n/a; malformed csums dropped-and-reposted not error-looped (2015-5364/66 class abs… |
 | CVE-2025-38432 | udp/dhcp (ipv4) | csum field zeroed before csum4 (CVE-2025-38432 fix shape); no MSG_PEEK/socket layer — 2016-10229 n/a; malformed csums dropped-and-reposted not error-looped (2015-5364/66 class abs… |
+| CVE-2025-38595 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
+| CVE-2025-38722 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
 | CVE-2025-38722 | exit-time fd release (exit_files ordering) + shell-pipeline proof | CONFIRMED-BY-TEST kernel bug: task fds were only released in reap(), so a dying pipe writer OFD stayed alive and blocked readers starved for EOF forever -- the shell-shaped test (… |
 | CVE-2025-39756 | open-file descriptions (lseek/dup/dup2) | fds index a shared OFD table (kind/pos/refs) — Linux files_struct split; dup shares offset (proven M/O/T byte reads across fd3/fd4/fd9); fixed 16-slot bound kills the 39756 class… |
 | CVE-2025-39813 | real shell + oversized-read clamp: rsh static-pie binary (prompt/parse/fork/execve/waitpi… | CONFIRMED-BY-TEST userspace-visible divergence, not a ref bug: rshtest read(out[0], buf, 8191) crossed the 4096 MAX_COPY gate and got EINVAL -> break -> close(out[0]) -> the out-p… |
@@ -95,7 +97,9 @@ by hand; append to the matrix and regenerate.
 | CVE-2026-31495 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
 | CVE-2026-43445 | `e1000` TX | **design note** — no multi-buffer skb mapping yet; when TX gains error paths, unmap exactly the buffers mapped |
 | CVE-2026-46063 | signals: rt_sigaction/rt_sigreturn/kill + EINTR | frame = [signo][UCtx] pushed onto the task's own stack through its own tables; sigreturn treats it as hostile: cs=0x33/ss=0x2b pinned not restored, TF/NT/IOPL cleared, rip canonic… |
+| CVE-2026-63910 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
 | CVE-2026-63913 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
+| CVE-2026-64496 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
 | CVE-2026-68120 | ipv6/ndp/icmpv6 | no direct CVEs; frag-header CVEs reinforce the no-extension-headers/no-fragments design; hop==255 + solicited-dst + target==us enforced; pseudo-header csum validated (neg-zero res… |
 | CVE-2026-68124 | terminal ABI: ioctl(16) dispatch — TCGETS/TCSETS-family on the console pair, TIOCGWINSZ r… | every ioctl arg extent is range_ok(_w)-gated with the exact struct size BEFORE any copy (36/8/4B) — the run-68 translate bound already confines arg to the user window; termios is… |
 | CVE-2026-68124 | tty stdin: IRQ1->scancode ring->line discipline->read(0)/poll(0)/FIONREAD, WaitOn::Stdin,… | bounded queues throughout: 256B canonical edit buffer + 4KiB ready queue, drop-on-full = Linux input discard; feed runs from the timer tick (printk is irq_save-safe, kill marks pe… |

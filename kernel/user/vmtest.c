@@ -71,8 +71,8 @@ int main(void) {
     // Honest refusals: unsupported combos stay ENOSYS, a bare
     // CLONE_VM with no child stack is EINVAL.
     errno = 0;
-    long e1 = syscall(SYS_clone, 0x400 /*CLONE_FILES*/, 0, 0, 0, 0);
-    check(e1 == -1 && errno == ENOSYS, "CLONE_FILES -> ENOSYS");
+    long e1 = syscall(SYS_clone, 0x800 /*CLONE_SIGHAND*/, 0, 0, 0, 0);
+    check(e1 == -1 && errno == ENOSYS, "CLONE_SIGHAND -> ENOSYS");
     errno = 0;
     long e2 = syscall(SYS_clone, CLONE_VM | 0x10000 /*THREAD*/,
                       tstack + sizeof(tstack), 0, 0, 0);

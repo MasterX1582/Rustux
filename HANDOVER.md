@@ -1065,3 +1065,11 @@ the task model now supports fork/clone/wait as the next rung.
 - CHILD_CLEARTID is now real: sys_clone registers ctid on the child (fork-shaped and VM clones); task_exit_inner zeroes *ctid through the dying task's page tables (write_task_bytes → still-referenced mm) then futex_wake(pml4, ctva, 1) — glibc's pthread_join wait verbatim.
 - fxtest proves: a CLONE_VM child blocked in futex_wait is woken by the parent's store+FUTEX_WAKE; a ctid-registered child is joined by futex-waiting on its tid word; EAGAIN/ETIMEDOUT/EFAULT/ENOSYS honesty table.
 - Divergences recorded: FUTEX_PRIVATE/CLOCK flags collapse into one key space; the key is (pml4, va) rather than physical page (exact while no cross-mm shared pages exist); wake returns the count woken but waiters are not strictly FIFO.
+
+## Run-77 — CLONE_FILES: a real shared files_struct
+
+- FDTABS: 40-entry fd-table ledger {users, cloexec, fds[16]} — the files_struct analogue. Task.fdi indexes it; every former t.fds/t.fd_cloexec site goes through fdt(t). OFD.refs count per TABLE (the table is the owner), users counts tasks — fork duplicates slots and bumps each OFD, CLONE_FILES bumps users only, exit drops users and the last user releases each slot (put_files_struct shape). FDI_NONE sentinel: exit release then reap is a no-op, not a double-decrement.
+- sys_clone accepts CLONE_FILES in both modes: FILES|VM threads share mm+table (the pthread shape), FILES alone keeps the copied mm and shares only the table (raw fork-shaped clone — the glibc wrapper's mandatory stack arg stays VM-gated).
+- ftest proves: FILES|VM child opens /motd.txt — parent reads the same fd number and sees the child's dup slot; FILES-only child reports its fd over an inherited pipe (copied memory can't share variables) and the fd stays alive in the parent after the child dies — the table outlives either user.
+- vmtest's honesty row updated: FILES left the ENOSYS set, SIGHAND/THREAD keep it honest.
+- Divergences: exec's cloexec sweep edits the shared table directly (Linux unshares files on de_thread); MAX_FDTABS exhaustion is ENOMEM; no fdtable resize (fixed 16 slots like before).
