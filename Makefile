@@ -35,7 +35,7 @@ demo: $(ESP_IMG)
 FORCE:
 
 # Ring-3 milestone images: static ELF64s loaded by kernel/src/elf.rs.
-USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf kernel/user/lstest.elf kernel/user/exectest.elf kernel/user/spinA.elf kernel/user/spinB.elf kernel/user/forktest.elf kernel/user/pipetest.elf kernel/user/sigtest.elf kernel/user/faulttest.elf kernel/user/fputest.elf kernel/user/sigfault.elf kernel/user/polltest.elf kernel/user/udptest.elf kernel/user/tcptest.elf kernel/user/mmtest.elf kernel/user/realbin.elf kernel/user/parent.elf kernel/user/iotest.elf kernel/user/shelltest.elf kernel/user/wiotest.elf kernel/user/termtest.elf kernel/user/kbdtest.elf kernel/user/rsh.elf kernel/user/rshtest.elf kernel/user/vmtest.elf kernel/user/fxtest.elf kernel/user/ftest.elf kernel/user/thrtest.elf kernel/user/aptest.elf kernel/user/clftest.elf kernel/user/dtest.elf kernel/user/fmaptest.elf kernel/user/bbtest.elf kernel/user/vtest.elf
+USER_ELFS := kernel/user/hello.elf kernel/user/selftest.elf kernel/user/fstest.elf kernel/user/lstest.elf kernel/user/exectest.elf kernel/user/spinA.elf kernel/user/spinB.elf kernel/user/forktest.elf kernel/user/pipetest.elf kernel/user/sigtest.elf kernel/user/faulttest.elf kernel/user/fputest.elf kernel/user/sigfault.elf kernel/user/polltest.elf kernel/user/udptest.elf kernel/user/tcptest.elf kernel/user/mmtest.elf kernel/user/realbin.elf kernel/user/parent.elf kernel/user/iotest.elf kernel/user/shelltest.elf kernel/user/wiotest.elf kernel/user/termtest.elf kernel/user/kbdtest.elf kernel/user/rsh.elf kernel/user/rshtest.elf kernel/user/vmtest.elf kernel/user/fxtest.elf kernel/user/ftest.elf kernel/user/thrtest.elf kernel/user/aptest.elf kernel/user/clftest.elf kernel/user/dtest.elf kernel/user/fmaptest.elf kernel/user/bbtest.elf kernel/user/vtest.elf kernel/user/dyntest.elf
 INITRD    := initrd.cpio
 
 kernel/user/%.elf: kernel/user/%.S
@@ -47,11 +47,19 @@ kernel/user/%.elf: kernel/user/%.S
 kernel/user/%.elf: kernel/user/%.c
 	gcc -static-pie -O2 -o $@ $<
 
+# dyntest is deliberately DYNAMIC — PT_INTERP names the real glibc
+# loader, which the kernel maps into the mmap arena; ld.so then maps
+# libc.so.6 itself via the rpath. The loader+libc are staged from the
+# build host at initrd time so they always match the gcc that built
+# the test (no binaries committed).
+kernel/user/dyntest.elf: kernel/user/dyntest.c
+	gcc -O2 -Wl,-rpath,/lib/x86_64-linux-gnu -o $@ $<
+
 # The initrd: a newc cpio archive carrying the user images plus a data
 # file, read from the ESP by the kernel before ExitBootServices. The
 # archive doubles as the fd layer's read-only root filesystem.
-$(INITRD): $(USER_ELFS) kernel/user/busybox kernel/user/motd.txt tools/mkinitrd.py
-	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/lstest.elf lstest kernel/user/exectest.elf exectest kernel/user/spinA.elf spinA kernel/user/spinB.elf spinB kernel/user/forktest.elf forktest kernel/user/pipetest.elf pipetest kernel/user/sigtest.elf sigtest kernel/user/faulttest.elf faulttest kernel/user/fputest.elf fputest kernel/user/sigfault.elf sigfault kernel/user/polltest.elf polltest kernel/user/udptest.elf udptest kernel/user/tcptest.elf tcptest kernel/user/mmtest.elf mmtest kernel/user/realbin.elf realbin kernel/user/parent.elf parent kernel/user/iotest.elf iotest kernel/user/shelltest.elf shelltest kernel/user/wiotest.elf wiotest kernel/user/termtest.elf termtest kernel/user/kbdtest.elf kbdtest kernel/user/rsh.elf rsh kernel/user/rshtest.elf rshtest kernel/user/vmtest.elf vmtest kernel/user/fxtest.elf fxtest kernel/user/ftest.elf ftest kernel/user/thrtest.elf thrtest kernel/user/aptest.elf aptest kernel/user/clftest.elf clftest kernel/user/dtest.elf dtest kernel/user/fmaptest.elf fmaptest kernel/user/bbtest.elf bbtest kernel/user/vtest.elf vtest kernel/user/busybox busybox kernel/user/motd.txt motd.txt > $@
+$(INITRD): $(USER_ELFS) kernel/user/busybox kernel/user/motd.txt tools/mkinitrd.py /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/libc.so.6
+	python3 tools/mkinitrd.py kernel/user/hello.elf init kernel/user/selftest.elf selftest kernel/user/fstest.elf fstest kernel/user/lstest.elf lstest kernel/user/exectest.elf exectest kernel/user/spinA.elf spinA kernel/user/spinB.elf spinB kernel/user/forktest.elf forktest kernel/user/pipetest.elf pipetest kernel/user/sigtest.elf sigtest kernel/user/faulttest.elf faulttest kernel/user/fputest.elf fputest kernel/user/sigfault.elf sigfault kernel/user/polltest.elf polltest kernel/user/udptest.elf udptest kernel/user/tcptest.elf tcptest kernel/user/mmtest.elf mmtest kernel/user/realbin.elf realbin kernel/user/parent.elf parent kernel/user/iotest.elf iotest kernel/user/shelltest.elf shelltest kernel/user/wiotest.elf wiotest kernel/user/termtest.elf termtest kernel/user/kbdtest.elf kbdtest kernel/user/rsh.elf rsh kernel/user/rshtest.elf rshtest kernel/user/vmtest.elf vmtest kernel/user/fxtest.elf fxtest kernel/user/ftest.elf ftest kernel/user/thrtest.elf thrtest kernel/user/aptest.elf aptest kernel/user/clftest.elf clftest kernel/user/dtest.elf dtest kernel/user/fmaptest.elf fmaptest kernel/user/bbtest.elf bbtest kernel/user/vtest.elf vtest kernel/user/dyntest.elf dyntest kernel/user/busybox busybox kernel/user/motd.txt motd.txt /lib64/ld-linux-x86-64.so.2 lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/libc.so.6 lib/x86_64-linux-gnu/libc.so.6 > $@
 
 $(KERNEL): kernel/src/*.rs kernel/Cargo.toml klib/src/*.rs klib/Cargo.toml Cargo.toml kernel/user/hello.elf FORCE
 	cargo build --release --target $(TARGET) -p kernel

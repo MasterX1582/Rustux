@@ -1253,21 +1253,13 @@ fn map_page(t: &mut Task, va: u64, flags: u64) -> Option<u64> {
     Some(f)
 }
 
-/// Populate `t`'s address space from the ELF image. All header fields
-/// are hostile — every extent is checked before use.
-fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
-    t.brk_base = 0;
-    t.brk_cur = 0;
-    // Copy the kernel PML4 — its entries are supervisor-only, so user
-    // code can't reach kernel memory through them even though the
-    // mappings are shared.
-    let kpml4 = cpu::read_cr3() & !0xfff;
-    for i in 0..512u64 {
-        let ent = rd64(kpml4 + 8 * i);
-        if ent & PRESENT != 0 {
-            wr64(t.pml4 + 8 * i, ent);
-        }
-    }
+/// Populate `t`'s address space from the ELF image's PT_LOAD
+/// segments and record their VMAs. All header fields are hostile —
+/// every extent is checked before use. `track_brk` extends the break
+/// past the highest segment end — false for a PT_INTERP interpreter,
+/// whose span sits in the mmap arena and must not move the main
+/// binary's break.
+fn map_loads(t: &mut Task, e: &elf::Elf, img: &[u8], track_brk: bool) -> bool {
     for p in e.phdrs(img) {
         if p.ty != elf::PT_LOAD {
             continue;
@@ -1332,7 +1324,28 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
         // page slack before p.va.)
         t.ranges[t.nranges] = (va0, va1, fl);
         t.nranges += 1;
-        t.brk_base = t.brk_base.max((mend + PAGE - 1) & !(PAGE - 1));
+        if track_brk {
+            t.brk_base = t.brk_base.max((mend + PAGE - 1) & !(PAGE - 1));
+        }
+    }
+    true
+}
+
+fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
+    t.brk_base = 0;
+    t.brk_cur = 0;
+    // Copy the kernel PML4 — its entries are supervisor-only, so user
+    // code can't reach kernel memory through them even though the
+    // mappings are shared.
+    let kpml4 = cpu::read_cr3() & !0xfff;
+    for i in 0..512u64 {
+        let ent = rd64(kpml4 + 8 * i);
+        if ent & PRESENT != 0 {
+            wr64(t.pml4 + 8 * i, ent);
+        }
+    }
+    if !map_loads(t, e, img, true) {
+        return false;
     }
     for i in 0..USTACK_PAGES {
         if map_page(t, USTACK_VA + i * PAGE, USER | WRITE | NX).is_none() {
@@ -1352,6 +1365,49 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
     t.nranges += 1;
     t.brk_cur = t.brk_base;
     true
+}
+
+/// PT_INTERP: when `e` names an interpreter, load that ELF too —
+/// Linux's load_elf_interp analogue. The interp is another ET_DYN
+/// image; it goes into the mmap arena via the same first-fit VMA
+/// allocator user mmap uses, so it can never collide with a later
+/// mmap. Returns (entry to start at, AT_BASE) — the image's own
+/// entry and base 0 when it has no interp, None on failure (a
+/// missing or malformed interpreter fails the exec like ENOENT on
+/// Linux's open_exec).
+fn interp_load(t: &mut Task, e: &elf::Elf, img: &[u8]) -> Option<(u64, u64)> {
+    let Some(path) = e.interp(img) else {
+        return Some((e.entry, 0));
+    };
+    // The fs names archive members without the leading '/'.
+    let name = path.strip_prefix(b"/").unwrap_or(path);
+    let iimg = fs_lookup(name)?;
+    // Measure the span at a probe bias (bias-0 would fail parse's
+    // entry-in-window check; the span itself is bias-independent),
+    // first-fit a gap in the mmap arena, then map so the lowest
+    // PT_LOAD page lands exactly there — Linux's total_mapping_size
+    // dance over mmap_base.
+    let raw = elf::parse_at(iimg, MMAP_LO)?;
+    let (mut lo, mut hi) = (u64::MAX, 0u64);
+    for p in raw.phdrs(iimg) {
+        if p.ty != elf::PT_LOAD || p.memsz == 0 {
+            continue;
+        }
+        let mend = p.va.checked_add(p.memsz)?;
+        lo = lo.min(p.va & !0xfff);
+        hi = hi.max((mend + 0xfff) & !0xfff);
+    }
+    if lo >= hi {
+        return None;
+    }
+    let base = mmap_find(t, hi - lo)?;
+    // Shift the measured image so its lowest page sits at `base`:
+    // real bias = base - raw_lo = base - (lo - MMAP_LO).
+    let ie = elf::parse_at(iimg, base.checked_add(MMAP_LO)?.checked_sub(lo)?)?;
+    if !map_loads(t, &ie, iimg, false) {
+        return None;
+    }
+    Some((ie.entry, base))
 }
 
 /// Load `img` into a fresh Task. Any malformed input or allocation
@@ -2094,6 +2150,7 @@ fn setup_stack(
     e: &elf::Elf,
     img: &[u8],
     args: &ExecArgs,
+    at_base: u64,
 ) -> Option<u64> {
     let mut sp = t.stack_top;
     let mut str_va = |s: &[u8]| -> u64 {
@@ -2132,7 +2189,7 @@ fn setup_stack(
         (4, e.phentsize() as u64),
         (5, e.phnum() as u64),
         (6, PAGE),             // AT_PAGESZ
-        (7, 0),                // AT_BASE (no interp)
+        (7, at_base),          // AT_BASE (0 = no interp)
         (8, 0),                // AT_FLAGS
         (9, e.entry),          // AT_ENTRY
         (11, 0),               // AT_UID
@@ -3000,15 +3057,38 @@ pub fn sys_fstat(fd: u64, statbuf: u64) -> u64 {
     }
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
-    let (mode, size) = match &o.kind {
-        FdKind::Stdin | FdKind::Console => (0o20644u64, 0u64), // S_IFCHR
-        FdKind::Dir(_) => (0o40755, 0),
-        FdKind::File(d) => (0o100644, d.len() as u64),
-        FdKind::Ram(i) => (0o100644, vfile(*i).map_or(0, |v| v.len) as u64),
-        FdKind::Pipe { .. } => (0o10644, 0), // S_IFIFO
-        FdKind::Udp(_) | FdKind::Tcp(_) => (0o140777, 0), // S_IFSOCK
+    // ld.so dedupes opened shared objects by (st_dev, st_ino) — a
+    // zero ino makes libc look "already mapped" (aliased to ld.so or
+    // the main object) and version checks fail. Same idx+1 scheme
+    // newfstatat uses so stat and fstat agree on one file.
+    let (mode, size, ino) = match &o.kind {
+        FdKind::Stdin | FdKind::Console => (0o20644u64, 0u64, 0), // S_IFCHR
+        FdKind::Dir(_) => (0o40755, 0, 0),
+        FdKind::File(d) => {
+            let ino = (unsafe { *core::ptr::addr_of!(INITRD) })
+                .and_then(|arc| {
+                    crate::cpio::entries(arc).position(|(_, m)| {
+                        m.as_ptr() == d.as_ptr() && m.len() == d.len()
+                    })
+                })
+                .map_or(0, |i| i as u64 + 1);
+            (0o100644, d.len() as u64, ino)
+        }
+        FdKind::Ram(i) => {
+            let arc_n = (unsafe { *core::ptr::addr_of!(INITRD) })
+                .map_or(0, |a| crate::cpio::entries(a).count());
+            let vidx = unsafe { &*core::ptr::addr_of!(VFILES) }[..*i]
+                .iter()
+                .filter(|s| s.as_ref().is_some_and(|v| !v.unlinked))
+                .count();
+            (0o100644, vfile(*i).map_or(0, |v| v.len) as u64,
+             (arc_n + vidx) as u64 + 1)
+        }
+        FdKind::Pipe { .. } => (0o10644, 0, 0), // S_IFIFO
+        FdKind::Udp(_) | FdKind::Tcp(_) => (0o140777, 0, 0), // S_IFSOCK
     };
     let mut st = [0u64; 18];
+    st[1] = ino;
     st[2] = 1;
     st[3] = mode;
     st[6] = size;
@@ -6678,10 +6758,17 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     let el = name.len().min(128);
     t.exe[..el].copy_from_slice(&name[..el]);
     t.exe_len = el as u8;
-    let Some(rsp) = setup_stack(t, &e, img, args) else {
+    // PT_INTERP: a dynamic image's interpreter maps next, into the
+    // mmap arena — its VMAs land after the main binary's so the
+    // first-fit gap comes after them. Userspace starts at the
+    // interp's entry; it hands control to AT_ENTRY.
+    let Some((entry, at_base)) = interp_load(t, &e, img) else {
         return false;
     };
-    t.entry = e.entry;
+    let Some(rsp) = setup_stack(t, &e, img, args, at_base) else {
+        return false;
+    };
+    t.entry = entry;
     // The pml4 address is unchanged but its contents are entirely
     // new — the TLB still caches the OLD user translations and must
     // be flushed or user code could run on freed frames.
@@ -6726,7 +6813,12 @@ pub fn spawn(img: &[u8], name: &str) -> bool {
     let el = name.len().min(128);
     t.exe[..el].copy_from_slice(&name.as_bytes()[..el]);
     t.exe_len = el as u8;
-    let Some(rsp) = setup_stack(&mut t, &e, img, &args) else {
+    let Some((entry, at_base)) = interp_load(&mut t, &e, img) else {
+        t.reap();
+        return false;
+    };
+    t.entry = entry;
+    let Some(rsp) = setup_stack(&mut t, &e, img, &args, at_base) else {
         t.reap();
         return false;
     };

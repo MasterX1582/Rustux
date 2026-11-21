@@ -4,12 +4,15 @@
 //! silently, or trusted (the CVE-2004-1070..1072 class was unchecked
 //! header arithmetic and unchecked reads in binfmt_elf).
 //!
-//! Scope: static ET_EXEC and self-relocating ET_DYN (static-PIE)
-//! images only — no PT_INTERP, no dynamic linking. Rejected, not
-//! partially loaded. ET_DYN is mapped at LOAD_BIAS and relocates
-//! itself from its own dynamic section, same as Linux's binfmt.
+//! Scope: static ET_EXEC and ET_DYN images; a PT_INTERP header names
+//! an interpreter ELF the caller loads separately (kernel/src/user.rs
+//! maps it into the mmap arena — this module never touches the fs).
+//! Rejected, not partially loaded. ET_DYN is mapped at LOAD_BIAS and
+//! relocates itself from its own dynamic section, same as Linux's
+//! binfmt.
 
 pub const PT_LOAD: u32 = 1;
+pub const PT_INTERP: u32 = 3;
 pub const PF_X: u32 = 1;
 pub const PF_W: u32 = 2;
 #[allow(dead_code)]
@@ -83,6 +86,14 @@ pub struct Phdr {
 /// Parse and validate the ELF header. Every extent check happens
 /// before the bytes are touched.
 pub fn parse(b: &[u8]) -> Option<Elf> {
+    parse_at(b, LOAD_BIAS)
+}
+
+/// `parse` with a caller-chosen ET_DYN bias — the PT_INTERP loader
+/// measures the span at bias 0, first-fits a gap in the mmap arena,
+/// and re-parses there, like Linux's elf_map over mmap_base.
+/// ET_EXEC ignores `dyn_bias`: its vaddrs are absolute.
+pub fn parse_at(b: &[u8], dyn_bias: u64) -> Option<Elf> {
     if b.len() < EHDR_SIZE {
         return None;
     }
@@ -96,9 +107,9 @@ pub fn parse(b: &[u8]) -> Option<Elf> {
     if (ty != ET_EXEC && ty != ET_DYN) || u16le(b, 18) != EM_X86_64 {
         return None;
     }
-    // ET_DYN (static-PIE) self-relocates; the loader just picks a
-    // base and adds it to every address. ET_EXEC keeps bias 0.
-    let bias = if ty == ET_DYN { LOAD_BIAS } else { 0 };
+    // ET_DYN self-relocates; the loader just picks a base and adds
+    // it to every address. ET_EXEC keeps bias 0.
+    let bias = if ty == ET_DYN { dyn_bias } else { 0 };
     if u32le(b, 20) != 1 {
         return None;
     }
@@ -140,6 +151,27 @@ impl Elf {
     }
     pub fn phnum(&self) -> usize {
         self.phnum
+    }
+
+    /// PT_INTERP's interpreter path, NUL-trimmed. None when the
+    /// image has no interp (static binary) — Linux requires an
+    /// absolute NUL-terminated path and so do we.
+    pub fn interp<'a>(&self, img: &'a [u8]) -> Option<&'a [u8]> {
+        for p in self.phdrs(img) {
+            if p.ty != PT_INTERP {
+                continue;
+            }
+            let end = p.off.checked_add(p.filesz)?;
+            if end > img.len() as u64 || !(2..=4096).contains(&p.filesz) {
+                return None;
+            }
+            let s = &img[p.off as usize..end as usize];
+            if *s.first()? != b'/' || *s.last()? != 0 {
+                return None;
+            }
+            return Some(&s[..s.len() - 1]);
+        }
+        None
     }
 
     /// Iterate the validated program headers.

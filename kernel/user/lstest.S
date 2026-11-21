@@ -20,7 +20,7 @@ _start:
 
     # read(dirfd, buf, 4) -> -21 EISDIR
     mov %r14, %rdi
-    lea -1024(%rsp), %rsi
+    lea -4096(%rsp), %rsi
     mov $4, %edx
     xor %eax, %eax
     syscall
@@ -30,8 +30,8 @@ _start:
 2:
     # getdents64(dirfd, buf, 1024) -> n > 0
     mov %r14, %rdi
-    lea -1024(%rsp), %rsi
-    mov $1024, %edx
+    lea -4096(%rsp), %rsi
+    mov $4096, %edx
     mov $217, %eax
     syscall
     test %rax, %rax
@@ -39,33 +39,35 @@ _start:
     inc %r15d
 3:
     mov %rax, %r13              # bytes returned
-    # walk the reclen chain — archive holds 24 entries
-    # (all user ELFs + motd.txt)
-    lea -1024(%rsp), %rbx       # cursor
+    # walk the reclen chain — the archive guarantees 44 root
+    # records: ".", "..", "proc", every flat member, plus the
+    # implicit lib64/lib dirs. Other tasks can only ADD records
+    # (VFiles/VDIRS are global) — so a >= floor, never ==.
+    lea -4096(%rsp), %rbx       # cursor
     xor %ebp, %ebp              # record count
 4:
     movzwl 16(%rbx), %ecx       # d_reclen
     add %rcx, %rbx
     inc %ebp
-    lea -1024(%rsp), %rax
+    lea -4096(%rsp), %rax
     add %r13, %rax              # buf end
     cmp %rax, %rbx
     jb 4b
-    cmp $37, %ebp
-    je 5f
+    cmp $44, %ebp
+    jae 5f
     inc %r15d
 5:
-    # first record: d_type==8 (DT_REG) and name starts 'i' (init)
-    cmpb $8, -1024+18(%rsp)
+    # first record is "." — d_type==4 (DT_DIR), name '.'
+    cmpb $4, -4096+18(%rsp)
     jne 51f
-    cmpb $0x69, -1024+19(%rsp)
+    cmpb $0x2e, -4096+19(%rsp)
     je 6f
 51: inc %r15d
 6:
     # getdents again -> 0 (EOF: pos consumed all entries)
     mov %r14, %rdi
-    lea -1024(%rsp), %rsi
-    mov $1024, %edx
+    lea -4096(%rsp), %rsi
+    mov $4096, %edx
     mov $217, %eax
     syscall
     test %rax, %rax
@@ -83,8 +85,8 @@ _start:
     inc %r15d
 8:
     mov %r14, %rdi
-    lea -1024(%rsp), %rsi
-    mov $1024, %edx
+    lea -4096(%rsp), %rsi
+    mov $4096, %edx
     mov $217, %eax
     syscall
     test %rax, %rax
@@ -93,7 +95,7 @@ _start:
 9:
     # getdents64(1, ...) -> -20 ENOTDIR (console is not a dir)
     mov $1, %edi
-    lea -1024(%rsp), %rsi
+    lea -4096(%rsp), %rsi
     mov $128, %edx
     mov $217, %eax
     syscall
@@ -103,7 +105,7 @@ _start:
 10:
     # getdents64(99, ...) -> -9 EBADF
     mov $99, %edi
-    lea -1024(%rsp), %rsi
+    lea -4096(%rsp), %rsi
     mov $128, %edx
     mov $217, %eax
     syscall

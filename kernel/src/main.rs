@@ -1027,7 +1027,9 @@ fn main() -> Status {
         user::set_initrd(unsafe { core::slice::from_raw_parts(arc.as_ptr(), arc.len()) });
         for (name, img) in cpio::entries(arc) {
             let nm = core::str::from_utf8(name).unwrap_or("?");
-            if !img.starts_with(b"\x7fELF") {
+            // '/' names are support files (lib64/ld-linux...,
+            // lib/.../libc.so.6) — ELFs, but not tasks.
+            if !img.starts_with(b"\x7fELF") || name.contains(&b'/') {
                 kprintln!(con, "rustux: task {nm}: skipped (data file)");
                 continue;
             }
