@@ -1116,3 +1116,15 @@ MAP_SHARED is honest ENODEV — ordered BEFORE the MAP_PRIVATE-required gate so 
 Divergences recorded: eager fill, no demand paging or page cache; past-EOF bytes read as zeros (Linux SIGBUS on whole pages past EOF — test pins the zeros); MAP_DENYWRITE ignored (no exec-from-mapped-file path); no msync/madvise.
 
 fmaptest.c (static-pie, 18 checks): mmap content == read() content, PROT_WRITE private-copy isolation, off=4096 offset mapping + sub-page tail zero, len>file zero tail, MAP_SHARED->ENODEV, unaligned-off EINVAL, O_WRONLY->EACCES, dir/pipe fd->ENODEV, bad fd->EBADF, MAP_FIXED replace+refill — 0 failures, 34 tasks, frames 14442->14442, WSL + native VM.
+
+## run-83 — real busybox in the initrd: signal-restorer sigframe + /proc/self/exe + the open-flag honest set
+
+The first real third-party userspace binary runs under rustux: a static-PIE busybox (ET_DYN, self-relocating at LOAD_BIAS like every test ELF) baked into initrd.cpio, driven by bbtest.c. It exposed three real ABI gaps synthetic tests never did.
+
+The big one: the sigframe was [signo][UCtx] with rsp=frame — a normal C handler's ret pops signo (17 = SIGCHLD) as its return address -> rip=0x11 crash in every busybox pipeline child. Our .S tests survived because their handlers manually invoked rt_sigreturn; real handlers RET. Fix is the Linux convention: a dedicated SIGTRAMP page (USTACK_VA-PAGE, exec-mapped user-RX, holding mov $15,rax; syscall) and the frame becomes [restorer][signo][UCtx] — ret pops the restorer address, lands in the stub, rt_sigreturn restores ctx at rsp+8. sigtest.S/sigfault.S updated to ret-style handlers (sigfault's UCtx.rip offset 128->136).
+
+/proc/self/exe now resolves at fs_lookup time (not just readlink) — busybox's standalone applet mode re-execs /proc/self/exe for non-NOFORK applets like cat in a pipeline. The exe path is a real Task field (set at exec from the canonical path), separate from comm, so forked/sh-renamed children keep their binary identity.
+
+Open-flag acceptances: O_LARGEFILE (0o100000, glibc busybox adds it unconditionally — LP64 no-op), O_NONBLOCK on dir opens (glibc opendir), O_NOCTTY. getdents64 cap raised to 1MiB (busybox passes big buffers). time(201) added. MAX_INITRD 16->32MiB for the 2.8MB binary; busybox added to the initrd prerequisites (stale-archive bug fixed).
+
+Audit run-83: 0 confirmed — sigreturn privilege pins intact (cs/ss/rflags/rip/rsp), tramp page user-RX kernel-written-once, /proc/self/exe resolves only the caller's exe. vfork remains fork-shaped (documented divergence). bbtest: 0 failures, 36 tasks, zero leak, boot PASS x4.
