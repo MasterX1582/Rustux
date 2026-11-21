@@ -4730,6 +4730,17 @@ fn task_exit_inner() -> ! {
             (0, 0, 0)
         }
     };
+    // exit_files(2): the dying task's fds release NOW, not at reap —
+    // a pipe writer's OFD must hit refs=0 here so blocked readers
+    // see EOF instead of waiting for the scheduler's reaper pass.
+    // Scoped before the parent-wake loop: ofd_release can wake other
+    // tasks (pipe_end_closed -> wake_pipe_waiters walks TASKS).
+    {
+        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+            t.release_fds();
+        }
+    }
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     // Wake a wait-blocked parent whose target just exited.
     let mut collected = false;
