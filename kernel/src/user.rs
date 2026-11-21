@@ -793,8 +793,12 @@ impl Task {
 
     fn reap(&mut self) {
         self.release_fds();
-        self.free_user_mappings();
-        kalloc::free_frame(self.pml4);
+        // A shared mm (CLONE_VM) outlives its users — only the last
+        // one frees the mappings and the pml4 frame itself.
+        if mm_release(self.pml4) {
+            self.free_user_mappings();
+            kalloc::free_frame(self.pml4);
+        }
         if self.kstack_base != 0 {
             // SAFETY: kstack_base came from kmalloc, freed once here.
             unsafe { kalloc::kfree(self.kstack_base as *mut u8) };
@@ -811,6 +815,60 @@ static mut TASKS: [Option<Task>; MAX_TASKS] = [const { None }; MAX_TASKS];
 /// Index of the running task; usize::MAX when the scheduler isn't
 /// running (before launch / after the last exit unwound to main).
 static mut CUR_I: usize = usize::MAX;
+
+/// Shared-address-space ledger (CLONE_VM): (pml4, users) pairs.
+/// A pml4 enters the first time it is shared, leaves when its last
+/// user dies. A pml4 NOT in the table is singly owned — its task
+/// frees it outright at reap. At most MAX_TASKS shared mms exist.
+static mut MM_REFS: [(u64, u16); MAX_TASKS] = [(0, 0); MAX_TASKS];
+
+/// Record that `pml4` now has one more user — registers the pair
+/// (owner + new sharer = 2) on first share. False only if the table
+/// is full (provably unreachable: every entry implies >=2 live
+/// tasks, so MAX_TASKS slots can't be exhausted while a free task
+/// slot existed for the child — but a silent miss would corrupt the
+/// count, so the caller fails honestly).
+fn mm_share(pml4: u64) -> bool {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(MM_REFS) };
+    for e in t.iter_mut() {
+        if e.0 == pml4 {
+            e.1 += 1;
+            return true;
+        }
+    }
+    for e in t.iter_mut() {
+        if e.0 == 0 {
+            *e = (pml4, 2);
+            return true;
+        }
+    }
+    false
+}
+
+/// Is `pml4` a shared mm? (peek — used where the decrement must
+/// happen after a fallible allocation.)
+fn mm_is_shared(pml4: u64) -> bool {
+    let t = unsafe { &*core::ptr::addr_of!(MM_REFS) };
+    t.iter().any(|e| e.0 == pml4)
+}
+
+/// One user of `pml4` is gone. True when the caller must free the
+/// address space — either it was never shared or it was the last
+/// user. False means siblings still run on it.
+fn mm_release(pml4: u64) -> bool {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(MM_REFS) };
+    for e in t.iter_mut() {
+        if e.0 == pml4 {
+            e.1 -= 1;
+            if e.1 == 0 {
+                *e = (0, 0);
+                return true;
+            }
+            return false;
+        }
+    }
+    true
+}
 
 /// The initrd archive as a flat read-only filesystem — set once at
 /// boot before the first task runs. It names LOADER_DATA pages the
@@ -2280,30 +2338,47 @@ pub fn sys_gettid() -> u64 {
     cur_mut().map(|t| t.pid).unwrap_or(0)
 }
 
-/// clone(flags, stack, ptid, ctid, tls): the fork-shaped subset only —
-/// an exit-signal of SIGCHLD (or 0), a kernel-made stack, and the
-/// child-TID writes glibc asks for (PARENT_SETTID -> *ptid in our
-/// space, CHILD_SETTID -> *ctid in the CHILD's space via its pml4;
-/// CHILD_CLEARTID registers a futex-wake address — no futexes, so it
-/// is silently honored-as-noop like a task that dies with none).
-/// Thread combos (CLONE_VM/THREAD/SETTLS/any other flag) honestly
-/// ENOSYS. glibc's fork() lands here, not on nr 57.
+/// clone(flags, stack, ptid, ctid, tls): the fork-shaped subset plus
+/// CLONE_VM shared-address threads. An exit-signal of SIGCHLD (or 0),
+/// the child-TID writes glibc asks for (PARENT_SETTID -> *ptid in our
+/// space, CHILD_SETTID -> *ctid through the child's pml4 — shared or
+/// copied), and CHILD_CLEARTID honored-as-noop like a task that dies
+/// with no futex address. CLONE_VM needs a caller stack (running a
+/// thread on its parent's rsp is unbootable); CLONE_SETTLS lands the
+/// child's fs_base. FILES/SIGHAND/THREAD combos honestly ENOSYS.
+/// glibc's fork() lands here, not on nr 57.
 pub fn sys_clone(
     ctx: &mut UCtx,
     flags: u64,
     stack: u64,
     ptid: u64,
     ctid: u64,
-    _tls: u64,
+    tls: u64,
 ) -> u64 {
     const ENOSYS_: u64 = (-38i64) as u64;
+    const CLONE_VM: u64 = 0x0000_0100;
+    const CLONE_SETTLS: u64 = 0x0008_0000;
     const PARENT_SETTID: u64 = 0x0010_0000;
     const CHILD_CLEARTID: u64 = 0x0020_0000;
     const CHILD_SETTID: u64 = 0x0100_0000;
     const SIGMASK: u64 = 0xff;
-    const KNOWN: u64 = SIGMASK | PARENT_SETTID | CHILD_CLEARTID | CHILD_SETTID;
-    if stack != 0 || flags & !KNOWN != 0 {
+    const KNOWN: u64 = SIGMASK
+        | CLONE_VM
+        | CLONE_SETTLS
+        | PARENT_SETTID
+        | CHILD_CLEARTID
+        | CHILD_SETTID;
+    if flags & !KNOWN != 0 {
         return ENOSYS_;
+    }
+    // A new stack only means something for a shared-mm thread.
+    if stack != 0 && flags & CLONE_VM == 0 {
+        return ENOSYS_;
+    }
+    // CLONE_VM without a stack would run the child on its parent's
+    // live user rsp — unbootable, so Linux callers always pass one.
+    if stack == 0 && flags & CLONE_VM != 0 {
+        return EINVAL;
     }
     // The exit signal must be SIGCHLD or none — wait4 keys on it.
     if flags & SIGMASK != 0 && flags & SIGMASK != 17 {
@@ -2312,7 +2387,11 @@ pub fn sys_clone(
     if ptid != 0 && flags & PARENT_SETTID != 0 && !range_ok_w(ptid, 4) {
         return EFAULT;
     }
-    let child = fork(ctx);
+    let child = if flags & CLONE_VM != 0 {
+        clone_vm(ctx, stack, tls, flags & CLONE_SETTLS != 0)
+    } else {
+        fork(ctx)
+    };
     if (child as i64) < 0 {
         return child;
     }
@@ -2320,12 +2399,21 @@ pub fn sys_clone(
         // SAFETY: ptid validated writable above.
         unsafe { (ptid as *mut u32).write_unaligned(child as u32) };
     }
-    if ctid != 0 && flags & CHILD_SETTID != 0 {
-        // *ctid lives in the child's (copied) address space — write
-        // through its page tables.
-        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
-        if let Some(c) = tasks.iter().flatten().find(|t| t.pid == child) {
-            write_task_bytes(c.pml4, ctid, &(child as u32).to_ne_bytes());
+    let needs_child_fix = (ctid != 0 && flags & CHILD_SETTID != 0)
+        || (flags & CLONE_SETTLS != 0 && flags & CLONE_VM == 0);
+    if needs_child_fix {
+        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+        if let Some(c) = tasks.iter_mut().flatten().find(|t| t.pid == child) {
+            if ctid != 0 && flags & CHILD_SETTID != 0 {
+                // *ctid lives in the child's address space — write
+                // through its page tables (shared or copied).
+                write_task_bytes(c.pml4, ctid, &(child as u32).to_ne_bytes());
+            }
+            if flags & CLONE_SETTLS != 0 && flags & CLONE_VM == 0 {
+                // SETTLS on a plain fork-shaped clone still lands —
+                // the VM path sets fs_base at construction.
+                c.fs_base = tls;
+            }
         }
     }
     child
@@ -5445,7 +5533,29 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
         }
     }
     t.fd_cloexec = 0;
-    t.free_user_mappings();
+    // exec() must not destroy a shared mm: when siblings still run
+    // on this pml4 (CLONE_VM), the exec'ing thread detaches into a
+    // fresh pml4 — Linux's exec_mmap gives it a new mm and the old
+    // one dies only with its last user. The replacement frame is
+    // allocated BEFORE the refcount drops so an alloc failure can't
+    // corrupt it.
+    let shared = mm_is_shared(t.pml4);
+    let np = if shared {
+        match kalloc::alloc_frame() {
+            Some(f) => f,
+            None => return false,
+        }
+    } else {
+        0
+    };
+    if mm_release(t.pml4) {
+        if shared {
+            kalloc::free_frame(np); // sole survivor — reuse old pml4
+        }
+        t.free_user_mappings();
+    } else {
+        t.pml4 = np;
+    }
     t.nranges = 0;
     t.stack_top = 0;
     t.fs_base = 0; // TLS dies with the old image — new one SET_FSs
@@ -5963,6 +6073,82 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
     }
     c.kstack_base = ks;
     c.kstack_top = ks + KSTACK_SIZE as u64;
+    // The child shares the parent's OFDs — bump each referenced one.
+    {
+        let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
+        for s in c.fds.iter().flatten() {
+            if let Some(o) = ofds.get_mut(*s as usize).and_then(|x| x.as_mut()) {
+                o.refs += 1;
+            }
+        }
+    }
+    let cpid = c.pid;
+    tasks[slot] = Some(c);
+    cpid
+}
+
+/// clone(CLONE_VM): a task that shares the parent's address space —
+/// same pml4 (mm_users bookkeeping in MM_REFS), same mappings, its
+/// own kernel stack, its own user rsp on the caller-supplied stack,
+/// and SETTLS wiring when asked. The task is still a distinct
+/// process for wait4 (no CLONE_THREAD group semantics yet).
+fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool) -> u64 {
+    const EAGAIN: u64 = (-11i64) as u64;
+    const ENOMEM: u64 = (-12i64) as u64;
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let Some(slot) = tasks.iter().position(Option::is_none) else {
+        return EAGAIN;
+    };
+    let Some(p) = tasks.get_mut(cur).and_then(|s| s.as_mut()) else {
+        return EAGAIN;
+    };
+    let ks = kalloc::kmalloc(KSTACK_SIZE) as u64;
+    if ks == 0 {
+        return ENOMEM;
+    }
+    if !mm_share(p.pml4) {
+        // SAFETY: ks was kmalloc'd above; freed once here.
+        unsafe { kalloc::kfree(ks as *mut u8) };
+        return ENOMEM;
+    }
+    let c = Task {
+        pml4: p.pml4, // SHARED — freed by the last mm user at reap
+        entry: p.entry,
+        stack_top: p.stack_top,
+        kstack_base: ks,
+        kstack_top: ks + KSTACK_SIZE as u64,
+        // Per-task range ledger copy: a sibling's later mmap won't
+        // appear in this table (syscall-side validation divergence —
+        // the page tables themselves stay shared).
+        ranges: p.ranges,
+        nranges: p.nranges,
+        brk_base: p.brk_base,
+        brk_cur: p.brk_cur,
+        fds: p.fds,
+        fd_cloexec: p.fd_cloexec,
+        ctx: {
+            let mut x = *ctx;
+            x.rax = 0; // child sees clone()==0
+            x.rsp = stack; // caller-made thread stack, same mm
+            x
+        },
+        state: TaskState::Runnable,
+        pid: next_pid(),
+        ppid: p.pid,
+        exit_status: 0,
+        wait_on: WaitOn::None,
+        wait_ptr: 0,
+        wait_ptr2: 0,
+        wait_len: 0,
+        wait_deadline: 0,
+        pending: 0,
+        sigmask: p.sigmask,
+        handlers: p.handlers,
+        fx: p.fx,
+        name: p.name,
+        fs_base: if settls { tls } else { p.fs_base },
+    };
     // The child shares the parent's OFDs — bump each referenced one.
     {
         let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
