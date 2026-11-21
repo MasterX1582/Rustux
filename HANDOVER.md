@@ -820,3 +820,45 @@ the task model now supports fork/clone/wait as the next rung.
   space translate = kernel write/infoleak primitive) -- fixed
   pre-commit; copy_process race family n/a (single CPU); NV-63-1
   reentrant-statics debt extends.
+
+## File-I/O ABI: openat, pread, fcntl FD flags, dup3, accept4, O_CLOEXEC (audit run-69)
+
+- What landed: openat(257) with real dirfd semantics, pread64(17)
+  that never moves the shared OFD position, fcntl(72) F_GETFD/
+  F_SETFD/F_GETFL/F_SETFL/F_DUPFD/F_DUPFD_CLOEXEC, dup(32)/
+  dup2(33)/dup3(292), accept4(288) with SOCK_CLOEXEC on both the
+  immediate and blocked-wake paths, and a per-fd O_CLOEXEC bitmask
+  (Task.fd_cloexec) that fork inherits and exec sweeps before the
+  image swap. socket(41)/pipe2(293) flags mask now rejects
+  NONBLOCK honestly (EINVAL) instead of silently ignoring.
+- The bug only a compiled binary could catch: glibc passes dirfd
+  as a 32-bit int -- mov edi,-100 zero-extends to 0xffffff9c, so a
+  u64 compare against sign-extended AT_FDCWD never matched and
+  EVERY openat returned EBADF. dirfd is now read as i32, matching
+  Linux's 'int dfd' parameter. Hand-written asm tests always
+  sign-extended; this is the second ABI-skew class (after
+  _dl_get_origin's absolute-path assert) only real code surfaces.
+- Honest-error discipline: pread answers EINVAL(neg pos) ->
+  EBADF(bad fd) -> ESPIPE(non-file) -> EFAULT(bad buf) in Linux's
+  order; openat EINVALs unknown flags, EROFSs write opens (the
+  initrd is read-only, that is the truth), ENOTDIRs a non-Dir
+  dirfd; dup3 EINVALs oldfd==newfd and non-CLOEXEC flags; fcntl
+  F_SETFL accepts only 0 (no toggles exist to fake).
+- O_CLOEXEC lifetime: the bit lives on the fd, not the OFD -- dup
+  family clears it on the copy (Linux semantics), F_DUPFD_CLOEXEC
+  sets it, the exec sweep drops every marked slot via ofd_release
+  so a pipe/socket cannot leak into a binary that never opened it.
+  MAX_FDS<=16 is a compile-time assert so a future fd-table bump
+  cannot silently truncate the u16 mask.
+- Proof: kernel/user/iotest.c (static-pie) -- fopen/fgets/fclose
+  through glibc's openat, pread offset + no-pos-move, lseek all
+  three whences + read-back, fcntl get/set/clear + GETFL, dup3
+  cloexec vs plain-dup clearing, openat through a real O_DIRECTORY
+  dirfd, and the ENOENT/EROFS/EINVAL honesty table: 0 failures,
+  exit(0). 20 tasks, zero leak, WSL x3.
+- Audit run-69 (scoped on the diff): 0 confirmed -- the dirfd-int
+  and pread-ordering bugs were ABI-correctness, not boundary;
+  cloexec-sweep leak class checked against cve.now
+  (CVE-2025-68814 family, structurally absent: validation precedes
+  minting, sweep has no early return). NV-63-1 reentrant-statics
+  debt extends.
