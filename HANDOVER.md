@@ -862,3 +862,23 @@ the task model now supports fork/clone/wait as the next rung.
   (CVE-2025-68814 family, structurally absent: validation precedes
   minting, sweep has no early return). NV-63-1 reentrant-statics
   debt extends.
+
+## Shell-pipeline proof + exit_files ordering fix (audit run-70)
+
+- kernel/user/shelltest.c (static-pie): pipe() -> fork() -> child
+  dup2(w,1) + close + execve(realbin) -> parent drains the pipe to
+  EOF and finds realbins argv/env in the stream -> waitpid status 42;
+  plus dup2(fd,0) stdin-redirect read-back. 0 failures, exit(0).
+- The bug the shape caught: task fds released only in reap(), never
+  at exit. A dead pipe-writer OFD kept writers>0 forever and the
+  parents blocked reader starved for EOF -- observed live as pid 21
+  still blocked at suite end while pipe_end_closed only fired during
+  the final reap. Linux runs exit_files(2) inside do_exit; release_fds
+  now runs in task_exit_inner (die_signal covered too), idempotent
+  via take() so reap stays a no-op.
+- Audit run-70 (scoped): 0 new confirmed -- release ordering was a
+  liveness bug, not a boundary; cve.now fd-lifetime classes (39966
+  async fput, 38722 install race) structurally absent. NV-63-1
+  reentrant-statics extends (release under TASKS borrow, same shape
+  as reap).
+- 21 tasks, zero leak, WSL x2.
