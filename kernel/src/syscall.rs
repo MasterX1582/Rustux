@@ -222,6 +222,7 @@ const NR_GETEUID: u64 = 107;
 const NR_GETEGID: u64 = 108;
 const NR_ARCH_PRCTL: u64 = 158;
 const NR_GETTID: u64 = 186;
+const NR_FUTEX: u64 = 202;
 const NR_SET_TID_ADDRESS: u64 = 218;
 const NR_CLOCK_GETTIME: u64 = 228;
 const NR_CLOCK_NANOSLEEP: u64 = 230;
@@ -348,6 +349,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_GETUID | NR_GETGID | NR_GETEUID | NR_GETEGID => 0,
         NR_ARCH_PRCTL => user::sys_arch_prctl(a1, a2),
         NR_GETTID => user::sys_gettid(),
+        NR_FUTEX => user::sys_futex(ctx, a1, a2, a3, a4, a5, a6),
         NR_SET_TID_ADDRESS => user::sys_set_tid_address(),
         NR_CLOCK_GETTIME => user::sys_clock_gettime(a1, a2),
         NR_CLOCK_NANOSLEEP => user::sys_clock_nanosleep(ctx, a1, a2, a3, a4),

@@ -147,6 +147,10 @@ enum WaitOn {
     /// user buffer — the waker copies through the sleeper's tables
     /// and deposits the count in ctx.rax, like PipeRead.
     Stdin,
+    /// futex(FUTEX_WAIT) on a user word at this VA — the wake also
+    /// matches the sleeper's pml4 so same-VA waits in different
+    /// address spaces stay distinct.
+    Futex(u64),
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -618,6 +622,9 @@ pub struct Task {
     /// restored to MSR_FS_BASE on every switch like the fx image.
     /// Users can't desync it: FSGSBASE is never enabled.
     fs_base: u64,
+    /// CLONE_CHILD_CLEARTID address in this task's address space —
+    /// zeroed at exit with a futex wake on it (pthread_join's wait).
+    clear_ctid: u64,
     /// Per-task FPU/SSE state -- fxsave'd on every way out,
     /// fxrstor'd on every resume so xmm state never crosses tasks.
     fx: FxState,
@@ -1073,6 +1080,7 @@ fn load(img: &[u8]) -> Option<Task> {
         fx: unsafe { *core::ptr::addr_of!(INIT_FX) },
         name: [0; 16],
         fs_base: 0,
+        clear_ctid: 0,
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
     // global OFD, like separate opens of /dev/console.
@@ -2399,7 +2407,8 @@ pub fn sys_clone(
         // SAFETY: ptid validated writable above.
         unsafe { (ptid as *mut u32).write_unaligned(child as u32) };
     }
-    let needs_child_fix = (ctid != 0 && flags & CHILD_SETTID != 0)
+    let needs_child_fix = (ctid != 0
+        && flags & (CHILD_SETTID | CHILD_CLEARTID) != 0)
         || (flags & CLONE_SETTLS != 0 && flags & CLONE_VM == 0);
     if needs_child_fix {
         let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
@@ -2408,6 +2417,11 @@ pub fn sys_clone(
                 // *ctid lives in the child's address space — write
                 // through its page tables (shared or copied).
                 write_task_bytes(c.pml4, ctid, &(child as u32).to_ne_bytes());
+            }
+            if ctid != 0 && flags & CHILD_CLEARTID != 0 {
+                // Registered on the child: at exit the kernel zeroes
+                // *ctid and futex-wakes it — pthread_join's wait.
+                c.clear_ctid = ctid;
             }
             if flags & CLONE_SETTLS != 0 && flags & CLONE_VM == 0 {
                 // SETTLS on a plain fork-shaped clone still lands —
@@ -4018,6 +4032,106 @@ fn wake_pollers() {
     }
 }
 
+/// Wake up to `n` tasks futex-waiting on `uaddr` in `pml4`'s space.
+/// The key is (pml4, va) so a shared-mm thread and an unrelated
+/// process waiting on the same VA don't collide — an approximation
+/// of Linux's physical-address keying that is exact while no memory
+/// is shared between different mms.
+fn futex_wake(pml4: u64, uaddr: u64, n: u64) -> u64 {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let mut woke = 0u64;
+    for s in tasks.iter_mut() {
+        if woke == n {
+            break;
+        }
+        let Some(t) = s.as_mut() else { continue };
+        if t.state == TaskState::Blocked
+            && t.wait_on == WaitOn::Futex(uaddr)
+            && t.pml4 == pml4
+        {
+            t.ctx.rax = 0;
+            t.wait_on = WaitOn::None;
+            t.wait_deadline = 0;
+            t.state = TaskState::Runnable;
+            woke += 1;
+        }
+    }
+    woke
+}
+
+/// futex(uaddr, op, val, timeout, uaddr2, val3): the WAIT/WAKE pair
+/// every userspace lock builds on — pthread mutexes, conds, join's
+/// ctid wait. PRIVATE/CLOCK flags are hints we collapse (single
+/// key space, one clock); everything else is honest ENOSYS.
+pub fn sys_futex(
+    ctx: &mut UCtx,
+    uaddr: u64,
+    op: u64,
+    val: u64,
+    timeout: u64,
+    _uaddr2: u64,
+    _val3: u64,
+) -> u64 {
+    const ENOSYS_: u64 = (-38i64) as u64;
+    const EAGAIN_: u64 = (-11i64) as u64;
+    const ETIMEDOUT_: u64 = (-110i64) as u64;
+    match op & 0x7f {
+        0 => {
+            // FUTEX_WAIT: sleep only while *uaddr == val — the
+            // compare-then-block is atomic because syscalls run
+            // IF-masked on the single CPU.
+            let Some(t) = cur_mut() else { return EAGAIN_ };
+            if !range_ok(uaddr, 4) {
+                return EFAULT;
+            }
+            // SAFETY: uaddr is a validated user word under cur cr3.
+            let cur = unsafe { (uaddr as *const u32).read_unaligned() };
+            if cur != val as u32 {
+                return EAGAIN_;
+            }
+            let mut deadline = 0u64;
+            if timeout != 0 {
+                if !range_ok(timeout, 16) {
+                    return EFAULT;
+                }
+                // SAFETY: validated user timespec under cur cr3.
+                let (sec, nsec) = unsafe {
+                    (
+                        (timeout as *const i64).read_unaligned(),
+                        (timeout as *const i64)
+                            .add(1)
+                            .read_unaligned(),
+                    )
+                };
+                let ticks = (sec.max(0) as u64)
+                    .saturating_mul(100)
+                    .saturating_add((nsec.max(0) as u64) / 10_000_000);
+                if ticks == 0 {
+                    return ETIMEDOUT_;
+                }
+                deadline = crate::apic::TICKS
+                    .load(core::sync::atomic::Ordering::Relaxed)
+                    .saturating_add(ticks);
+            }
+            if deliverable(t) {
+                return (-4i64) as u64; // -EINTR before sleep
+            }
+            t.wait_on = WaitOn::Futex(uaddr);
+            t.wait_deadline = deadline;
+            t.ctx = *ctx;
+            t.state = TaskState::Blocked;
+            block_switch()
+        }
+        1 => {
+            // FUTEX_WAKE: wake up to `val` waiters on our mm's word.
+            let Some(t) = cur_mut() else { return 0 };
+            let pml4 = t.pml4;
+            futex_wake(pml4, uaddr, val)
+        }
+        _ => ENOSYS_,
+    }
+}
+
 /// Timer tick: expire timed poll waits — the return is 0 with
 /// revents zeroed, the Linux timeout shape.
 fn poll_expire() {
@@ -4046,6 +4160,9 @@ fn poll_expire() {
                     }
                 }
                 WaitOn::Timer => t.ctx.rax = 0, // nanosleep elapsed
+                WaitOn::Futex(_) => {
+                    t.ctx.rax = (-110i64) as u64 // ETIMEDOUT
+                }
                 _ => continue,
             }
             t.wait_on = WaitOn::None;
@@ -5756,6 +5873,21 @@ fn task_exit_inner() -> ! {
             t.release_fds();
         }
     }
+    // CHILD_CLEARTID: zero *ctid through the dying task's tables and
+    // futex-wake whoever sleeps on it — this is exactly pthread_join's
+    // wait (glibc futex-waits on the child's tid word).
+    let (ctva, tpml4) = {
+        let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+        tasks
+            .get_mut(cur)
+            .and_then(|s| s.as_mut())
+            .map(|t| (t.clear_ctid, t.pml4))
+            .unwrap_or((0, 0))
+    };
+    if ctva != 0 {
+        write_task_bytes(tpml4, ctva, &0u32.to_ne_bytes());
+        futex_wake(tpml4, ctva, 1);
+    }
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     // Wake a wait-blocked parent whose target just exited.
     let mut collected = false;
@@ -6056,6 +6188,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         fx: p.fx,
         name: p.name,
         fs_base: p.fs_base,
+        clear_ctid: 0,
     };
     // Either failure frees the (possibly partial) user page-table
     // tree + pml4 — NOT reap(): child's fd slots name OFDs whose refs
@@ -6148,6 +6281,7 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool) -> u64 {
         fx: p.fx,
         name: p.name,
         fs_base: if settls { tls } else { p.fs_base },
+        clear_ctid: 0,
     };
     // The child shares the parent's OFDs — bump each referenced one.
     {
