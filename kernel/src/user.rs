@@ -160,6 +160,10 @@ enum WaitOn {
     /// matches the sleeper's pml4 so same-VA waits in different
     /// address spaces stay distinct.
     Futex(u64),
+    /// vfork() parent suspended until the child (this pid) execs or
+    /// exits — Linux's vfork_done completion. Uninterruptible by
+    /// signals (kill() skips it; pending delivers after resume).
+    Vfork(u64),
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -497,7 +501,7 @@ pub fn kill(pid: u64, sig: u64) -> u64 {
     // must not turn a sleeping syscall into a spurious EINTR.
     let h = sigt(t).handlers.get(sig as usize - 1).copied().unwrap_or(SIG_DFL);
     let ignored = h == SIG_IGN || (h == SIG_DFL && sig_default_ignore(sig as usize));
-    if t.state == TaskState::Blocked && !ignored {
+    if t.state == TaskState::Blocked && !ignored && !matches!(t.wait_on, WaitOn::Vfork(_)) {
         // A nanosleep interrupted by this signal reports the unslept
         // remainder in rem (stored in wait_ptr) — Linux semantics.
         let mut rax: u64 = (-4i64) as u64; // -EINTR
@@ -2823,6 +2827,48 @@ pub fn sys_clone(
         }
     }
     child
+}
+
+/// vfork(): clone_vm on the caller's own user rsp — the child shares
+/// every byte of the parent's address space and runs until exec or
+/// exit while the parent waits uninterruptibly (Linux's vfork_done
+/// completion). Private fd/sighand/fs copies, matching Linux's
+/// clone(CLONE_VM|CLONE_VFORK|SIGCHLD,0) flag semantics. The same
+/// stack is safe: the parent is suspended, so the child pushing
+/// below its rsp cannot corrupt anything the parent still needs.
+pub fn sys_vfork(ctx: &mut UCtx) -> u64 {
+    let child = clone_vm(ctx, ctx.rsp, 0, false, false, false, false, false);
+    if (child as i64) < 0 {
+        return child;
+    }
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+        // The saved ctx already carries the child pid in rax (the
+        // clone_vm return path) — the exec/exit waker resumes us.
+        t.wait_on = WaitOn::Vfork(child);
+        t.ctx = *ctx;
+        t.ctx.rax = child;
+        t.state = TaskState::Blocked;
+        block_switch()
+    }
+    child
+}
+
+/// A vfork parent sleeps in WaitOn::Vfork(child_pid) until the child
+/// execs (mm swap in exec()) or exits (task_exit_inner's wake match
+/// covers Vfork too). Resuming it returns the child's pid — exactly
+/// vfork's own success value.
+fn wake_vfork_parent_of(child_pid: u64) {
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for s in tasks.iter_mut() {
+        let Some(p) = s else { continue };
+        if p.state == TaskState::Blocked && p.wait_on == WaitOn::Vfork(child_pid) {
+            p.ctx.rax = child_pid;
+            p.wait_on = WaitOn::None;
+            p.state = TaskState::Runnable;
+        }
+    }
 }
 
 /// tgkill(tgid, tid, sig): no threads — tgid == tid == pid, so this
@@ -6594,8 +6640,31 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
         }
         t.free_user_mappings();
     } else {
+        // np is a fresh zeroed table: it needs the shared kernel
+        // slots (identity map, slots 0..127) before adoption, and
+        // CR3 must switch NOW — the syscall path never reloads it,
+        // so returning on the old shared table would exec-fetch
+        // fault at entry. Loading np early also keeps load_inner's
+        // read_cr3 slot-copy a self-copy: without the switch it
+        // would import the SHARED user page tables by reference and
+        // map the new image into the still-shared mm.
+        let opml4 = t.pml4;
         t.pml4 = np;
+        for i in 0..128u64 {
+            let e = rd64(opml4 + 8 * i);
+            if e & PRESENT != 0 {
+                wr64(np + 8 * i, e);
+            }
+        }
+        // SAFETY: np carries the kernel slots copied above.
+        unsafe { core::arch::asm!("mov cr3, {0}", in(reg) np) };
     }
+    // vfork contract: the exec'ing task just left its parent's
+    // address space — resume the suspended vfork parent (Linux's
+    // vfork_done completes at exec_mmap, before the new image
+    // finishes loading). A later load failure exits the child, but
+    // the parent no longer shares its mm so the wake is correct.
+    wake_vfork_parent_of(t.pid);
     t.nranges = 0;
     t.stack_top = 0;
     t.fs_base = 0; // TLS dies with the old image — new one SET_FSs
@@ -6848,7 +6917,9 @@ fn task_exit_inner() -> ! {
         let Some(p) = s else { continue };
         if p.state == TaskState::Blocked
             && p.pid == cppid
-            && (p.wait_on == WaitOn::Any || p.wait_on == WaitOn::Child(cpid))
+            && (p.wait_on == WaitOn::Any
+                || p.wait_on == WaitOn::Child(cpid)
+                || p.wait_on == WaitOn::Vfork(cpid))
         {
             // wait4 returns the child's pid; its status was already
             // validated writable when the parent blocked.
@@ -6862,10 +6933,14 @@ fn task_exit_inner() -> ! {
                     };
                 }
             }
+            // A Vfork wake only resumes the suspended parent — it
+            // collected no status, so the zombie stays waitable for
+            // the parent's own wait4. wait4 wakes mark the zombie
+            // collected so a second wait can't see it twice.
+            collected = p.wait_on != WaitOn::Vfork(cpid);
             p.state = TaskState::Runnable;
             p.wait_on = WaitOn::None;
             p.wait_ptr = 0;
-            collected = true;
         }
     }
     // The parent collected the status — this zombie reaps free.

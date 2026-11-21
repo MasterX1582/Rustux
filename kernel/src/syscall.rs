@@ -416,9 +416,9 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_PRCTL => user::sys_prctl(a1, a2),
         NR_GETGROUPS => user::sys_getgroups(a1, a2),
         NR_SCHED_GETAFFINITY => user::sys_sched_getaffinity(a1, a2, a3),
-        // vfork is fork with a parent-pause contract — plain fork
-        // is the honest superset for our single-CPU model.
-        NR_VFORK => user::fork(ctx, false, false),
+        // Real vfork: shared mm + uninterruptible parent wait until
+        // the child execs or exits (sys_vfork in user.rs).
+        NR_VFORK => user::sys_vfork(ctx),
         NR_SYNC => 0,
         NR_REBOOT => user::sys_reboot(a1, a2, a3),
         NR_CHDIR => sys_chdir(a1),
