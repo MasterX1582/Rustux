@@ -26,6 +26,11 @@ int main(int argc, char **argv) {
     n = snprintf(buf, sizeof(buf), "realbin: argc=%d argv0=%s\n",
                  argc, argc > 0 ? argv[0] : "?");
     if (write(1, buf, n) < 0) return 101;
+    if (argc > 1) {
+        n = snprintf(buf, sizeof(buf), "realbin: argv1=%s env=%s\n",
+                     argv[1], getenv("RUSTUX_ENV") ? getenv("RUSTUX_ENV") : "-");
+        if (write(1, buf, n) < 0) return 109;
+    }
 
     struct utsname u;
     if (uname(&u) == 0) {

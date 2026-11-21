@@ -277,9 +277,24 @@ fn write_task_bytes(pml4: u64, va: u64, data: &[u8]) -> bool {
 /// pops it back. Ignore-default signals drop; every other default
 /// kills with wait status = bare signo (the Linux wstatus shape).
 /// An unwritable stack kills the task like Linux's delivery SEGV.
+/// Lowest-numbered deliverable signal: pending AND unmasked. SIGKILL
+/// is always deliverable — the mask can't stop it (Linux semantics:
+/// sig_kernel_only signals ignore the blocked set on delivery).
+#[inline]
+fn unmasked_pending(t: &Task) -> Option<usize> {
+    let unmasked = t.pending & (!t.sigmask | (1u32 << (SIGKILL - 1)));
+    (unmasked != 0).then(|| unmasked.trailing_zeros() as usize + 1)
+}
+
+/// A signal that can be delivered NOW — pending and unmasked.
+#[inline]
+fn deliverable(t: &Task) -> bool {
+    unmasked_pending(t).is_some()
+}
+
 fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
-    while t.pending != 0 {
-        let sig = t.pending.trailing_zeros() as usize + 1;
+    while let Some(sig) = unmasked_pending(t) {
+        t.pending &= !(1u32 << (sig - 1));
         t.pending &= !(1u32 << (sig - 1));
         match t.handlers.get(sig - 1).copied().unwrap_or(SIG_DFL) {
             SIG_IGN => {}
@@ -355,7 +370,7 @@ pub fn fault_signal(signo: u64, ctx: &mut UCtx) -> (u64, u64, u64) {
 /// resume; false when the delivery killed it (caller re-picks).
 fn deliver_for(n: usize) -> bool {
     let t = unsafe { (*core::ptr::addr_of_mut!(TASKS))[n].as_mut().unwrap() };
-    if t.pending != 0 {
+    if deliverable(t) {
         let mut c = t.ctx;
         maybe_deliver(t, &mut c);
         t.ctx = c;
@@ -571,9 +586,17 @@ pub struct Task {
     wait_deadline: u64,
     /// Pending signal bitmask — bit (sig-1), sigs 1..=31.
     pending: u32,
+    /// rt_sigprocmask mask — set bits block delivery of the matching
+    /// pending signal (masked-pending stays pending for later). Fork
+    /// inherits it, exec preserves it. The mask may contain SIGKILL's
+    /// bit like Linux, but delivery ignores it — see unmasked_pending.
+    sigmask: u32,
     /// Per-signal disposition: 0=SIG_DFL, 1=SIG_IGN, else a user VA
     /// handler. SIGKILL/SIGSTOP can't be overridden (EINVAL).
     handlers: [u64; 31],
+    /// The image's cpio name — /proc/self/exe resolves to it. Copied
+    /// at spawn, inherited at fork, replaced at exec.
+    name: [u8; 16],
     /// The task's user FS base (TLS pointer) — set via arch_prctl,
     /// restored to MSR_FS_BASE on every switch like the fx image.
     /// Users can't desync it: FSGSBASE is never enabled.
@@ -877,9 +900,11 @@ fn load(img: &[u8]) -> Option<Task> {
         wait_len: 0,
         wait_deadline: 0,
         pending: 0,
+        sigmask: 0,
         handlers: [0; 31],
         // SAFETY: read of the init-time capture.
         fx: unsafe { *core::ptr::addr_of!(INIT_FX) },
+        name: [0; 16],
         fs_base: 0,
     };
     // std streams: 0=stdin (EOF), 1/2=serial console — each a fresh
@@ -1706,6 +1731,199 @@ pub fn sys_gettid() -> u64 {
     cur_mut().map(|t| t.pid).unwrap_or(0)
 }
 
+/// clone(flags, stack, ptid, ctid, tls): the fork-shaped subset only —
+/// an exit-signal of SIGCHLD (or 0), a kernel-made stack, and the
+/// child-TID writes glibc asks for (PARENT_SETTID -> *ptid in our
+/// space, CHILD_SETTID -> *ctid in the CHILD's space via its pml4;
+/// CHILD_CLEARTID registers a futex-wake address — no futexes, so it
+/// is silently honored-as-noop like a task that dies with none).
+/// Thread combos (CLONE_VM/THREAD/SETTLS/any other flag) honestly
+/// ENOSYS. glibc's fork() lands here, not on nr 57.
+pub fn sys_clone(
+    ctx: &mut UCtx,
+    flags: u64,
+    stack: u64,
+    ptid: u64,
+    ctid: u64,
+    _tls: u64,
+) -> u64 {
+    const ENOSYS_: u64 = (-38i64) as u64;
+    const PARENT_SETTID: u64 = 0x0010_0000;
+    const CHILD_CLEARTID: u64 = 0x0020_0000;
+    const CHILD_SETTID: u64 = 0x0100_0000;
+    const SIGMASK: u64 = 0xff;
+    const KNOWN: u64 = SIGMASK | PARENT_SETTID | CHILD_CLEARTID | CHILD_SETTID;
+    if stack != 0 || flags & !KNOWN != 0 {
+        return ENOSYS_;
+    }
+    // The exit signal must be SIGCHLD or none — wait4 keys on it.
+    if flags & SIGMASK != 0 && flags & SIGMASK != 17 {
+        return ENOSYS_;
+    }
+    if ptid != 0 && flags & PARENT_SETTID != 0 && !range_ok_w(ptid, 4) {
+        return EFAULT;
+    }
+    let child = fork(ctx);
+    if (child as i64) < 0 {
+        return child;
+    }
+    if ptid != 0 && flags & PARENT_SETTID != 0 {
+        // SAFETY: ptid validated writable above.
+        unsafe { (ptid as *mut u32).write_unaligned(child as u32) };
+    }
+    if ctid != 0 && flags & CHILD_SETTID != 0 {
+        // *ctid lives in the child's (copied) address space — write
+        // through its page tables.
+        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+        if let Some(c) = tasks.iter().flatten().find(|t| t.pid == child) {
+            write_task_bytes(c.pml4, ctid, &(child as u32).to_ne_bytes());
+        }
+    }
+    child
+}
+
+/// tgkill(tgid, tid, sig): no threads — tgid == tid == pid, so this
+/// is kill() with an extra ABI arg. glibc's abort() lands here.
+pub fn sys_tgkill(tgid: u64, _tid: u64, sig: u64) -> u64 {
+    kill(tgid, sig)
+}
+
+/// rt_sigprocmask(how, set, oldset, sigsetsize): the per-task signal
+/// mask. SIG_BLOCK=0 / SIG_UNBLOCK=1 / SIG_SETMASK=2; `how` is only
+/// validated when set is non-NULL, matching kernel behavior. We
+/// track 31 signals, so the u64 set is truncated — high bits are
+/// harmless. A masked signal stays pending for later delivery; the
+/// next syscall/schedule boundary runs it through maybe_deliver.
+pub fn sys_rt_sigprocmask(how: u64, set: u64, old: u64, sigsetsize: u64) -> u64 {
+    if sigsetsize != 8 {
+        return EINVAL;
+    }
+    let Some(t) = cur_mut() else { return ENOENT };
+    if old != 0 {
+        if !range_ok_w(old, 8) {
+            return EFAULT;
+        }
+        // SAFETY: old validated writable for 8 bytes.
+        unsafe { (old as *mut u64).write_unaligned(t.sigmask as u64) };
+    }
+    if set != 0 {
+        if !range_ok(set, 8) {
+            return EFAULT;
+        }
+        // SAFETY: set validated readable for 8 bytes.
+        let m = unsafe { (set as *const u64).read_unaligned() } as u32;
+        t.sigmask = match how {
+            0 => t.sigmask | m,
+            1 => t.sigmask & !m,
+            2 => m,
+            _ => return EINVAL,
+        };
+    }
+    0
+}
+
+/// readlinkat("/proc/self/exe") → the image's cpio name — the only
+/// proc path that exists. Anything else is ENOENT like a procfs
+/// miss. Returns the byte count (no NUL), capped at the buffer.
+pub fn read_proc_self_exe(buf: u64, len: u64) -> u64 {
+    if len == 0 || !range_ok_w(buf, len) {
+        return EFAULT;
+    }
+    let Some(t) = cur_mut() else { return ENOENT };
+    let n = t.name.iter().position(|&b| b == 0).unwrap_or(16);
+    // glibc's _dl_get_origin asserts the link is absolute — the
+    // archive namespace is flat, so "/" + name is the honest answer.
+    let total = (n + 1).min(len as usize);
+    // SAFETY: buf validated writable for len bytes.
+    unsafe {
+        (buf as *mut u8).write(b'/');
+        (buf as *mut u8).add(1).copy_from(t.name.as_ptr(), total - 1)
+    };
+    total as u64
+}
+
+/// getcwd(buf, len): the archive is one flat root — always "/".
+pub fn sys_getcwd(buf: u64, len: u64) -> u64 {
+    const ERANGE: u64 = (-34i64) as u64;
+    if len < 2 {
+        return ERANGE;
+    }
+    if !range_ok_w(buf, 2) {
+        return EFAULT;
+    }
+    // SAFETY: buf validated writable for 2 bytes.
+    unsafe {
+        (buf as *mut u8).write(b'/');
+        (buf as *mut u8).add(1).write(0);
+    }
+    2
+}
+
+/// clock_getres(clk, res): the APIC ticks at 100Hz — 10ms.
+pub fn sys_clock_getres(_clk: u64, res: u64) -> u64 {
+    if res == 0 {
+        return 0;
+    }
+    if !range_ok_w(res, 16) {
+        return EFAULT;
+    }
+    // SAFETY: res validated writable for 16 bytes.
+    unsafe {
+        (res as *mut u64).write_unaligned(0);
+        (res as *mut u64).add(1).write_unaligned(10_000_000);
+    }
+    0
+}
+
+/// sched_yield(): ctx-save then switch to another runnable task if
+/// one exists — self just returns 0 when it wins the pick again.
+pub fn sys_sched_yield(ctx: &mut UCtx) -> u64 {
+    ctx.rax = 0;
+    let Some(t) = cur_mut() else { return 0 };
+    t.ctx = *ctx;
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    if let Some(n) = pick_ready() {
+        if n != cur {
+            switch_to(n)
+        }
+    }
+    0
+}
+
+/// fstat(fd, statbuf): same 144B stat as newfstatat, mode by OFD
+/// kind — chr for console, fifo for pipes, sock for sockets,
+/// reg/dir for archive entries.
+pub fn sys_fstat(fd: u64, statbuf: u64) -> u64 {
+    const STAT_LEN: u64 = 144;
+    if !range_ok_w(statbuf, STAT_LEN) {
+        return EFAULT;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    let (mode, size) = match &o.kind {
+        FdKind::Stdin | FdKind::Console => (0o20644u64, 0u64), // S_IFCHR
+        FdKind::Dir => (0o40755, 0),
+        FdKind::File(d) => (0o100644, d.len() as u64),
+        FdKind::Pipe { .. } => (0o10644, 0), // S_IFIFO
+        FdKind::Udp(_) | FdKind::Tcp(_) => (0o140777, 0), // S_IFSOCK
+    };
+    let mut st = [0u64; 18];
+    st[2] = 1;
+    st[3] = mode;
+    st[6] = size;
+    st[7] = 4096;
+    st[8] = size.div_ceil(512);
+    // SAFETY: statbuf validated writable for 144 bytes.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            st.as_ptr() as *const u8,
+            statbuf as *mut u8,
+            STAT_LEN as usize,
+        )
+    };
+    0
+}
+
 /// set_tid_address(ptr): we don't store the pointer (no clear-thread-
 /// tid futex wake yet) — the return is the tid, which is our pid.
 pub fn sys_set_tid_address() -> u64 {
@@ -1793,7 +2011,7 @@ pub fn sys_nanosleep(ctx: &mut UCtx, req: u64, rem: u64) -> u64 {
     if rem != 0 && !range_ok_w(rem, 16) {
         return EFAULT;
     }
-    if t.pending != 0 {
+    if deliverable(t) {
         return EINTR;
     }
     t.wait_on = WaitOn::Timer;
@@ -1849,7 +2067,7 @@ pub fn sys_clock_nanosleep(
         return EFAULT_P;
     }
     let Some(t) = cur_mut() else { return EINVAL_P };
-    if t.pending != 0 {
+    if deliverable(t) {
         return 4; // EINTR, positive per this ABI
     }
     t.wait_on = WaitOn::Timer;
@@ -1987,7 +2205,7 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
                 if !range_ok_w(buf, 1) {
                     return EFAULT;
                 }
-                if t.pending != 0 {
+                if deliverable(t) {
                     return (-4i64) as u64; // -EINTR: signal before sleep
                 }
                 t.wait_on = WaitOn::PipeRead(id);
@@ -2050,7 +2268,7 @@ pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
         if len > 0 && !range_ok(buf, 1) {
             return EFAULT;
         }
-        if t.pending != 0 {
+        if deliverable(t) {
             return (-4i64) as u64; // -EINTR: signal before sleep
         }
         t.wait_on = WaitOn::PipeWrite(id);
@@ -2720,7 +2938,7 @@ pub fn fd_poll(ctx: &mut UCtx, fds: u64, nfds: u64, timeout_ms: i64) -> u64 {
     if ready > 0 || timeout_ms == 0 {
         return ready;
     }
-    if t.pending != 0 {
+    if deliverable(t) {
         return EINTR; // a signal landed before we slept
     }
     t.wait_on = WaitOn::Poll;
@@ -2902,7 +3120,7 @@ fn udp_recv_or_block(
     if sa != 0 && !range_ok_w(sa, 16) {
         return EFAULT;
     }
-    if t.pending != 0 {
+    if deliverable(t) {
         return EINTR_; // a signal landed before we slept
     }
     t.wait_on = WaitOn::UdpRecv(si);
@@ -3707,7 +3925,7 @@ pub fn fd_connect(ctx: &mut UCtx, fd: u64, sa: u64, len: u64) -> u64 {
         }
     }
     let Some(t) = cur_mut() else { return EBADF };
-    if t.pending != 0 {
+    if deliverable(t) {
         return EINTR_;
     }
     t.wait_on = WaitOn::TcpConn(si);
@@ -3807,7 +4025,7 @@ pub fn fd_accept(ctx: &mut UCtx, fd: u64, sa: u64, _alen: u64) -> u64 {
         return fd;
     }
     let Some(t) = cur_mut() else { return EBADF };
-    if t.pending != 0 {
+    if deliverable(t) {
         return EINTR_;
     }
     t.wait_on = WaitOn::TcpAccept(li);
@@ -3873,7 +4091,7 @@ fn tcp_recv_or_block(
         return EFAULT;
     }
     let Some(t) = cur_mut() else { return EBADF };
-    if t.pending != 0 {
+    if deliverable(t) {
         return EINTR_;
     }
     t.wait_on = WaitOn::TcpRecv(si);
@@ -4122,7 +4340,7 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
 /// caller parses the ELF first, so the only post-reset failure is
 /// allocator exhaustion — treated as fatal by the caller since the
 /// old program's code pages are already gone.
-pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs) -> bool {
+pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     let Some(t) = cur_mut() else { return false };
     let Some(e) = elf::parse(img) else { return false };
     t.free_user_mappings();
@@ -4132,6 +4350,9 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs) -> bool {
     if !load_inner(t, &e, img) {
         return false;
     }
+    t.name = [0; 16];
+    let nl = name.len().min(15);
+    t.name[..nl].copy_from_slice(&name[..nl]);
     let Some(rsp) = setup_stack(t, &e, img, args) else {
         return false;
     };
@@ -4175,6 +4396,8 @@ pub fn spawn(img: &[u8], name: &str) -> bool {
     args.argv[0][..n].copy_from_slice(&name.as_bytes()[..n]);
     args.argv_len[0] = n + 1;
     args.argc = 1;
+    let nl = name.len().min(15);
+    t.name[..nl].copy_from_slice(&name.as_bytes()[..nl]);
     let Some(rsp) = setup_stack(&mut t, &e, img, &args) else {
         t.reap();
         return false;
@@ -4446,7 +4669,16 @@ pub fn tick(img: &mut UCtx) -> *const UCtx {
 /// different task's tables are active (wait4 status, pipe io, signal
 /// frames). Requires the leaf's WRITE bit: every caller writes, and
 /// a read-only page must not be modified through this path.
+/// Walk `va` to its PA for a WRITABLE user page. Every caller is a
+/// task-user-memory access, so the bound is applied here: the task's
+/// pml4 shares kernel upper-half slots by reference, and a kernel VA
+/// here would otherwise translate fine — a user-controlled pointer
+/// (clone's ctid, a sigframe rsp, an argv walker) must never reach
+/// kernel memory through this path.
 fn translate(pml4: u64, va: u64) -> Option<u64> {
+    if !(elf::USER_VA_LO..elf::USER_VA_HI).contains(&va) {
+        return None;
+    }
     let mut tab = pml4;
     for shift in [39u64, 30, 21] {
         let e = rd64(tab + 8 * ((va >> shift) & 0x1ff));
@@ -4464,8 +4696,12 @@ fn translate(pml4: u64, va: u64) -> Option<u64> {
 
 /// Read-side translate: same walk without the WRITE leaf gate —
 /// for kernel reads of user memory (a read-only page is a legal
-/// read source even though no write path may touch it).
+/// read source even though no write path may touch it). Bounded to
+/// the user window for the same kernel-half reason as translate().
 fn translate_r(pml4: u64, va: u64) -> Option<u64> {
+    if !(elf::USER_VA_LO..elf::USER_VA_HI).contains(&va) {
+        return None;
+    }
     let mut tab = pml4;
     for shift in [39u64, 30, 21] {
         let e = rd64(tab + 8 * ((va >> shift) & 0x1ff));
@@ -4590,8 +4826,10 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         // Dispositions inherit across fork (the Linux semantic);
         // the pending set does not.
         pending: 0,
+        sigmask: p.sigmask,
         handlers: p.handlers,
         fx: p.fx,
+        name: p.name,
         fs_base: p.fs_base,
     };
     // Either failure frees the (possibly partial) user page-table
@@ -4670,7 +4908,7 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
     }
     {
         let t = tasks[cur].as_mut().unwrap();
-        if t.pending != 0 {
+        if deliverable(t) {
             return (-4i64) as u64; // -EINTR: signal before sleep
         }
         t.wait_on = if pid == -1 { WaitOn::Any } else { WaitOn::Child(pid as u64) };

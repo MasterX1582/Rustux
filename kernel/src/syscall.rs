@@ -187,6 +187,7 @@ const NR_MMAP: u64 = 9;
 const NR_MPROTECT: u64 = 10;
 const NR_MUNMAP: u64 = 11;
 const NR_BRK: u64 = 12;
+const NR_RT_SIGPROCMASK: u64 = 14;
 const NR_LSEEK: u64 = 8;
 const NR_DUP: u64 = 32;
 const NR_DUP2: u64 = 33;
@@ -228,6 +229,26 @@ const NR_EXIT_GROUP: u64 = 231;
 const NR_SET_ROBUST_LIST: u64 = 273;
 const NR_PRLIMIT64: u64 = 302;
 const NR_GETRANDOM: u64 = 318;
+const NR_STAT: u64 = 4;
+const NR_FSTAT: u64 = 5;
+const NR_LSTAT: u64 = 6;
+const NR_ACCESS: u64 = 21;
+const NR_SCHED_YIELD: u64 = 24;
+const NR_CLONE: u64 = 56;
+const NR_GETCWD: u64 = 79;
+const NR_READLINK: u64 = 89;
+const NR_GETRLIMIT: u64 = 97;
+const NR_SETPGID: u64 = 109;
+const NR_GETPGRP: u64 = 111;
+const NR_SETSID: u64 = 112;
+const NR_GETPGID: u64 = 121;
+const NR_GETSID: u64 = 124;
+const NR_GETPRIORITY: u64 = 140;
+const NR_SETPRIORITY: u64 = 141;
+const NR_CLOCK_GETRES: u64 = 229;
+const NR_TGKILL: u64 = 234;
+const NR_READLINKAT: u64 = 267;
+const NR_FACCESSAT: u64 = 269;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -273,6 +294,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_MPROTECT => user::sys_mprotect(a1, a2, a3),
         NR_MUNMAP => user::sys_munmap(a1, a2),
         NR_BRK => user::sys_brk(a1),
+        NR_RT_SIGPROCMASK => user::sys_rt_sigprocmask(a1, a2, a3, a4),
         NR_POLL => user::fd_poll(ctx, a1, a2, a3 as i64),
         NR_SOCKET => user::fd_socket(a1, a2, a3),
         NR_CONNECT => user::fd_connect(ctx, a1, a2, a3),
@@ -318,6 +340,27 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_SET_ROBUST_LIST => user::sys_set_robust_list(a1, a2),
         NR_PRLIMIT64 => user::sys_prlimit64(a1, a2, a3, a4),
         NR_GETRANDOM => user::sys_getrandom(a1, a2, a3),
+        NR_CLONE => user::sys_clone(ctx, a1, a2, a3, a4, a5),
+        NR_TGKILL => user::sys_tgkill(a1, a2, a3),
+        NR_GETCWD => user::sys_getcwd(a1, a2),
+        // No symlinks exist — stat and lstat are the same lookup.
+        NR_STAT | NR_LSTAT => sys_stat_path(a1, a2),
+        NR_FSTAT => user::sys_fstat(a1, a2),
+        NR_ACCESS => sys_access(a1),
+        NR_FACCESSAT => sys_access(a2),
+        NR_READLINK => sys_readlink(a1, a2, a3),
+        NR_READLINKAT => sys_readlink(a2, a3, a4),
+        NR_GETRLIMIT => user::sys_prlimit64(0, a1, 0, a2),
+        NR_CLOCK_GETRES => user::sys_clock_getres(a1, a2),
+        NR_SCHED_YIELD => user::sys_sched_yield(ctx),
+        // Single-process-group model: pgrp/sid == pid.
+        NR_GETPGRP => user::getpid(),
+        NR_GETPGID | NR_GETSID => {
+            if a1 == 0 { user::getpid() } else { a1 }
+        }
+        NR_SETSID => user::getpid(),
+        NR_SETPGID | NR_SETPRIORITY => 0,
+        NR_GETPRIORITY => 0,
         NR_EXIT => sys_exit(a1),
         _ => {
             // Bring-up aid: real binaries probe ABI surface. Linux
@@ -418,12 +461,56 @@ fn sys_execve(ctx: &mut user::UCtx, path: u64, argv: u64, envp: u64) -> u64 {
         args.argv_len[0] = n + 1;
         args.argc = 1;
     }
-    if !user::exec(img, ctx, &args) {
+    if !user::exec(img, ctx, &args, name) {
         // The address space is already torn down; the task cannot
         // safely resume. Kill it — the run() loop reaps as usual.
         sys_exit(127);
     }
     0 // unreachable on success — sysret lands in the new image
+}
+
+/// stat/lstat(path, statbuf): no symlinks exist in the archive, so
+/// lstat is stat — same lookup and writer as newfstatat.
+fn sys_stat_path(path: u64, statbuf: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    user::newfstatat(name, statbuf)
+}
+
+/// access/faccessat(path, mode): a flat read-only archive only has
+/// existence to report — "/" and real members are accessible.
+fn sys_access(path: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    if name.is_empty() || user::fs_lookup(name).is_some() {
+        0
+    } else {
+        ENOENT
+    }
+}
+
+/// readlink/readlinkat(path, buf, len): "/proc/self/exe" is the only
+/// link that resolves (to the image's cpio name). No other symlinks
+/// exist — ENOENT like a procfs miss.
+fn sys_readlink(path: u64, buf: u64, len: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    if &name[..n] == b"/proc/self/exe" {
+        user::read_proc_self_exe(buf, len)
+    } else {
+        ENOENT
+    }
 }
 
 /// write(fd, buf, len): console fds only, buffer fully validated
