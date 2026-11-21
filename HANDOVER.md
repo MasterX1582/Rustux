@@ -980,3 +980,42 @@ the task model now supports fork/clone/wait as the next rung.
   gated wake copies, take/consume split means EFAULT loses no input.
   cve.now: n_tty buffer-swap/ldisc-attach families n/a (no replaceable
   buffers, no attach path, single CPU). NV-63-1 extends.
+
+## Real shell binary + the oversized-read EINVAL divergence (audit run-74)
+
+- rsh (kernel/user/rsh.c, static-pie glibc) is the smallest real
+  shell: prompt, byte-wise line read (works on the canonical tty
+  AND pipes), whitespace split, exit builtin, otherwise
+  fork -> execve("/name") -> waitpid -> "rsh: exit N" report.
+  It is packaged as a boot task (a live shell blocked on read(0)
+  for a guest keyboard) and as rshtest's exec target.
+- rshtest proves the interactive shape headlessly: pipe(in),
+  pipe(out), fork, child dup2(in[0],0)+dup2(out[1],1), close all
+  four, execve /rsh; parent writes a script (realbin arg1,
+  notacommand, exit), reads the whole session back, asserts the
+  prompt, realbin output, argv propagation, "rsh: exit 42", and
+  "rsh: exit 127".
+- The rung caught a kernel-side divergence, not the suspected OFD
+  refcount bug: read(fd, buf, 8191) hit `a3 > MAX_COPY -> EINVAL`
+  in the NR_READ gate (MAX_COPY=4096). The parent's read loop
+  broke on -EINVAL, closed out[0], and the output pipe's reader
+  count died honestly — rsh's subsequent writes correctly saw
+  EPIPE. Full fd/OFD instrumentation (fork bump, dup2 release +
+  install, exit_files release, endpoint counts) showed the
+  refcounting was right all along.
+- Fix: NR_READ clamps count to a3.min(MAX_COPY) instead of
+  EINVALing — Linux's MAX_RW_COUNT semantics (never EINVAL on a
+  big buffer; a 128KiB stdio read must not fail). Every fd_read
+  arm already min()s len against available data and validates the
+  actual copy extent, so the clamp removes a divergence with no
+  new boundary surface.
+- Verified: rshtest 0 failures (parent's reads stream
+  1+18+5+30+226+18+10+9 bytes then EOF), termtest/kbdtest/
+  wiotest/shelltest all 0 failures, 26 tasks, frames equal,
+  boot PASS x2, native VM verified.
+- Scoped audit: 0 confirmed — kernel delta is a one-line count
+  clamp; cve.now's pipe-read race hits (ftrace iterator, USB
+  iMON disconnect, ksmbd RPC) are unrelated subsystems. Known
+  divergences recorded: rsh has no job control/globbing/redirection
+  builtins yet, PATH is hardcoded as "/name" for bare commands,
+  exit only reports numeric status.
