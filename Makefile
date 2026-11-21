@@ -87,6 +87,35 @@ run: build
 	if [ $$status -eq 33 ]; then echo "boot test: PASS (qemu exit 33)"; \
 	else echo "boot test: FAIL (qemu exit $$status)"; exit 1; fi
 
+INITRD_BASH := initrd-bash.cpio
+ESP_BASH    := esp-bash.img
+
+# Interactive login shell on the serial console: a solo initrd whose
+# only task is -bash (the argv0 dash makes it a login shell). Type
+# into the terminal — UART RX feeds the tty ldisc like kbd scancodes.
+$(INITRD_BASH): kernel/user/bash kernel/user/libtinfo.so.6 kernel/user/motd.txt tools/mkinitrd.py /lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/libc.so.6
+	python3 tools/mkinitrd.py kernel/user/bash -bash /lib64/ld-linux-x86-64.so.2 lib64/ld-linux-x86-64.so.2 /lib/x86_64-linux-gnu/libc.so.6 lib/x86_64-linux-gnu/libc.so.6 kernel/user/libtinfo.so.6 lib/x86_64-linux-gnu/libtinfo.so.6 kernel/user/motd.txt motd.txt > $@
+
+$(ESP_BASH): $(KERNEL) $(INITRD_BASH)
+	dd if=/dev/zero of=$@ bs=1M count=64
+	mformat -i $@ ::
+	mmd -i $@ ::/EFI
+	mmd -i $@ ::/EFI/BOOT
+	mcopy -i $@ $(KERNEL) ::/EFI/BOOT/BOOTX64.EFI
+	mcopy -i $@ $(INITRD_BASH) ::/initrd.cpio
+
+run-bash: $(ESP_BASH)
+	$(QEMU) \
+		-machine q35 \
+		-m 512M \
+		-cpu qemu64,+rdrand \
+		-bios $(OVMF) \
+		-drive file=$(ESP_BASH),format=raw,if=ide \
+		-snapshot \
+		-serial stdio -display none \
+		-device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+		-no-reboot
+
 clean:
 	cargo clean
 	rm -rf $(ESP) $(ESP_IMG)

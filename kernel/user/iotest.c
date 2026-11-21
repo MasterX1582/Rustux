@@ -12,6 +12,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/select.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 
 static int fails;
 
@@ -75,6 +78,16 @@ int main(void) {
         close(fd2); close(fd3); close(fd);
     }
 
+    /* /dev/tty — the controlling terminal device: this session owns
+       the console so it must open and answer tty ioctls. */
+    int tfd = open("/dev/tty", O_RDWR);
+    check(tfd >= 0, "open /dev/tty");
+    if (tfd >= 0) {
+        struct termios tio;
+        check(ioctl(tfd, TCGETS, &tio) == 0, "tcgets on /dev/tty");
+        close(tfd);
+    }
+
     /* openat relative through a real Dir dirfd (".") */
     int dfd = open(".", O_RDONLY | O_DIRECTORY);
     check(dfd >= 0, "open dir O_DIRECTORY");
@@ -96,6 +109,30 @@ int main(void) {
     check(openat(AT_FDCWD, "motd.txt", O_RDONLY | 0x2000) < 0 &&
           errno == EINVAL, "unknown flag -> EINVAL");
     check(pread(9999, buf, 1, 0) < 0, "pread bad fd");
+
+    /* pselect6(270) — readline's input wait. A ready pipe's bit
+       comes back set, an empty one with a zero timeout clears it;
+       writefds report writable the same way. */
+    int p[2] = {-1, -1};
+    check(pipe(p) == 0, "pipe for pselect");
+    if (p[0] >= 0 && p[1] >= 0) {
+        fd_set rs, ws;
+        struct timespec zt = {0, 0};
+        FD_ZERO(&rs); FD_ZERO(&ws);
+        FD_SET(p[0], &rs); FD_SET(p[1], &ws);
+        int n2 = pselect(p[1] + 1, &rs, &ws, NULL, &zt, NULL);
+        check(n2 == 1 && !FD_ISSET(p[0], &rs) && FD_ISSET(p[1], &ws),
+              "pselect idle pipe");
+        if (write(p[1], "x", 1) == 1) {
+            FD_ZERO(&rs); FD_SET(p[0], &rs);
+            check(pselect(p[0] + 1, &rs, NULL, NULL, &zt, NULL) == 1 &&
+                  FD_ISSET(p[0], &rs), "pselect ready pipe");
+        }
+        errno = 0;
+        check(pselect(9999, &rs, NULL, NULL, &zt, NULL) < 0 &&
+              errno == EINVAL, "pselect huge nfds");
+        close(p[0]); close(p[1]);
+    }
 
     int n = snprintf(buf, sizeof(buf), "iotest: %d failures, done\n", fails);
     say(buf);

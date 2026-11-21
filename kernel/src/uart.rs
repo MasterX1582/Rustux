@@ -16,6 +16,7 @@ const IER: u16 = 1; // interrupt enable
 const LCR: u16 = 3; // line control
 const MCR: u16 = 4; // modem control
 const LSR: u16 = 5; // line status
+const LSR_DATA_READY: u8 = 0x01;
 const LSR_THR_EMPTY: u8 = 0x20;
 
 /// SAFETY: `port`/`value` are raw x86 port I/O; callers must ensure the port
@@ -52,6 +53,16 @@ impl Uart16550 {
             outb(self.base + IER, 0x00); // divisor high = 0
             outb(self.base + LCR, 0x03); // 8 data bits, no parity, 1 stop bit
             outb(self.base + MCR, 0x0b); // DTR + RTS asserted, OUT2 (needed for IRQ path later)
+        }
+    }
+
+    /// One received byte if the FIFO has one — polled, no IRQs.
+    /// Under `-serial stdio` host keystrokes land here, so this is
+    /// the serial-console input path the tty ldisc drains per tick.
+    pub fn get_byte(&mut self) -> Option<u8> {
+        unsafe {
+            (inb(self.base + LSR) & LSR_DATA_READY != 0)
+                .then(|| inb(self.base + RX_TX))
         }
     }
 

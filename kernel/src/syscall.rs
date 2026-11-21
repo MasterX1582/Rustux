@@ -330,6 +330,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_BRK => user::sys_brk(a1),
         NR_RT_SIGPROCMASK => user::sys_rt_sigprocmask(a1, a2, a3, a4),
         NR_POLL => user::fd_poll(ctx, a1, a2, a3 as i64),
+        270 => user::fd_pselect(ctx, a1, a2, a3, a4, a5, a6),
         NR_SOCKET => user::fd_socket(a1, a2, a3),
         NR_CONNECT => user::fd_connect(ctx, a1, a2, a3),
         NR_ACCEPT => user::fd_accept(ctx, a1, a2, a3, 0),

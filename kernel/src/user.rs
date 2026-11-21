@@ -171,6 +171,10 @@ enum WaitOn {
     Vfork(u64),
     /// wait4(-pgid)/wait4(0): any child in this process group.
     Group(u64),
+    /// pselect6(): `wait_ptr/2/3` are the user read/write/except
+    /// fd_set VAs, `wait_len` the nfds; wait_deadline bounds it like
+    /// Poll. Ready bits are rewritten through the sleeper's tables.
+    Pselect,
 }
 
 /// Max fds per task — a hard bound so a hostile process cannot
@@ -600,6 +604,7 @@ fn pend_one(t: &mut Task, sig: u64) -> Option<(u64, u64, u64)> {
         t.wait_len = 0;
         t.wait_deadline = 0;
         t.wait_ptr2 = 0;
+        psel_restore(t);
         t.state = TaskState::Runnable;
     }
     contd
@@ -866,6 +871,12 @@ pub struct Task {
     wait_len: u64,
     /// Second wait pointer — recvfrom's sockaddr out VA (0 = none).
     wait_ptr2: u64,
+    /// Third wait pointer — pselect6's exceptfds VA (0 = none).
+    wait_ptr3: u64,
+    /// pselect6's saved sigmask — u64::MAX when no restore is owed.
+    /// The syscall applies the caller's set for the sleep and the
+    /// wake paths restore this one before userspace resumes.
+    psel_mask: u64,
     /// apic::TICKS deadline for a timed Poll wait — 0 means none.
     wait_deadline: u64,
     /// Pending signal bitmask — bit (sig-1), sigs 1..=31.
@@ -1674,6 +1685,8 @@ fn load(img: &[u8]) -> Option<Task> {
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_ptr2: 0,
+        wait_ptr3: 0,
+        psel_mask: u64::MAX,
         wait_len: 0,
         wait_deadline: 0,
         pending: 0,
@@ -2592,6 +2605,17 @@ fn t_lflag() -> u32 {
     }
 }
 
+/// c_iflag as a u32 — ICRNL lives here (0x100) for the serial input
+/// path: a terminal's Enter is CR, mapped to NL when ICRNL is set.
+fn t_iflag() -> u32 {
+    // SAFETY: TERMIOS[0..4] is c_iflag, little-endian on x86_64.
+    unsafe {
+        u32::from_le_bytes(
+            *((core::ptr::addr_of!(TERMIOS) as *const u8) as *const [u8; 4]),
+        )
+    }
+}
+
 /// A c_cc byte by index — VINTR 0, VERASE 2, VKILL 3, VEOF 4...
 fn t_cc(i: usize) -> u8 {
     // SAFETY: c_cc starts at byte 17 in the 36-byte termios ABI.
@@ -2840,6 +2864,20 @@ pub fn stdin_pump() {
     while let Some(c) = crate::kbd::poll() {
         stdin_key(c as u8);
         fed = true;
+    }
+    // Serial-console input: `-serial stdio` lands host keystrokes in
+    // the UART RX FIFO — drain it through the same ldisc as the PS/2
+    // path, CR->NL per ICRNL like a real tty. Bounded: FIFO drain.
+    let icrnl = t_iflag() & 0x100 != 0;
+    let mut u = unsafe { crate::uart::Uart16550::new(crate::uart::COM1) };
+    let mut drained = 0u32;
+    while let Some(b) = u.get_byte() {
+        stdin_key(if b == b'\r' && icrnl { b'\n' } else { b });
+        fed = true;
+        drained += 1;
+        if drained == 64 {
+            break;
+        }
     }
     // Any input-state change may satisfy a poll(0) waiter the way a
     // pipe change does — one re-scan per pump, not per key.
@@ -4702,6 +4740,17 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
             return EISDIR;
         }
         FdKind::Dir(DirPath::of(path))
+    } else if path == b"dev/tty" {
+        // The controlling terminal — interactive shells (bash job
+        // control) open it regardless of where their stdio points.
+        // Only the console-owning session has one; ENXIO like Linux.
+        if t.sid != unsafe { *core::ptr::addr_of!(CONSOLE_SID) } {
+            return (-6i64) as u64; // ENXIO
+        }
+        if flags & O_DIRECTORY != 0 {
+            return ENOTDIR;
+        }
+        FdKind::Stdin
     } else if flags & O_CREAT != 0 {
         // The parent must be a real directory; a file in a path
         // component is ENOTDIR like Linux.
@@ -5326,6 +5375,16 @@ fn write_task_u16(pml4: u64, va: u64, v: u16) {
     }
 }
 
+/// Write one u64 into another space (pselect6 fd_set words).
+fn write_task_u64(pml4: u64, va: u64, v: u64) {
+    for i in 0..8u64 {
+        if let Some(pa) = translate(pml4, va + i) {
+            // SAFETY: pa is a present user frame in pml4.
+            unsafe { (pa as *mut u8).write((v >> (i * 8)) as u8) };
+        }
+    }
+}
+
 /// Evaluate one pollfd's revents against kernel state. Requested
 /// events are masked in; ERR/HUP/NVAL report unconditionally like
 /// Linux (they describe the fd, not the request).
@@ -5458,14 +5517,21 @@ fn wake_pollers() {
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     for s in tasks.iter_mut() {
         let Some(t) = s.as_mut() else { continue };
-        if t.state != TaskState::Blocked || t.wait_on != WaitOn::Poll {
+        if t.state != TaskState::Blocked {
             continue;
         }
-        let n = poll_scan(t, t.wait_ptr, t.wait_len);
+        let n = match t.wait_on {
+            WaitOn::Poll => poll_scan(t, t.wait_ptr, t.wait_len),
+            WaitOn::Pselect => {
+                pselect_scan(t, t.wait_ptr, t.wait_ptr2, t.wait_ptr3, t.wait_len)
+            }
+            _ => continue,
+        };
         if n > 0 {
             t.ctx.rax = n;
             t.wait_on = WaitOn::None;
             t.wait_deadline = 0;
+            psel_restore(t);
             t.state = TaskState::Runnable;
         }
     }
@@ -5589,6 +5655,20 @@ fn poll_expire() {
                     }
                     t.ctx.rax = 0;
                 }
+                WaitOn::Pselect => {
+                    // Timed out: every output word reads zero — the
+                    // same "nothing ready" shape poll writes.
+                    for va in [t.wait_ptr, t.wait_ptr2, t.wait_ptr3] {
+                        if va == 0 {
+                            continue;
+                        }
+                        for w in 0..t.wait_len {
+                            write_task_u64(t.pml4, va + w * 8, 0);
+                        }
+                    }
+                    t.ctx.rax = 0;
+                    psel_restore(t);
+                }
                 WaitOn::TcpConn(si) => {
                     // connect() timed out: ETIMEDOUT, the socket
                     // marked dead so further io fails fast.
@@ -5641,6 +5721,164 @@ pub fn fd_poll(ctx: &mut UCtx, fds: u64, nfds: u64, timeout_ms: i64) -> u64 {
         crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed)
             + (timeout_ms as u64).div_ceil(10)
     };
+    t.ctx = *ctx;
+    t.state = TaskState::Blocked;
+    block_switch()
+}
+
+/// Restore a pselect6-saved sigmask if one is owed — the swap lives
+/// only for the sleep, and block_switch diverges so every wake path
+/// (ready, timeout, signal) must put the original back first.
+fn psel_restore(t: &mut Task) {
+    if t.psel_mask != u64::MAX {
+        t.sigmask = t.psel_mask as u32;
+        t.psel_mask = u64::MAX;
+    }
+}
+
+/// Scan one task's three pselect fd_sets through ITS page tables,
+/// writing back only the ready bits (Linux overwrites the input
+/// sets). Returns the count of ready fds — works on the current
+/// task and on a blocked one via translate walks.
+fn pselect_scan(t: &Task, rfd: u64, wfd: u64, efd: u64, nwords: u64) -> u64 {
+    let mut ready = 0u64;
+    for w in 0..nwords {
+        let mut rout = 0u64;
+        let mut wout = 0u64;
+        let rin = if rfd != 0 {
+            read_task_u(t.pml4, rfd + w * 8, 8).unwrap_or(0)
+        } else {
+            0
+        };
+        let win = if wfd != 0 {
+            read_task_u(t.pml4, wfd + w * 8, 8).unwrap_or(0)
+        } else {
+            0
+        };
+        for b in 0..64u64 {
+            let fd = (w * 64 + b) as i32;
+            let rv = poll_revents(t, fd, POLLIN | POLLOUT);
+            if rv & POLLNVAL != 0 {
+                continue;
+            }
+            if rin & (1 << b) != 0 && rv & (POLLIN | POLLERR | POLLHUP) != 0 {
+                rout |= 1 << b;
+                ready += 1;
+            }
+            if win & (1 << b) != 0 && rv & (POLLOUT | POLLERR) != 0 {
+                wout |= 1 << b;
+                ready += 1;
+            }
+        }
+        if rfd != 0 {
+            write_task_u64(t.pml4, rfd + w * 8, rout);
+        }
+        if wfd != 0 {
+            write_task_u64(t.pml4, wfd + w * 8, wout);
+        }
+        // exceptfds never signals here — no OOB source exists.
+        if efd != 0 {
+            write_task_u64(t.pml4, efd + w * 8, 0);
+        }
+    }
+    ready
+}
+
+/// pselect6(nfds, rfd, wfd, efd, timespec, {sigmask,len}): select
+/// with a timespec deadline and an atomic mask swap — bash's
+/// readline waits on input through this, so ENOSYS reads as EOF.
+/// Semantics follow Linux: the input sets are overwritten with the
+/// ready bits, the timeout is not updated, sigmask applies for the
+/// duration of the sleep only. nfds is FD_SETSIZE-capped like the
+/// kernel's own fd_set limit.
+pub fn fd_pselect(
+    ctx: &mut UCtx,
+    nfds: u64,
+    rfd: u64,
+    wfd: u64,
+    efd: u64,
+    ts: u64,
+    sig: u64,
+) -> u64 {
+    const EINTR: u64 = (-4i64) as u64;
+    if nfds > 1024 {
+        return EINVAL;
+    }
+    let Some(t) = cur_mut() else { return EINVAL };
+    let nwords = nfds.div_ceil(64);
+    let nbytes = nwords * 8;
+    for va in [rfd, wfd, efd] {
+        if va != 0 && !range_ok_w(va, nbytes) {
+            return EFAULT;
+        }
+    }
+    let mut deadline = 0u64;
+    if ts != 0 {
+        if !range_ok(ts, 16) {
+            return EFAULT;
+        }
+        // SAFETY: validated user timespec under cur cr3.
+        let (sec, nsec) = unsafe {
+            (
+                (ts as *const i64).read_unaligned(),
+                (ts as *const i64).add(1).read_unaligned(),
+            )
+        };
+        if nsec < 0 || nsec >= 1_000_000_000 {
+            return EINVAL;
+        }
+        deadline = crate::apic::TICKS
+            .load(core::sync::atomic::Ordering::Relaxed)
+            .saturating_add((sec.max(0) as u64).saturating_mul(100))
+            .saturating_add((nsec as u64) / 10_000_000);
+        if deadline == crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed)
+            && (sec > 0 || nsec > 0)
+        {
+            deadline += 1; // any positive wait is at least one tick
+        }
+    }
+    // sigmask arg is {const sigset_t *ss, size_t ss_len} — swap for
+    // the duration of the wait, restore on every way out.
+    let saved_mask = t.sigmask;
+    if sig != 0 {
+        if !range_ok(sig, 16) {
+            return EFAULT;
+        }
+        // SAFETY: validated user {ptr,len} pair under cur cr3.
+        let (ss, ss_len) = unsafe {
+            (
+                (sig as *const u64).read_unaligned(),
+                (sig as *const u64).add(1).read_unaligned(),
+            )
+        };
+        if ss != 0 {
+            if ss_len != 8 || !range_ok(ss, 8) {
+                return EINVAL;
+            }
+            // SAFETY: validated user sigset under cur cr3.
+            t.sigmask = unsafe { (ss as *const u64).read_unaligned() } as u32;
+        }
+    }
+    let ready = pselect_scan(t, rfd, wfd, efd, nwords);
+    if ready > 0 {
+        t.sigmask = saved_mask;
+        return ready;
+    }
+    if ts != 0 && deadline <= crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) {
+        t.sigmask = saved_mask;
+        return 0;
+    }
+    if deliverable(t) {
+        t.sigmask = saved_mask;
+        return EINTR;
+    }
+    t.psel_mask = saved_mask as u64;
+    t.wait_on = WaitOn::Pselect;
+    t.wait_ptr = rfd;
+    t.wait_ptr2 = wfd;
+    t.wait_ptr3 = efd;
+    t.wait_len = nwords;
+    t.wait_deadline = deadline;
     t.ctx = *ctx;
     t.state = TaskState::Blocked;
     block_switch()
@@ -7608,7 +7846,8 @@ fn task_exit_inner() -> ! {
 fn run_over(tasks: &[Option<Task>]) -> bool {
     tasks.iter().flatten().all(|t| {
         t.state == TaskState::Exited
-            || (t.state == TaskState::Blocked && t.wait_on == WaitOn::Stdin)
+            || (t.state == TaskState::Blocked
+                && matches!(t.wait_on, WaitOn::Stdin | WaitOn::Poll | WaitOn::Pselect))
     })
 }
 
@@ -7903,6 +8142,8 @@ pub fn fork(ctx: &mut UCtx, files: bool, fs: bool) -> u64 {
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_ptr2: 0,
+        wait_ptr3: 0,
+        psel_mask: u64::MAX,
         wait_len: 0,
         wait_deadline: 0,
         // Dispositions inherit across fork (the Linux semantic);
@@ -8055,6 +8296,8 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
         wait_on: WaitOn::None,
         wait_ptr: 0,
         wait_ptr2: 0,
+        wait_ptr3: 0,
+        psel_mask: u64::MAX,
         wait_len: 0,
         wait_deadline: 0,
         pending: 0,
