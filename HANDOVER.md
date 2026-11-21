@@ -1233,3 +1233,39 @@ pipes), bbtest/sh_run harnesses report and zero-out on pipe/fork
 failure so a kernel-resource error can never read as a pass, and
 the ls check targets `/lib64` (fixed contents). 6/6 clean VM runs,
 WSL clean, zero leak. Audit run-60: 0 confirmed.
+
+## run-87 — rseq + sendfile; a latent shared-stack test bug
+
+Two ENOSYS probes from real binaries retired: `rseq` (334 — glibc
+registers an area at every startup) and `sendfile` (40 — busybox
+applet copies). `sys_rseq` keeps per-task registration state
+(`rseq_va`, not fork-inherited, cleared at exec), writes the
+cpu_id pair once, and answers EBUSY/EINVAL honestly. `sys_sendfile`
+copies regular-file/VFile input into a writable pipe ring with
+correct pos vs *offset semantics; non-regular input EINVALs like
+Linux, a zero-room ring EAGAINs (documented divergence vs block).
+
+Testing surfaced a **pre-existing latent bug** (present since
+run-79, not a kernel bug): aptest's `syscall(SYS_vfork)` child
+called libc `_exit` — the `call` pushes onto the shared stack,
+overwriting the parent's `syscall()`-frame return slot, so the
+parent's resume `ret` landed wherever the child's last push left
+(the layout moved the landing pad next to `_start`, turning a
+silent corruption into a #PF kill). The ABI hazard is real on
+Linux too — it's the man page's "no function calls before
+exec/_exit" rule. The child now exits via a bare inline-asm
+syscall (zero stack use). Also bumped MAX_FDTABS/MAX_SIGTABS/
+MAX_FSTABS 48->64 and MAX_OFDS 192->256 — still sized for the
+pre-86b 48-task bound, transient fork() ENOMEM under the
+64-task suite.
+
+`rtest.S` (raw asm — glibc tasks can't exercise registration):
+register, cpu_id fields, EBUSY, all EINVAL paths, unregister,
+re-register. `dyntest` verifies EBUSY on re-register (proof
+glibc's real startup registration succeeded). `aptest` sendfile
+block: whole-file move, byte equality, *offset semantics, EINVAL
+honesty. enosys 334/40 gone entirely (nr 9999 is the intentional
+probe). 40 tasks, zero leak, boot PASS x4 WSL. Audit run-61:
+0 confirmed (Dirty Pipe CVE-2022-0847 reviewed — architecturally
+absent: private kernel ring, no page-cache merge surface).
+CVE ledger: 89.
