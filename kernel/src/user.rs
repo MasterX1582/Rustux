@@ -304,6 +304,20 @@ fn write_task_bytes(pml4: u64, va: u64, data: &[u8]) -> bool {
     true
 }
 
+/// write_task_bytes without the user writable bit: kernel fill of
+/// freshly-allocated PRIVATE pages is legitimate on read-only maps —
+/// translate_r walks present-only, exactly the folio-fill privilege.
+fn write_task_bytes_force(pml4: u64, va: u64, data: &[u8]) -> bool {
+    for (i, &b) in data.iter().enumerate() {
+        let Some(pa) = translate_r(pml4, va + i as u64) else {
+            return false;
+        };
+        // SAFETY: pa is a present user frame in pml4.
+        unsafe { (pa as *mut u8).write(b) };
+    }
+    true
+}
+
 /// Apply one pending signal to `ctx` — the resume image of task `t`.
 /// Handler installed: push [signo][interrupted UCtx] onto the task's
 /// own stack, redirect rip to the handler, rdi=signo — sigreturn
@@ -1745,20 +1759,45 @@ pub fn sys_mmap(
     len: u64,
     prot: u64,
     flags: u64,
-    _fd: u64,
-    _off: u64,
+    fd: u64,
+    off: u64,
 ) -> u64 {
+    const EACCES: u64 = (-13i64) as u64;
     const ENODEV: u64 = (-19i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
     const MAP_PRIVATE: u64 = 0x02;
     const MAP_FIXED: u64 = 0x10;
     const MAP_ANON: u64 = 0x20;
+    const MAP_SHARED: u64 = 0x01;
     let Some(t) = cur_mut() else { return ENOMEM };
+    // MAP_SHARED is honest ENODEV even without MAP_PRIVATE — shared
+    // writable mappings would need writeback we do not have.
+    if flags & MAP_SHARED != 0 {
+        return ENODEV;
+    }
     if len == 0 || prot > 7 || flags & MAP_PRIVATE == 0 {
         return EINVAL;
     }
+    // File-backed MAP_PRIVATE: pages are private copies eager-filled
+    // from the fd — COW is trivially exact since nothing aliases the
+    // file. Past-EOF bytes are zeros (Linux would SIGBUS — divergence).
+    let mut backing: Option<(*const u8, usize)> = None;
     if flags & MAP_ANON == 0 {
-        return ENODEV; // file-backed mmap is a later rung
+        if off & (PAGE - 1) != 0 {
+            return EINVAL;
+        }
+        let Some(o) = ofd(t, fd) else { return EBADF };
+        if o.accmode == 1 {
+            return EACCES; // fd not open for reading
+        }
+        backing = Some(match &o.kind {
+            FdKind::File(d) => (d.as_ptr(), d.len()),
+            FdKind::Ram(i) => match vfile(*i) {
+                Some(v) => (v.data as *const u8, v.len),
+                None => return EBADF,
+            },
+            _ => return ENODEV, // non-regular: pipes/sockets/dirs
+        });
     }
     let Some(len) = len.checked_add(PAGE - 1).map(|v| v & !(PAGE - 1))
     else {
@@ -1818,6 +1857,17 @@ pub fn sys_mmap(
             return ENOMEM;
         }
         v += PAGE;
+    }
+    if let Some((data, dlen)) = backing {
+        let avail = dlen.saturating_sub(off as usize).min(len as usize);
+        if avail > 0 {
+            // SAFETY: data is a live cpio slice or a kmalloc'd VFile
+            // buffer of dlen bytes; off < dlen checked by the sub.
+            let s = unsafe {
+                core::slice::from_raw_parts(data.add(off as usize), avail)
+            };
+            write_task_bytes_force(t.pml4, va, s);
+        }
     }
     range_add(t, va, va + len, prot_rng(prot));
     va
