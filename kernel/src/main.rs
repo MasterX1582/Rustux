@@ -1081,9 +1081,10 @@ fn main() -> Status {
     // Hold the final frame ~1.5s before exiting — serial readers
     // already have the result, but the framebuffer should show it to
     // anyone watching (and to headless screendump capture, which
-    // stops existing the instant we exit).
-    let t0 = apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    while apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - t0 < 150 {}
+    // stops existing the instant we exit). rdtsc, not TICKS: the
+    // LAPIC stops accumulating once the scheduler unwinds.
+    let t0 = unsafe { core::arch::x86_64::_rdtsc() };
+    while unsafe { core::arch::x86_64::_rdtsc() } - t0 < 4_500_000_000 {}
 
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
