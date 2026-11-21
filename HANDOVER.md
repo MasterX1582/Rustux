@@ -1269,3 +1269,36 @@ probe). 40 tasks, zero leak, boot PASS x4 WSL. Audit run-61:
 0 confirmed (Dirty Pipe CVE-2022-0847 reviewed — architecturally
 absent: private kernel ring, no page-cache merge surface).
 CVE ledger: 89.
+
+## run-88 — real GNU bash; getsockname/getpeername; memory bump
+
+The flagship gets heavier: Ubuntu's real **GNU bash 5.2** runs under
+Rustux. It's a strict superset of the dash rung — dynamic PT_INTERP
+consumer PLUS a second DT_NEEDED (`libtinfo.so.6`), so ld.so does
+its first multi-library resolution through the default search path
+(`lib/x86_64-linux-gnu/`, same dir libc already lives in). bashtest
+drives 21 checks through `bash -c` pipes: brace expansion, indexed
+arrays, [[ ]] pattern tests, functions+local, the rich parameter
+expansion set (substr/len/default/replace), case, printf formats,
+here-strings, trap EXIT, background jobs + `wait`, and `>>` append
+through the VFile layer — all green.
+
+Two kernel-side adds from the run: **getsockname(51) +
+getpeername(52)** — bash probes every startup fd for socket-ness,
+expecting ENOTSOCK; ENOSYS worked but was dishonest. `sock_name`
+implements both: TCP reports peer/local sockaddr_in by state
+(ENOTCONN unconnected), UDP reports local port (peer always
+ENOTCONN — our datagrams never connect), everything else ENOTSOCK.
+*addrlen is in/out with truncate-copy/report-full, and sockaddr_in()
+already zero-fills all 16 bytes — the CVE-52937/7558/47597
+uninit-copy class stays structurally absent.
+
+Also: **QEMU -m 512M**. The e820 pool was ~40MiB (10.4k frames);
+each bash child deep-copies ~5MB of address space on fork, and the
+41-task suite transiently ENOMEM'd a parent's fork. The frame pool
+is now ~532MB — honest ENOMEM semantics unchanged, the bound just
+isn't suite-tight anymore. parent's fork failure now reports errno
+(the run-86b honest-harness rule applied to the last silent check).
+
+Audit run-62 scoped to the diff: 0 confirmed. CVE ledger: 91.
+41 tasks, zero leak, boot PASS x3 WSL.

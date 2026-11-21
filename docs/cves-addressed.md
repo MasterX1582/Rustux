@@ -5,7 +5,7 @@ that covers it and the verdict. GENERATED from
 `docs/cve-matrix.md` by `tools/cve-ledger.py` — do not edit
 by hand; append to the matrix and regenerate.
 
-**89 unique CVEs recorded.**
+**91 unique CVEs recorded.**
 
 ## klib ports
 
@@ -54,6 +54,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2016-10229 | udp/dhcp (ipv4) | csum field zeroed before csum4 (CVE-2025-38432 fix shape); no MSG_PEEK/socket layer — 2016-10229 n/a; malformed csums dropped-and-reposted not error-looped (2015-5364/66 class abs… |
 | CVE-2016-5195 | fork/wait4/getpid + full-ctx syscall stub | eager deep copy of user space — no COW, so the 5195 COW-breakage race class is structurally absent; child ctx = parent syscall UCtx with rax=0, parent gets pid (user-only regs, no… |
 | CVE-2017-1000255 | signals: rt_sigaction/rt_sigreturn/kill + EINTR | frame = [signo][UCtx] pushed onto the task's own stack through its own tables; sigreturn treats it as hostile: cs=0x33/ss=0x2b pinned not restored, TF/NT/IOPL cleared, rip canonic… |
+| CVE-2017-7558 | real GNU bash 5.2 (dynamic, +libtinfo second DT_NEEDED — ld.so's first multi-library reso… | sockaddr-leak class structurally absent: sock_name copies min(*addrlen,16) bytes of a sockaddr_in built by sockaddr_in() which zero-fills all 16 before writing fields — every copi… |
 | CVE-2018-14634 | brk/mmap/munmap/mprotect: per-task VMA table + eager zeroed pages | VMA == ranges[] entry: gate, first-fit, and teardown share one truth, so a mapped page can never escape the syscall pointer gate; first-fit scans holes between entries (freed VA i… |
 | CVE-2018-3665 | FPU resume fix: resume_ctx lacked fxrstor | the tick/IRQ resume path set CUR_I/cr3/ctx but never restored the incoming task's fx image -- a timer switch left the PREVIOUS task's live xmm registers in the FPU, so a resuming… |
 | CVE-2018-3665 | per-task FPU/SSE (eager fxsave/fxrstor in the context switch) | eager save+restore at every switch -- LazyFP's lazy-restore speculation class n/a by design; INIT_FX is a post-fninit capture so every task starts from a clean FPU image, exec res… |
@@ -64,6 +65,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2021-4440 | task abstraction + frame reclaim | per-task page tables + kmalloc'd syscall stack, initrd iterates as process table; teardown freeing designed-in: reap walks user PML4 slots 128-255 only, PHYS_MASK strips NX/flags… |
 | CVE-2021-47597 | TCP sockets: socket/bind/listen/connect/accept + stream send/recv over loopback | ISN = siphash(4-tuple,rdtsc,boot-key) per isn_key; accept mints a DISTINCT conn slot (no listener-clone UAF, 99116 class); listener keeps no stale conn errors (90138); data-offset… |
 | CVE-2021-47597 | UDP sockets: socket/bind/sendto/recvfrom + live RX path | sockaddr_in is fully zeroed before fields (47597 uninit-struct class structurally absent); synchronous endpoint teardown at last-fd-close — no deferred-cleanup UAF (56642 n/a); rx… |
+| CVE-2021-47597 | real GNU bash 5.2 (dynamic, +libtinfo second DT_NEEDED — ld.so's first multi-library reso… | sockaddr-leak class structurally absent: sock_name copies min(*addrlen,16) bytes of a sockaddr_in built by sockaddr_in() which zero-fills all 16 before writing fields — every copi… |
 | CVE-2022-0847 | pipes: pipe/pipe2 + blocking IPC over fork | ring is a dedicated kernel frame — zeroed, never aliases page cache, no buffer flags at all (Dirty Pipe class structurally absent); endpoints counted per-OFD so dup/fork share cor… |
 | CVE-2022-0847 | rseq(334) registration + sendfile(40): per-task rseq_va (not fork-inherited, exec-cleared… | 0847 architecturally absent: Dirty Pipe was uninit flags in pipe_buffer letting partial writes merge into shared page-cache pages; Rustux pipes are private kernel rings and sendfi… |
 | CVE-2022-4378 | TCP sockets: socket/bind/listen/connect/accept + stream send/recv over loopback | ISN = siphash(4-tuple,rdtsc,boot-key) per isn_key; accept mints a DISTINCT conn slot (no listener-clone UAF, 99116 class); listener keeps no stale conn errors (90138); data-offset… |
@@ -102,6 +104,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2026-31495 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
 | CVE-2026-43445 | `e1000` TX | **design note** — no multi-buffer skb mapping yet; when TX gains error paths, unmap exactly the buffers mapped |
 | CVE-2026-46063 | signals: rt_sigaction/rt_sigreturn/kill + EINTR | frame = [signo][UCtx] pushed onto the task's own stack through its own tables; sigreturn treats it as hostile: cs=0x33/ss=0x2b pinned not restored, TF/NT/IOPL cleared, rip canonic… |
+| CVE-2026-52937 | real GNU bash 5.2 (dynamic, +libtinfo second DT_NEEDED — ld.so's first multi-library reso… | sockaddr-leak class structurally absent: sock_name copies min(*addrlen,16) bytes of a sockaddr_in built by sockaddr_in() which zero-fills all 16 before writing fields — every copi… |
 | CVE-2026-63910 | CLONE_FILES: shared fd table via FDTABS (users refcount) ledger — files_struct analogue;… | fd_install-then-touch race family: a shared-table close() UAFs the post-install kernel access — structurally absent: IF-masked single-CPU syscalls make slot-fill to syscall-return… |
 | CVE-2026-63913 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
 | CVE-2026-64400 | hierarchical VFS: per-task cwd in FsTab, canon_path resolution (. .. rel/abs, root-clampe… | 64400 structurally absent: canon clamps .. AT root with no retry/reconstruct path, and there are no mount/share boundaries to escape through (cwd is the only base). getdents-leak… |
