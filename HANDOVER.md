@@ -1140,3 +1140,48 @@ Second, the bigger one — exec from a shared mm was a never-exercised path with
 Divergences recorded: clone(CLONE_VFORK) flag form unparsed (glibc uses nr 58); a vfork child's mm mutations don't reach siblings' range ledgers (same CLONE_VM limitation).
 
 vtest: shared-write visible + suspended-ordering + stack integrity + waitpid(7); exec path + waitpid(0); fork-no-suspend contrast. 0 failures, 37 tasks, zero leak, boot PASS; audit run-84: 0 confirmed.
+## run-85 — PT_INTERP: dynamic ELF binaries via the real ld.so + glibc
+
+execve can now run dynamically linked binaries — the single biggest ABI gap
+toward real Debian userspace. When the image carries PT_INTERP, `Elf::interp()`
+extracts a bounded (filesz 2..=4096), absolute, NUL-terminated interpreter path
+(first PT_INTERP wins, exactly like binfmt_elf — the CVE-2026-68151 fix shape)
+and `interp_load()` performs Linux's load_elf_interp dance: resolve the name in
+the initrd, measure the PT_LOAD span under a probe bias (bias-0 would fail the
+entry-in-window check), first-fit a gap in the mmap arena via `mmap_find` — the
+same VMA allocator user mmap uses, so the interp can never collide with a later
+mapping — re-parse at the real bias, and map it. Userspace starts at the
+interpreter's entry with AT_BASE = its load base and AT_ENTRY = the main image's
+entry. The segment mapper split out of load_inner (`map_loads`) takes
+`track_brk` so the interp's span never moves the main binary's break.
+
+`ld.so` and `libc.so.6` are staged into the initrd from the build host at
+mkinitrd time (always matching the gcc that built the test — nothing binary
+committed), under `lib64/` and `lib/x86_64-linux-gnu/` — the run-81 implicit-dir
+machinery resolves them by path. main.rs's auto-spawn now skips '/'-named
+archive members so the support libs aren't queued as tasks.
+
+The debugging was the interesting part: ld.so opened libc, read its headers,
+fstat'd — and never mapped it, printing "no version information available" then
+"undefined symbol: __libc_start_main, version GLIBC_2.34". The cause was
+sys_fstat reporting st_ino=0 for every cpio member: glibc dedupes shared
+objects by (st_dev,st_ino), so libc aliased ld.so's own already-loaded object.
+sys_fstat now reports member-idx+1, the same scheme newfstatat uses. With real
+inodes, ld.so's call shape is byte-for-byte the Linux strace one — MAP_PRIVATE|
+DENYWRITE span map, MAP_FIXED RX/RO/RW segments, anon BSS extension — and glibc
+startup runs clean.
+
+Also fixed: lstest.S had been silently failing since the dir stream gained
+'.','..' — the .S exit status isn't checked by anything, so its stale 'init
+first record' + fixed-37 assertions rotted. Honestly re-asserted: 4KiB buffer,
+>=44-record floor (other tasks can only add), '.' DT_DIR first record.
+
+dyntest.c is a real DYNAMIC glibc binary (gcc -O2, rpath /lib/x86_64-linux-gnu):
+gnu_get_libc_version(), fopen/fgets through real libc, fork+execl("/dyntest")
+with waitpid status 7 — dyntest: 0 failures, done; the exec'd child also loads
+through ld.so. 38 tasks, frames 10337->10337 zero leak, boot PASS.
+
+Audit run-85 (run-58): 0 confirmed — interp bounds absolute+NUL+4KiB, first-
+PT_INTERP-only, archive-member resolution only, mmap-arena collision-free by
+construction, mid-exec failure tears down at reap. CVE ledger: 88.
+

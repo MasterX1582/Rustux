@@ -5,7 +5,7 @@ that covers it and the verdict. GENERATED from
 `docs/cve-matrix.md` by `tools/cve-ledger.py` — do not edit
 by hand; append to the matrix and regenerate.
 
-**86 unique CVEs recorded.**
+**88 unique CVEs recorded.**
 
 ## klib ports
 
@@ -29,9 +29,11 @@ by hand; append to the matrix and regenerate.
 | CVE | Feature / rung | Verdict |
 |---|---|---|
 | CVE-2001-0328 | demo gating + tcp isn | demos stripped from non-demo builds (verified via binary string scan) — closes NV-40-1/41-1/43-2; ISN now siphash(4-tuple,time,boot-key) per secure_tcp_seq — closes NV-43-1; resid… |
+| CVE-2004-1070 | PT_INTERP dynamic ELF: Elf::interp() (first-PT_INTERP-only, absolute NUL path bounded 4Ki… | RUN-TIME BUG CAUGHT BY REAL ld.so: glibc ld.so dedupes shared objects by (st_dev,st_ino) — sys_fstat reported ino=0 for every cpio member, so libc.so.6 aliased ld.so's own object,… |
 | CVE-2004-1070 | real-binary ABI: fs_base+arch_prctl, exec initial stack (argc/argv/envp/auxv), writev/rea… | argv==NULL discipline applied (49264): argc==0 gets the binary name as argv0 (stronger than upstream's empty string -- same "never argc<1" contract glibc relies on); exec argv/env… |
 | CVE-2004-1070 | ring-3 userspace (elf/user/syscall) | every phdr field validated before use (2004-1070/71/72 class: checked mul/add on all extents, filesz<=memsz, file+VA ranges bounded, entry confined to user PML4 slots 128-255); ke… |
 | CVE-2004-1071 | ring-3 userspace (elf/user/syscall) | every phdr field validated before use (2004-1070/71/72 class: checked mul/add on all extents, filesz<=memsz, file+VA ranges bounded, entry confined to user PML4 slots 128-255); ke… |
+| CVE-2004-1072 | PT_INTERP dynamic ELF: Elf::interp() (first-PT_INTERP-only, absolute NUL path bounded 4Ki… | RUN-TIME BUG CAUGHT BY REAL ld.so: glibc ld.so dedupes shared objects by (st_dev,st_ino) — sys_fstat reported ino=0 for every cpio member, so libc.so.6 aliased ld.so's own object,… |
 | CVE-2004-1072 | ring-3 userspace (elf/user/syscall) | every phdr field validated before use (2004-1070/71/72 class: checked mul/add on all extents, filesz<=memsz, file+VA ranges bounded, entry confined to user PML4 slots 128-255); ke… |
 | CVE-2005-2194 | TCP sockets: socket/bind/listen/connect/accept + stream send/recv over loopback | ISN = siphash(4-tuple,rdtsc,boot-key) per isn_key; accept mints a DISTINCT conn slot (no listener-clone UAF, 99116 class); listener keeps no stale conn errors (90138); data-offset… |
 | CVE-2006-0744 | execve image replacement | user rip round-trips SAVED_UIP so sysret can be redirected; canonicality holds — only stub (CPU-saved rip) and exec_return (elf-bounded entry) write it; ZERO_CTX gives exec'd imag… |
@@ -67,6 +69,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2022-49264 | execve image replacement | user rip round-trips SAVED_UIP so sysret can be redirected; canonicality holds — only stub (CPU-saved rip) and exec_return (elf-bounded entry) write it; ZERO_CTX gives exec'd imag… |
 | CVE-2022-49264 | real-binary ABI: fs_base+arch_prctl, exec initial stack (argc/argv/envp/auxv), writev/rea… | argv==NULL discipline applied (49264): argc==0 gets the binary name as argv0 (stronger than upstream's empty string -- same "never argc<1" contract glibc relies on); exec argv/env… |
 | CVE-2022-49349 | writable file layer: VFile/Ram OFDs (O_CREAT/O_EXCL/O_TRUNC/O_APPEND), write/read/pread/l… | self-review catches FIXED pre-commit: write(fd,buf,0) at pos>len allocated+extended the file (now early-0 like Linux); fd_pread on an empty VFile took null.add(0) (now n==0 early… |
+| CVE-2022-50466 | PT_INTERP dynamic ELF: Elf::interp() (first-PT_INTERP-only, absolute NUL path bounded 4Ki… | RUN-TIME BUG CAUGHT BY REAL ld.so: glibc ld.so dedupes shared objects by (st_dev,st_ino) — sys_fstat reported ino=0 for every cpio member, so libc.so.6 aliased ld.so's own object,… |
 | CVE-2022-50531 | newfstatat: 144-byte Linux struct stat over the cpio fs | the stat buffer is [0u64;18] zeroed before any field is set -- the uninit-kernel-struct copy_to_user info-leak class (50531/KMSAN family) is structurally absent; copy_user_path ge… |
 | CVE-2022-50661 | fork/wait4/getpid + full-ctx syscall stub | eager deep copy of user space — no COW, so the 5195 COW-breakage race class is structurally absent; child ctx = parent syscall UCtx with rax=0, parent gets pid (user-only regs, no… |
 | CVE-2022-50661 | task abstraction + frame reclaim | per-task page tables + kmalloc'd syscall stack, initrd iterates as process table; teardown freeing designed-in: reap walks user PML4 slots 128-255 only, PHYS_MASK strips NX/flags… |
@@ -105,6 +108,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2026-68120 | ipv6/ndp/icmpv6 | no direct CVEs; frag-header CVEs reinforce the no-extension-headers/no-fragments design; hop==255 + solicited-dst + target==us enforced; pseudo-header csum validated (neg-zero res… |
 | CVE-2026-68124 | terminal ABI: ioctl(16) dispatch — TCGETS/TCSETS-family on the console pair, TIOCGWINSZ r… | every ioctl arg extent is range_ok(_w)-gated with the exact struct size BEFORE any copy (36/8/4B) — the run-68 translate bound already confines arg to the user window; termios is… |
 | CVE-2026-68124 | tty stdin: IRQ1->scancode ring->line discipline->read(0)/poll(0)/FIONREAD, WaitOn::Stdin,… | bounded queues throughout: 256B canonical edit buffer + 4KiB ready queue, drop-on-full = Linux input discard; feed runs from the timer tick (printk is irq_save-safe, kill marks pe… |
+| CVE-2026-68151 | PT_INTERP dynamic ELF: Elf::interp() (first-PT_INTERP-only, absolute NUL path bounded 4Ki… | RUN-TIME BUG CAUGHT BY REAL ld.so: glibc ld.so dedupes shared objects by (st_dev,st_ino) — sys_fstat reported ino=0 for every cpio member, so libc.so.6 aliased ld.so's own object,… |
 | CVE-2026-68477 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
 | CVE-2026-72020 | tcp/ipv4 (mini) | exact seq+ack required on every transition (no blind RST/state jumps — 63913 class out); option walk bounded, wscale never shifted (31495); seq state fully initialized (72020); do… |
 | CVE-2026-72110 | process lifecycle: clone(56) fork-subset + SETTID writes, rt_sigprocmask(14) real sigmask… | RUN-TIME BUG CAUGHT BY REVIEW: translate/translate_r walked ANY va through the task pml4 -- which shares kernel upper-half slots by reference -- so a user-controlled VA reached ke… |
