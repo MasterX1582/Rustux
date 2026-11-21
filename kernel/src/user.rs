@@ -5668,6 +5668,83 @@ pub fn fd_bind(fd: u64, sa: u64, len: u64) -> u64 {
     0
 }
 
+/// getsockname/getpeername(fd, sockaddr_out, *addrlen): the local
+/// or remote endpoint. *addrlen is in/out — we copy at most the
+/// caller's size then report the full sockaddr_in length (16),
+/// Linux's truncate-copy/report-full convention.
+fn sock_name(fd: u64, sa: u64, alen: u64, peer: bool) -> u64 {
+    const ENOTSOCK: u64 = (-88i64) as u64;
+    const ENOTCONN: u64 = (-107i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    if sa == 0 || alen == 0 {
+        return EFAULT;
+    }
+    if !range_ok_w(alen, 4) {
+        return EFAULT;
+    }
+    // SAFETY: alen validated writable under this task's page table.
+    let ulen = unsafe { (alen as *const u32).read_unaligned() };
+    // The endpoint this socket is attached to, if it has one.
+    // port/ip are already wire-order for sockaddr_in.
+    let ep: Option<(u16, [u8; 4])> = match ofd(t, fd).map(|o| &o.kind) {
+        Some(FdKind::Tcp(i)) => {
+            let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+            let Some(k) = socks[*i].as_ref() else { return EBADF };
+            if peer {
+                match k.state {
+                    TcpState::Estab
+                    | TcpState::CloseWait
+                    | TcpState::FinWait
+                    | TcpState::LastAck => Some((k.peer_port, k.peer_ip)),
+                    _ => return ENOTCONN,
+                }
+            } else {
+                let ip = match k.state {
+                    TcpState::Estab
+                    | TcpState::CloseWait
+                    | TcpState::FinWait
+                    | TcpState::LastAck => crate::e1000::our_ip(),
+                    _ => [0; 4], // bound-to-any: INADDR_ANY
+                };
+                Some((k.port, ip))
+            }
+        }
+        Some(FdKind::Udp(i)) => {
+            let socks = unsafe { &*core::ptr::addr_of!(UDPSOCKS) };
+            let Some(k) = socks[*i].as_ref() else { return EBADF };
+            if peer {
+                return ENOTCONN; // our datagram socks never connect()
+            }
+            Some((k.port, [0; 4]))
+        }
+        _ => return ENOTSOCK,
+    };
+    let Some((port, ip)) = ep else { return EBADF };
+    let s = sockaddr_in(port, ip);
+    let n = core::cmp::min(ulen as usize, 16);
+    if n > 0 {
+        if !range_ok_w(sa, n as u64) {
+            return EFAULT;
+        }
+        // SAFETY: sa validated writable for n under this task's
+        // page table; s is a fully-initialized local.
+        unsafe {
+            core::ptr::copy_nonoverlapping(s.as_ptr(), sa as *mut u8, n);
+        }
+    }
+    // SAFETY: same validated alen slot — report the real length.
+    unsafe { (alen as *mut u32).write_unaligned(16) };
+    0
+}
+
+pub fn fd_getsockname(fd: u64, sa: u64, alen: u64) -> u64 {
+    sock_name(fd, sa, alen, false)
+}
+
+pub fn fd_getpeername(fd: u64, sa: u64, alen: u64) -> u64 {
+    sock_name(fd, sa, alen, true)
+}
+
 /// sendto(fd, buf, len, flags, sockaddr_in, alen): one datagram out —
 /// the destination MAC resolves via the ARP cache/gateway.
 pub fn fd_sendto(

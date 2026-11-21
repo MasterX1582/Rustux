@@ -12,6 +12,7 @@
 #include <sys/utsname.h>
 #include <sched.h>
 #include <time.h>
+#include <errno.h>
 
 static int fails = 0;
 
@@ -53,6 +54,7 @@ int main(void) {
     char *env[] = {"RUSTUX_ENV=child", NULL};
     pid_t p = fork();
     if (p < 0) {
+        fprintf(stderr, "parent: fork() -> %d\n", errno);
         check(0, "fork");
         return 1;
     }

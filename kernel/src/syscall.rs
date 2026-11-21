@@ -210,6 +210,8 @@ const NR_RECVFROM: u64 = 45;
 const NR_SHUTDOWN: u64 = 48;
 const NR_BIND: u64 = 49;
 const NR_LISTEN: u64 = 50;
+const NR_GETSOCKNAME: u64 = 51;
+const NR_GETPEERNAME: u64 = 52;
 const NR_READV: u64 = 19;
 const NR_WRITEV: u64 = 20;
 const NR_IOCTL: u64 = 16;
@@ -334,6 +336,8 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_ACCEPT4 => user::fd_accept(ctx, a1, a2, a3, a4),
         NR_BIND => user::fd_bind(a1, a2, a3),
         NR_LISTEN => user::fd_listen(a1, a2),
+        NR_GETSOCKNAME => user::fd_getsockname(a1, a2, a3),
+        NR_GETPEERNAME => user::fd_getpeername(a1, a2, a3),
         NR_SHUTDOWN => user::fd_shutdown(a1, a2),
         NR_SENDTO => user::fd_sendto(a1, a2, a3, a4, a5, a6),
         NR_RECVFROM => user::fd_recvfrom(ctx, a1, a2, a3, a4, a5, a6),
