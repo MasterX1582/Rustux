@@ -238,6 +238,7 @@ const NR_SCHED_YIELD: u64 = 24;
 const NR_UMASK: u64 = 95;
 const NR_SYSINFO: u64 = 99;
 const NR_TIMES: u64 = 100;
+const NR_TIME: u64 = 201;
 const NR_GETRUSAGE: u64 = 98;
 const NR_STATFS: u64 = 137;
 const NR_FSTATFS: u64 = 138;
@@ -409,6 +410,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_UMASK => user::sys_umask(a1),
         NR_SYSINFO => user::sys_sysinfo(a1),
         NR_TIMES => user::sys_times(a1),
+        NR_TIME => user::sys_time(a1),
         NR_GETRUSAGE => user::sys_getrusage(a1, a2),
         NR_STATFS | NR_FSTATFS => user::sys_statfs(a2),
         NR_PRCTL => user::sys_prctl(a1, a2),

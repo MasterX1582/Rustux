@@ -151,9 +151,7 @@ cfail:
 
 handler:
     movb $0x48, marker(%rip)    # 'H'
-    mov $15, %eax               # rt_sigreturn
-    syscall
-    ud2                         # unreachable
+    ret                         # restorer stub -> rt_sigreturn
 
     .section .data
 act:

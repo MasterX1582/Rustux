@@ -36,6 +36,15 @@ const MMAP_LO: u64 = 0x6000_0000_0000;
 const MMAP_HI: u64 = 0x7000_0000_0000;
 const USTACK_PAGES: u64 = 16;
 
+/// Signal restorer trampoline: one user-RX page mapped just below
+/// the user stack at exec. Delivery points the handler's return
+/// address at SIGTRAMP_VA so a plain `ret` runs the rt_sigreturn
+/// stub — the Linux vsyscall/vDSO role, minus the vDSO.
+const SIGTRAMP_VA: u64 = USTACK_VA - PAGE;
+/// mov $15,%rax; syscall — rt_sigreturn. The rest of the page stays
+/// zeroed (ud2-equivalent landing pad for off-stub jumps).
+const SIGTRAMP_CODE: [u8; 9] = [0x48, 0xc7, 0xc0, 0x0f, 0, 0, 0, 0x0f, 0x05];
+
 /// Per-task kernel stack for SYSCALL entries — replaces the shared
 /// static stack so a task's kernel state can't bleed into the next.
 const KSTACK_SIZE: usize = 16384;
@@ -278,8 +287,8 @@ const SIGKILL: usize = 9;
 const SIGSTOP: usize = 19;
 const SIGSEGV: usize = 11;
 /// Bytes pushed on the task's user stack per delivered signal:
-/// signo (8) + the interrupted UCtx (160).
-const SIGFRAME_SIZE: u64 = 168;
+/// restorer (8) + signo (8) + the interrupted UCtx (160).
+const SIGFRAME_SIZE: u64 = 176;
 // The frame layout is only sound while UCtx stays 20 u64s — a size
 // change must grow the frame and both copy sites with it.
 const _: () = assert!(core::mem::size_of::<UCtx>() == 160);
@@ -354,6 +363,10 @@ fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
                 return;
             }
             handler => {
+                // [restorer][signo][UCtx]: a C handler that returns
+                // pops the restorer — SIGTRAMP_VA's `mov $15; syscall`
+                // stub — so ret IS rt_sigreturn (the handler runs at
+                // rsp=frame; the stub sees the UCtx at rsp+8).
                 let frame = (ctx.rsp.wrapping_sub(SIGFRAME_SIZE)) & !15;
                 let sig64 = sig as u64;
                 // SAFETY: reinterprets the UCtx as its repr(C) bytes —
@@ -361,8 +374,9 @@ fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
                 let raw = unsafe {
                     core::slice::from_raw_parts(ctx as *const UCtx as *const u8, 160)
                 };
-                let ok = write_task_bytes(t.pml4, frame, &sig64.to_le_bytes())
-                    && write_task_bytes(t.pml4, frame + 8, raw);
+                let ok = write_task_bytes(t.pml4, frame, &SIGTRAMP_VA.to_le_bytes())
+                    && write_task_bytes(t.pml4, frame + 8, &sig64.to_le_bytes())
+                    && write_task_bytes(t.pml4, frame + 16, raw);
                 if !ok {
                     t.state = TaskState::Exited;
                     t.exit_status = SIGSEGV as u64;
@@ -543,8 +557,10 @@ pub fn sigaction(sig: u64, act: u64, oldact: u64) -> u64 {
     0
 }
 
-/// rt_sigreturn: restore the interrupted ctx the delivery pushed at
-/// the caller's rsp — [signo][UCtx]. Every byte is user-owned, so
+/// rt_sigreturn: restore the interrupted ctx the delivery pushed
+/// above the restorer word — rsp at stub entry is frame+8, so the
+/// UCtx sits at rsp+8 (frame layout [restorer][signo][UCtx]).
+/// Every byte is user-owned, so
 /// the privilege fields are pinned, not trusted — cs=0x33, ss=0x2b,
 /// rip inside a user range, rsp inside a writable one, TF/NT/IOPL
 /// cleared (the CVE-2014-9322 / SROP hardening). A bad frame kills
@@ -654,9 +670,15 @@ pub struct Task {
     /// inherits it, exec preserves it. The mask may contain SIGKILL's
     /// bit like Linux, but delivery ignores it — see unmasked_pending.
     sigmask: u32,
-    /// The image's cpio name — /proc/self/exe resolves to it. Copied
-    /// at spawn, inherited at fork, replaced at exec.
+    /// comm — argv0 basename / PR_SET_NAME. Copied at spawn,
+    /// inherited at fork, replaced at exec.
     name: [u8; 16],
+    /// The image's canonical path — /proc/self/exe resolves to it.
+    /// Copied at spawn, inherited at fork, replaced at exec. Separate
+    /// from comm: a forked "sh" re-execing /proc/self/exe must get
+    /// the real binary path, not the applet name.
+    exe: [u8; 128],
+    exe_len: u8,
     /// The task's user FS base (TLS pointer) — set via arch_prctl,
     /// restored to MSR_FS_BASE on every switch like the fx image.
     /// Users can't desync it: FSGSBASE is never enabled.
@@ -1163,6 +1185,14 @@ pub fn set_initrd(img: &'static [u8]) {
 /// by open and execve alike.
 pub fn fs_lookup(name: &[u8]) -> Option<&'static [u8]> {
     let arc = unsafe { *core::ptr::addr_of!(INITRD) }?;
+    // /proc/self/exe resolves to the caller's executable image —
+    // busybox's FEATURE_PREFER_APPLETS re-exec path depends on it.
+    if name == b"proc/self/exe" {
+        let i = unsafe { *core::ptr::addr_of!(CUR_I) };
+        let tasks = unsafe { &*core::ptr::addr_of!(TASKS) };
+        let t = tasks.get(i).and_then(|s| s.as_ref())?;
+        return crate::cpio::find(arc, &t.exe[..t.exe_len as usize]);
+    }
     crate::cpio::find(arc, name)
 }
 
@@ -1305,6 +1335,11 @@ fn load_inner(t: &mut Task, e: &elf::Elf, img: &[u8]) -> bool {
             return false;
         }
     }
+    let Some(tp) = map_page(t, SIGTRAMP_VA, USER) else {
+        return false;
+    };
+    // SAFETY: tp is an identity-mapped frame we just allocated.
+    unsafe { (tp as *mut u8).copy_from_nonoverlapping(SIGTRAMP_CODE.as_ptr(), SIGTRAMP_CODE.len()) };
     t.stack_top = USTACK_VA + USTACK_PAGES * PAGE;
     if t.nranges >= MAX_RANGES {
         return false;
@@ -1365,6 +1400,8 @@ fn load(img: &[u8]) -> Option<Task> {
         // SAFETY: read of the init-time capture.
         fx: unsafe { *core::ptr::addr_of!(INIT_FX) },
         name: [0; 16],
+        exe: [0; 128],
+        exe_len: 0,
         fs_base: 0,
         clear_ctid: 0,
     };
@@ -2838,14 +2875,14 @@ pub fn read_proc_self_exe(buf: u64, len: u64) -> u64 {
         return EFAULT;
     }
     let Some(t) = cur_mut() else { return ENOENT };
-    let n = t.name.iter().position(|&b| b == 0).unwrap_or(16);
+    let n = t.exe_len as usize;
     // glibc's _dl_get_origin asserts the link is absolute — the
-    // archive namespace is flat, so "/" + name is the honest answer.
+    // canonical name has no leading '/', so "/" + exe is honest.
     let total = (n + 1).min(len as usize);
     // SAFETY: buf validated writable for len bytes.
     unsafe {
         (buf as *mut u8).write(b'/');
-        (buf as *mut u8).add(1).copy_from(t.name.as_ptr(), total - 1)
+        (buf as *mut u8).add(1).copy_from(t.exe.as_ptr(), total - 1)
     };
     total as u64
 }
@@ -3109,6 +3146,21 @@ pub fn sys_fchdir(fd: u64) -> u64 {
     f.cwd[..pn].copy_from_slice(&pb[..pn]);
     f.cwdlen = pn as u8;
     0
+}
+
+/// time(tloc): seconds — our clock is ticks-since-boot, not epoch
+/// (documented divergence: no RTC readout yet). tloc mirrors the
+/// return like Linux; a bad pointer is EFAULT.
+pub fn sys_time(tloc: u64) -> u64 {
+    let s = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) / 100;
+    if tloc != 0 {
+        if !range_ok_w(tloc, 8) {
+            return EFAULT;
+        }
+        // SAFETY: tloc validated writable for 8 bytes.
+        unsafe { (tloc as *mut u64).write_unaligned(s) };
+    }
+    s
 }
 
 /// umask(mask): set the creation mask, return the old one — the
@@ -4017,6 +4069,9 @@ const O_CLOEXEC: u64 = 0o2000000;
 const O_DIRECTORY: u64 = 0o200000;
 const O_NOFOLLOW: u64 = 0o400000;
 const O_PATH: u64 = 0o10000000;
+const O_LARGEFILE: u64 = 0o100000;
+const O_NOCTTY: u64 = 0o400;
+const O_NONBLOCK: u64 = 0o4000;
 const O_ACCMODE: u64 = 3;
 
 #[inline]
@@ -4041,7 +4096,8 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
     const ENOTDIR: u64 = (-20i64) as u64;
     const EEXIST: u64 = (-17i64) as u64;
     const KNOWN: u64 = O_ACCMODE | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW
-        | O_PATH | O_CREAT | O_EXCL | O_TRUNC | O_APPEND;
+        | O_PATH | O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_LARGEFILE
+        | O_NONBLOCK | O_NOCTTY;
     if flags & !KNOWN != 0 {
         return EINVAL;
     }
@@ -6366,7 +6422,7 @@ fn tcp_sock_close(si: usize) {
 /// reclen is checked against the remaining space before the write).
 /// EINVAL when count can't hold even the next record; 0 at the end.
 pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
-    const MAX: u64 = 4096;
+    const MAX: u64 = 1 << 20;
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
     if !matches!(o.kind, FdKind::Dir(_)) {
@@ -6549,6 +6605,10 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     t.name = [0; 16];
     let nl = name.len().min(15);
     t.name[..nl].copy_from_slice(&name[..nl]);
+    t.exe = [0; 128];
+    let el = name.len().min(128);
+    t.exe[..el].copy_from_slice(&name[..el]);
+    t.exe_len = el as u8;
     let Some(rsp) = setup_stack(t, &e, img, args) else {
         return false;
     };
@@ -6594,6 +6654,9 @@ pub fn spawn(img: &[u8], name: &str) -> bool {
     args.argc = 1;
     let nl = name.len().min(15);
     t.name[..nl].copy_from_slice(&name.as_bytes()[..nl]);
+    let el = name.len().min(128);
+    t.exe[..el].copy_from_slice(&name.as_bytes()[..el]);
+    t.exe_len = el as u8;
     let Some(rsp) = setup_stack(&mut t, &e, img, &args) else {
         t.reap();
         return false;
@@ -7115,6 +7178,8 @@ pub fn fork(ctx: &mut UCtx, files: bool, fs: bool) -> u64 {
         sigmask: p.sigmask,
         fx: p.fx,
         name: p.name,
+        exe: p.exe,
+        exe_len: p.exe_len,
         fs_base: p.fs_base,
         clear_ctid: 0,
     };
@@ -7257,6 +7322,8 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
         sigmask: p.sigmask,
         fx: p.fx,
         name: p.name,
+        exe: p.exe,
+        exe_len: p.exe_len,
         fs_base: if settls { tls } else { p.fs_base },
         clear_ctid: 0,
     };

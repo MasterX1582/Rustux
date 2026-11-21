@@ -76,11 +76,9 @@ handler:
     cmp $11, %rdi               # arg must be the signo
     jne hfail
     movb $1, flag(%rip)
-    # frame: [signo][UCtx]; UCtx.rip is field 15 -> offset 8+15*8=128
-    addq $3, 128(%rsp)          # saved rip += sizeof(movb (rax))
-    mov $15, %eax               # rt_sigreturn
-    syscall
-    ud2                         # unreachable
+    # frame: [restorer][signo][UCtx]; UCtx.rip is field 15 -> 16+15*8=136
+    addq $3, 136(%rsp)          # saved rip += sizeof(movb (rax))
+    ret                         # restorer stub -> rt_sigreturn
 hfail:
     mov $60, %eax
     mov $8, %edi
