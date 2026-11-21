@@ -247,6 +247,11 @@ const NR_GETGROUPS: u64 = 115;
 const NR_SCHED_GETAFFINITY: u64 = 204;
 const NR_SYNC: u64 = 162;
 const NR_REBOOT: u64 = 169;
+const NR_CHDIR: u64 = 80;
+const NR_FCHDIR: u64 = 81;
+const NR_MKDIR: u64 = 83;
+const NR_RMDIR: u64 = 84;
+const NR_MKDIRAT: u64 = 258;
 const NR_CLONE: u64 = 56;
 const NR_GETCWD: u64 = 79;
 const NR_READLINK: u64 = 89;
@@ -350,7 +355,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_GETDENTS => user::fd_getdents(a1, a2, a3),
         // newfstatat(dirfd, path, buf, flags): the archive is flat —
         // dirfd and flags are ABI-shape only.
-        NR_NEWFSTATAT => sys_newfstatat(a2, a3),
+        NR_NEWFSTATAT => sys_newfstatat(a1, a2, a3),
         NR_EXECVE => sys_execve(ctx, a1, a2, a3),
         NR_READV => user::fd_readv(ctx, a1, a2, a3),
         NR_WRITEV => sys_writev(ctx, a1, a2, a3),
@@ -376,10 +381,10 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         // No symlinks exist — stat and lstat are the same lookup.
         NR_STAT | NR_LSTAT => sys_stat_path(a1, a2),
         NR_FSTAT => user::sys_fstat(a1, a2),
-        NR_ACCESS => sys_access(a1),
-        NR_FACCESSAT => sys_access(a2),
+        NR_ACCESS => sys_access(u64::MAX, a1),
+        NR_FACCESSAT => sys_access(a1, a2),
         NR_READLINK => sys_readlink(a1, a2, a3),
-        NR_READLINKAT => sys_readlink(a2, a3, a4),
+        NR_READLINKAT => sys_readlinkat(a1, a2, a3, a4),
         NR_FSYNC | NR_FDATASYNC => user::fd_fsync(a1),
         NR_TRUNCATE => sys_truncate(a1, a2),
         NR_FTRUNCATE => user::fd_ftruncate(a1, a2),
@@ -414,6 +419,11 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_VFORK => user::fork(ctx, false, false),
         NR_SYNC => 0,
         NR_REBOOT => user::sys_reboot(a1, a2, a3),
+        NR_CHDIR => sys_chdir(a1),
+        NR_FCHDIR => user::sys_fchdir(a1),
+        NR_MKDIR => sys_mkdirat(u64::MAX, a1),
+        NR_MKDIRAT => sys_mkdirat(a1, a2),
+        NR_RMDIR => sys_rmdir(a1),
         NR_EXIT => sys_exit(a1),
         _ => {
             // Bring-up aid: real binaries probe ABI surface. Linux
@@ -453,14 +463,17 @@ fn copy_user_path(path: u64, name: &mut [u8; 257]) -> Result<usize, u64> {
 
 /// newfstatat(dirfd, path, statbuf, flags): same getname discipline
 /// as open, then a fixed 144-byte stat write into user space.
-fn sys_newfstatat(path: u64, statbuf: u64) -> u64 {
+fn sys_newfstatat(dirfd: u64, path: u64, statbuf: u64) -> u64 {
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
         Err(e) => return e,
     };
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    user::newfstatat(name, statbuf)
+    let (cb, cn) = match user::canon_path(dirfd, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    user::newfstatat(&cb[..cn], statbuf)
 }
 
 fn sys_open(path: u64, flags: u64, mode: u64) -> u64 {
@@ -471,29 +484,21 @@ fn sys_open(path: u64, flags: u64, mode: u64) -> u64 {
 /// path resolves in the flat archive; any other dirfd must name a
 /// Dir OFD — since there is exactly one directory, a valid dirfd
 /// resolves the same way, and a non-dir dirfd is ENOTDIR like Linux.
+/// openat(dirfd, path, flags, mode): dirfd validation + cwd join
+/// happen inside canon_path — AT_FDCWD or absolute resolve against
+/// cwd/root, a real dirfd against the dir it names (EBADF bad fd,
+/// ENOTDIR non-dir). The canonical flat name feeds fd_open.
 fn sys_openat(dirfd: u64, path: u64, flags: u64, _mode: u64) -> u64 {
-    const EBADF_: u64 = (-9i64) as u64;
-    // dirfd arrives as a 32-bit int like Linux's `int dfd` param —
-    // glibc emits `mov edi, AT_FDCWD` so -100 lands zero-extended
-    // (0xffffff9c), never sign-extended. dirfd=MAX means open(2).
-    let dfd = dirfd as u32 as i32;
-    if dfd != -100 && dirfd != u64::MAX {
-        let Some(is_dir) = user::fd_is_dir(dfd as u64) else {
-            return EBADF_;
-        };
-        if !is_dir {
-            return (-20i64) as u64; // ENOTDIR
-        }
-    }
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
         Err(e) => return e,
     };
-    // Tolerate the conventional leading '/' — the archive namespace
-    // is flat and root-relative.
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    user::fd_open(name, flags)
+    let (cb, cn) = match user::canon_path(dirfd, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    user::fd_open(&cb[..cn], flags)
 }
 
 /// execve(path, argv, envp): resolve the name in the initrd, verify it
@@ -508,7 +513,11 @@ fn sys_execve(ctx: &mut user::UCtx, path: u64, argv: u64, envp: u64) -> u64 {
         Ok(n) => n,
         Err(e) => return e,
     };
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
+    let (cb, cn) = match user::canon_path(u64::MAX, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let name = &cb[..cn];
     let Some(img) = user::fs_lookup(name) else {
         return ENOENT;
     };
@@ -546,23 +555,26 @@ fn sys_stat_path(path: u64, statbuf: u64) -> u64 {
         Ok(n) => n,
         Err(e) => return e,
     };
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    user::newfstatat(name, statbuf)
+    let (cb, cn) = match user::canon_path(u64::MAX, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    user::newfstatat(&cb[..cn], statbuf)
 }
 
 /// access/faccessat(path, mode): a flat namespace only has
 /// existence to report — root, archive members, RAM files.
-fn sys_access(path: u64) -> u64 {
+fn sys_access(dirfd: u64, path: u64) -> u64 {
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
         Err(e) => return e,
     };
-    if n == 0 {
-        return ENOENT; // access("") is ENOENT, not the root
-    }
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    if user::fs_exists(name) {
+    let (cb, cn) = match user::canon_path(dirfd, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    if user::fs_exists(&cb[..cn]) {
         0
     } else {
         ENOENT
@@ -572,39 +584,35 @@ fn sys_access(path: u64) -> u64 {
 /// unlink/unlinkat(dirfd, path, flags): one flat directory, so dirfd
 /// is ABI-shape (FDCWD or a dir fd — same resolution either way).
 /// flags with AT_REMOVEDIR → EISDIR here; rmdir doesn't exist yet.
+/// unlink/unlinkat(dirfd, path, flags): AT_REMOVEDIR routes to
+/// fs_rmdir; anything else nonzero EINVALs. canon_path does the
+/// dirfd validation and cwd join.
 fn sys_unlinkat(dirfd: u64, path: u64, flags: u64) -> u64 {
-    const EBADF_: u64 = (-9i64) as u64;
-    const ENOTDIR_: u64 = (-20i64) as u64;
-    const EISDIR_: u64 = (-21i64) as u64;
     const AT_REMOVEDIR: u64 = 0x200;
-    if flags & AT_REMOVEDIR != 0 {
-        return EISDIR_;
-    }
-    if flags != 0 {
+    if flags & !(AT_REMOVEDIR) != 0 {
         return EINVAL;
-    }
-    let dfd = dirfd as u32 as i32;
-    if dfd != -100 && dirfd != u64::MAX {
-        let Some(is_dir) = user::fd_is_dir(dfd as u64) else {
-            return EBADF_;
-        };
-        if !is_dir {
-            return ENOTDIR_;
-        }
     }
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
         Ok(n) => n,
         Err(e) => return e,
     };
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    user::fs_unlink(name)
+    if flags & AT_REMOVEDIR != 0 {
+        return user::fs_rmdir(dirfd, &name[..n]);
+    }
+    let (cb, cn) = match user::canon_path(dirfd, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    user::fs_unlink(&cb[..cn])
 }
 
 /// renameat2(olddirfd, old, newdirfd, new, flags): flat namespace —
 /// both dirfds only gate on dir-ness like openat's; nonzero flags
 /// (RENAME_EXCHANGE/NOREPLACE/WHITEOUT) are EINVAL, renameat passes 0.
-fn sys_renameat2(_odfd: u64, old: u64, _ndfd: u64, new: u64, flags: u64) -> u64 {
+/// renameat2(olddirfd, old, newdirfd, new, flags): each path
+/// canonicalizes against its own dirfd; nonzero flags EINVAL.
+fn sys_renameat2(odfd: u64, old: u64, ndfd: u64, new: u64, flags: u64) -> u64 {
     if flags != 0 {
         return EINVAL;
     }
@@ -618,9 +626,15 @@ fn sys_renameat2(_odfd: u64, old: u64, _ndfd: u64, new: u64, flags: u64) -> u64 
         Ok(n) => n,
         Err(e) => return e,
     };
-    let old = if oname[0] == b'/' { &oname[1..on] } else { &oname[..on] };
-    let new = if nname[0] == b'/' { &nname[1..nn] } else { &nname[..nn] };
-    user::fs_rename(old, new)
+    let (ob, oc) = match user::canon_path(odfd, &oname[..on]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let (nb, nc) = match user::canon_path(ndfd, &nname[..nn]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    user::fs_rename(&ob[..oc], &nb[..nc])
 }
 
 /// truncate(path, len): getname then the shared VFile truncate.
@@ -630,8 +644,41 @@ fn sys_truncate(path: u64, len: u64) -> u64 {
         Ok(n) => n,
         Err(e) => return e,
     };
-    let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    user::fs_truncate(name, len)
+    let (cb, cn) = match user::canon_path(u64::MAX, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    user::fs_truncate(&cb[..cn], len)
+}
+
+/// chdir(path): user string then the shared-table update.
+fn sys_chdir(path: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    user::sys_chdir(&name[..n])
+}
+
+/// mkdir/mkdirat(dirfd, path, mode): mode is accepted and ignored.
+fn sys_mkdirat(dirfd: u64, path: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    user::fs_mkdir(dirfd, &name[..n])
+}
+
+/// rmdir(path): cwd-relative — canon inside fs_rmdir.
+fn sys_rmdir(path: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    user::fs_rmdir(u64::MAX, &name[..n])
 }
 
 /// readlink/readlinkat(path, buf, len): "/proc/self/exe" is the only
@@ -644,6 +691,25 @@ fn sys_readlink(path: u64, buf: u64, len: u64) -> u64 {
         Err(e) => return e,
     };
     if &name[..n] == b"/proc/self/exe" {
+        user::read_proc_self_exe(buf, len)
+    } else {
+        ENOENT
+    }
+}
+
+/// readlinkat(dirfd, path, buf, len): canon resolves dirfd/cwd —
+/// proc/self/exe is the only link that answers.
+fn sys_readlinkat(dirfd: u64, path: u64, buf: u64, len: u64) -> u64 {
+    let mut name = [0u8; 257];
+    let n = match copy_user_path(path, &mut name) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let (cb, cn) = match user::canon_path(dirfd, &name[..n]) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    if &cb[..cn] == b"proc/self/exe" {
         user::read_proc_self_exe(buf, len)
     } else {
         ENOENT

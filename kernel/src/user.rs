@@ -48,7 +48,7 @@ const MAX_RANGES: usize = 32;
 
 /// Max resident tasks — a hard bound so spawn can't exhaust the
 /// kernel heap by enqueueing forever.
-const MAX_TASKS: usize = 32;
+const MAX_TASKS: usize = 40;
 
 /// A resumable user-mode context: the 15 GPRs in sched_dispatch's
 /// push order plus the iret frame. Every task transition — first
@@ -161,6 +161,25 @@ const MAX_FDS: usize = 16;
 // fd_cloexec is a u16 bitmask — a MAX_FDS bump past 16 must widen it.
 const _: () = assert!(MAX_FDS <= 16);
 
+/// A canonical directory path stored on a Dir OFD ("" = root).
+#[derive(Clone, Copy)]
+pub struct DirPath {
+    b: [u8; 128],
+    n: u8,
+}
+
+impl DirPath {
+    fn of(path: &[u8]) -> DirPath {
+        let mut d = DirPath { b: [0; 128], n: 0 };
+        d.n = path.len().min(128) as u8;
+        d.b[..d.n as usize].copy_from_slice(&path[..d.n as usize]);
+        d
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.b[..self.n as usize]
+    }
+}
+
 /// The object an fd slot names — Linux's inode-level identity.
 enum FdKind {
     /// fd 0: reads return EOF, writes fail EBADF.
@@ -173,10 +192,11 @@ enum FdKind {
     /// RAM-backed scratch file — VFILES[i]. The OFD owns no copy;
     /// unlink marks the VFile and the last close frees it.
     Ram(usize),
-    /// The flat archive root. pos is the index of the next archive
-    /// entry getdents64 should emit — Linux dir offsets are opaque
-    /// cookies, ours just happens to be an index.
-    Dir,
+    /// A directory — the canonical path it names ("" = root).
+    /// pos is the index of the next stream entry getdents64 should
+    /// emit — Linux dir offsets are opaque cookies, ours just
+    /// happens to be an index.
+    Dir(DirPath),
     /// One end of a pipe — the ring lives in PIPES[id], shared by
     /// whatever tasks inherited the fds. `write` selects the end.
     Pipe { id: usize, write: bool },
@@ -782,8 +802,12 @@ fn sigtab_release(i: u8) {
 struct FsTab {
     users: u8,
     umask: u16,
+    /// Working directory — the canonical flat name ("" = root).
+    /// CLONE_FS shares it, so a sibling chdir moves the group.
+    cwd: [u8; 128],
+    cwdlen: u8,
 }
-const FS_EMPTY: FsTab = FsTab { users: 0, umask: 0 };
+const FS_EMPTY: FsTab = FsTab { users: 0, umask: 0, cwd: [0; 128], cwdlen: 0 };
 const MAX_FSTABS: usize = 40;
 /// Task.fsi sentinel after release.
 const FSI_NONE: u8 = u8::MAX;
@@ -798,7 +822,7 @@ fn fst(t: &Task) -> &mut FsTab {
 fn fstab_alloc(umask: u16) -> Option<u8> {
     let ts = unsafe { &mut *core::ptr::addr_of_mut!(FSTABS) };
     ts.iter().position(|x| x.users == 0).map(|i| {
-        ts[i] = FsTab { users: 1, umask };
+        ts[i] = FsTab { users: 1, umask, cwd: [0; 128], cwdlen: 0 };
         i as u8
     })
 }
@@ -827,7 +851,7 @@ fn fstab_release(i: u8) {
 /// The shared open-file-description table. 32 tasks hold 3 std OFDs
 /// each (96 worst case) before a single pipe/socket exists — 64 was
 /// a real transient-ENOMEM under scheduling-dependent occupancy.
-const MAX_OFDS: usize = 128;
+const MAX_OFDS: usize = 160;
 
 /// RAM-backed scratch files — the writable half of the flat
 /// namespace. Linux mounts a tmpfs; our tmpfs is this table:
@@ -842,7 +866,7 @@ const VFILE_MAX: usize = 1 << 20;
 /// survives removal while fds still name it — Linux's open-unlink
 /// semantics: the OFD keeps working until its last close frees data.
 struct VFile {
-    name: [u8; 32],
+    name: [u8; 128],
     nlen: usize,
     data: *mut u8,
     len: usize,
@@ -872,7 +896,7 @@ fn vfile(i: usize) -> Option<&'static mut VFile> {
 fn vfile_create(path: &[u8]) -> u64 {
     const ENOSPC_: u64 = (-28i64) as u64;
     const ENAMETOOLONG_: u64 = (-36i64) as u64;
-    if path.is_empty() || path.len() > 32 {
+    if path.is_empty() || path.len() > 128 {
         return ENAMETOOLONG_;
     }
     let vs = unsafe { &mut *core::ptr::addr_of_mut!(VFILES) };
@@ -880,7 +904,7 @@ fn vfile_create(path: &[u8]) -> u64 {
         return ENOSPC_;
     };
     let mut v = VFile {
-        name: [0; 32],
+        name: [0; 128],
         nlen: path.len(),
         data: core::ptr::null_mut(),
         len: 0,
@@ -2573,7 +2597,7 @@ pub fn sys_ioctl(fd: u64, req: u64, arg: u64) -> u64 {
                             k.q.as_ref().map_or(0, |d| d.len as u64)
                         })
                 }
-                FdKind::Dir => return EINVAL,
+                FdKind::Dir(_) => return EINVAL,
             };
             // SAFETY: arg validated writable for 4 bytes.
             unsafe {
@@ -2776,21 +2800,30 @@ pub fn read_proc_self_exe(buf: u64, len: u64) -> u64 {
     total as u64
 }
 
-/// getcwd(buf, len): the archive is one flat root — always "/".
+/// getcwd(buf, len): "/" + the shared cwd bytes + NUL; ERANGE
+/// when the caller's buffer can't hold it — Linux semantics.
 pub fn sys_getcwd(buf: u64, len: u64) -> u64 {
-    const ERANGE: u64 = (-34i64) as u64;
-    if len < 2 {
-        return ERANGE;
+    const ERANGE_: u64 = (-34i64) as u64;
+    let Some(t) = cur_mut() else { return EBADF };
+    let f = fst(t);
+    let n = f.cwdlen as usize;
+    if len < n as u64 + 2 {
+        return ERANGE_;
     }
-    if !range_ok_w(buf, 2) {
+    if !range_ok_w(buf, n as u64 + 2) {
         return EFAULT;
     }
-    // SAFETY: buf validated writable for 2 bytes.
+    // SAFETY: buf validated writable for n+2 bytes.
     unsafe {
         (buf as *mut u8).write(b'/');
-        (buf as *mut u8).add(1).write(0);
+        core::ptr::copy_nonoverlapping(
+            f.cwd.as_ptr(),
+            (buf + 1) as *mut u8,
+            n,
+        );
+        ((buf + 1 + n as u64) as *mut u8).write(0);
     }
-    2
+    n as u64 + 2
 }
 
 /// clock_getres(clk, res): the APIC ticks at 100Hz — 10ms.
@@ -2836,7 +2869,7 @@ pub fn sys_fstat(fd: u64, statbuf: u64) -> u64 {
     let Some(o) = ofd(t, fd) else { return EBADF };
     let (mode, size) = match &o.kind {
         FdKind::Stdin | FdKind::Console => (0o20644u64, 0u64), // S_IFCHR
-        FdKind::Dir => (0o40755, 0),
+        FdKind::Dir(_) => (0o40755, 0),
         FdKind::File(d) => (0o100644, d.len() as u64),
         FdKind::Ram(i) => (0o100644, vfile(*i).map_or(0, |v| v.len) as u64),
         FdKind::Pipe { .. } => (0o10644, 0), // S_IFIFO
@@ -2903,6 +2936,128 @@ pub fn sys_clock_gettime(_clk: u64, ts: u64) -> u64 {
         (ts as *mut u64).write_unaligned(t / 100);
         (ts as *mut u64).add(1).write_unaligned((t % 100) * 10_000_000);
     }
+    0
+}
+
+/// mkdir/mkdirat(dirfd, path, mode): create an explicit VDIRS dir —
+/// mode is accepted and ignored (no per-file modes yet). EEXIST on
+/// any existing name; the parent must already be a directory.
+pub fn fs_mkdir(dfd: u64, path: &[u8]) -> u64 {
+    const EEXIST_: u64 = (-17i64) as u64;
+    const ENOSPC_: u64 = (-28i64) as u64;
+    const ENOTDIR_: u64 = (-20i64) as u64;
+    const ENAMETOOLONG_: u64 = (-36i64) as u64;
+    let (buf, n) = match canon_path(dfd, path) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let p = &buf[..n];
+    if p.len() > 128 {
+        return ENAMETOOLONG_;
+    }
+    if p.is_empty() || is_file(p) || dir_exists(p) {
+        return EEXIST_;
+    }
+    if let Some(pi) = p.iter().rposition(|&c| c == b'/') {
+        let par = &p[..pi];
+        if !dir_exists(par) {
+            return if is_file(par) { ENOTDIR_ } else { ENOENT };
+        }
+    }
+    let ds = unsafe { &mut *core::ptr::addr_of_mut!(VDIRS) };
+    let Some(i) = ds.iter().position(Option::is_none) else {
+        return ENOSPC_;
+    };
+    let mut d = VDir { path: [0; 128], nlen: p.len() };
+    d.path[..p.len()].copy_from_slice(p);
+    ds[i] = Some(d);
+    0
+}
+
+/// rmdir/unlinkat(AT_REMOVEDIR): remove an EMPTY explicit dir —
+/// implicit dirs vanish with their last entry, so only VDIRS can
+/// rmdir. ENOTEMPTY when anything still lives underneath.
+pub fn fs_rmdir(dfd: u64, path: &[u8]) -> u64 {
+    const ENOTDIR_: u64 = (-20i64) as u64;
+    const ENOTEMPTY_: u64 = (-39i64) as u64;
+    const EBUSY_: u64 = (-16i64) as u64;
+    let (buf, n) = match canon_path(dfd, path) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let p = &buf[..n];
+    if is_file(p) {
+        return ENOTDIR_;
+    }
+    if p.is_empty() {
+        return EBUSY_; // rmdir("/")
+    }
+    if !dir_exists(p) {
+        return ENOENT;
+    }
+    let mut pre = [0u8; 256];
+    pre[..p.len()].copy_from_slice(p);
+    pre[p.len()] = b'/';
+    let pre = &pre[..p.len() + 1];
+    if let Some(arc) = unsafe { *core::ptr::addr_of!(INITRD) } {
+        if crate::cpio::entries(arc).any(|(nm, _)| nm.starts_with(pre)) {
+            return ENOTEMPTY_;
+        }
+    }
+    if unsafe { &*core::ptr::addr_of!(VFILES) }.iter().flatten().any(|v| {
+        !v.unlinked && v.name[..v.nlen].starts_with(pre)
+    }) || unsafe { &*core::ptr::addr_of!(VDIRS) }.iter().flatten().any(|d| {
+        d.path[..d.nlen].starts_with(pre)
+    }) {
+        return ENOTEMPTY_;
+    }
+    match vdir_find(p) {
+        Some(i) => {
+            vdir_remove(i);
+            0
+        }
+        None => ENOTEMPTY_, // implicit dir still has children
+    }
+}
+
+/// chdir(path): store the canonical dir in the shared fs table —
+/// a CLONE_FS sibling's chdir moves the whole group, like Linux.
+pub fn sys_chdir(path: &[u8]) -> u64 {
+    const ENOTDIR_: u64 = (-20i64) as u64;
+    let (buf, n) = match canon_path(u64::MAX, path) {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    if is_file(&buf[..n]) {
+        return ENOTDIR_;
+    }
+    if !dir_exists(&buf[..n]) {
+        return ENOENT;
+    }
+    if n > 128 {
+        return (-36i64) as u64; // ENAMETOOLONG: cwd field is 128
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    let f = fst(t);
+    f.cwd[..n].copy_from_slice(&buf[..n]);
+    f.cwdlen = n as u8;
+    0
+}
+
+/// fchdir(fd): the fd must name a Dir OFD — its path becomes cwd.
+pub fn sys_fchdir(fd: u64) -> u64 {
+    const ENOTDIR_: u64 = (-20i64) as u64;
+    let Some((pb, pn)) = fd_dir_path(fd) else {
+        let Some(t) = cur_mut() else { return EBADF };
+        return if ofd(t, fd).is_some() { ENOTDIR_ } else { EBADF };
+    };
+    if pn > 128 {
+        return (-36i64) as u64;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    let f = fst(t);
+    f.cwd[..pn].copy_from_slice(&pb[..pn]);
+    f.cwdlen = pn as u8;
     0
 }
 
@@ -3305,7 +3460,7 @@ pub fn fd_read(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
             }
         }
         FdKind::Console => EBADF,
-        FdKind::Dir => EISDIR,
+        FdKind::Dir(_) => EISDIR,
         FdKind::Udp(i) => udp_recv_or_block(ctx, *i, buf, len, 0),
         FdKind::Tcp(i) => tcp_recv_or_block(ctx, *i, buf, len, 0),
         FdKind::File(data) => {
@@ -3607,8 +3762,8 @@ pub fn newfstatat(path: &[u8], statbuf: u64) -> u64 {
         return EFAULT;
     }
     let mut st = [0u64; 18];
-    if path.is_empty() || path == b"." {
-        // The archive root: every member lives directly under it.
+    if !is_file(path) && dir_exists(path) {
+        // Any directory — root, VDIRS, implicit prefix, virtual proc.
         st[2] = 2; // st_nlink
         st[3] = 0o40755; // st_mode: S_IFDIR | 0755 (u64 slot holds u32)
     } else if let Some(i) = vfile_find(path) {
@@ -3654,6 +3809,153 @@ pub fn newfstatat(path: &[u8], statbuf: u64) -> u64 {
     0
 }
 
+/// Explicitly-created directories — the ram layer's mkdir.
+/// Implicit dirs (a file's path prefix) never live here.
+#[derive(Clone, Copy)]
+struct VDir {
+    path: [u8; 128],
+    nlen: usize,
+}
+static mut VDIRS: [Option<VDir>; 16] = [None; 16];
+
+fn vdir_find(path: &[u8]) -> Option<usize> {
+    unsafe { &*core::ptr::addr_of!(VDIRS) }
+        .iter()
+        .position(|d| d.as_ref().is_some_and(|d| &d.path[..d.nlen] == path))
+}
+
+fn vdir_remove(i: usize) {
+    let ds = unsafe { &mut *core::ptr::addr_of_mut!(VDIRS) };
+    ds[i] = None;
+}
+
+/// Canonical path resolution: join base+path, split on '/', skip
+/// empty and "." components, ".." pops the last (at root it stays
+/// root — the Linux rule). Output is the flat-name convention:
+/// no leading '/', root = "". None on overflow (ENAMETOOLONG).
+fn canon(base: &[u8], path: &[u8], out: &mut [u8; 256]) -> Option<usize> {
+    let mut n = 0usize;
+    fn push(out: &mut [u8; 256], n: &mut usize, comp: &[u8]) -> bool {
+        if comp.is_empty() || comp == b"." {
+            return true;
+        }
+        if comp == b".." {
+            if *n > 0 {
+                while *n > 0 && out[*n - 1] != b'/' {
+                    *n -= 1;
+                }
+                if *n > 0 {
+                    *n -= 1; // drop the '/'
+                }
+            }
+            return true;
+        }
+        if *n + comp.len() + usize::from(*n > 0) > out.len() {
+            return false;
+        }
+        if *n > 0 {
+            out[*n] = b'/';
+            *n += 1;
+        }
+        out[*n..*n + comp.len()].copy_from_slice(comp);
+        *n += comp.len();
+        true
+    }
+    if !path.starts_with(b"/") {
+        for comp in base.split(|&c| c == b'/') {
+            if !push(out, &mut n, comp) {
+                return None;
+            }
+        }
+    }
+    for comp in path.split(|&c| c == b'/') {
+        if !push(out, &mut n, comp) {
+            return None;
+        }
+    }
+    Some(n)
+}
+
+/// Resolve a raw user path against dirfd-or-cwd into the canonical
+/// flat name. `dfd` is the raw dirfd register value: u64::MAX and
+/// zero-extended -100 (AT_FDCWD) both mean cwd-relative; any other
+/// value must name a Dir OFD (EBADF bad fd, ENOTDIR non-dir).
+/// Absolute paths ignore dirfd, matching Linux.
+pub fn canon_path(dfd: u64, path: &[u8]) -> Result<([u8; 256], usize), u64> {
+    const ENAMETOOLONG: u64 = (-36i64) as u64;
+    const ENOTDIR_: u64 = (-20i64) as u64;
+    if path.is_empty() {
+        return Err(ENOENT);
+    }
+    let dfd_i = dfd as u32 as i32;
+    let base: ([u8; 128], usize) = if path[0] == b'/' {
+        ([0; 128], 0)
+    } else if dfd_i != -100 && dfd != u64::MAX {
+        let Some(t) = cur_mut() else { return Err(EBADF) };
+        let Some(o) = ofd(t, dfd_i as u64) else { return Err(EBADF) };
+        let FdKind::Dir(dp) = &o.kind else { return Err(ENOTDIR_) };
+        (dp.b, dp.n as usize)
+    } else {
+        let Some(t) = cur_mut() else { return Err(EBADF) };
+        let f = fst(t);
+        (f.cwd, f.cwdlen as usize)
+    };
+    let mut out = [0u8; 256];
+    match canon(&base.0[..base.1], path, &mut out) {
+        Some(n) => Ok((out, n)),
+        None => Err(ENAMETOOLONG),
+    }
+}
+
+/// Does `p` (canonical) name a regular file in either namespace?
+fn is_file(p: &[u8]) -> bool {
+    vfile_find(p).is_some() || fs_lookup(p).is_some()
+}
+
+/// Does `p` (canonical) name a directory? Root always exists;
+/// "proc"/"proc/self" are virtual; VDIRS are explicit; and any
+/// entry deeper under `p/` makes p an implicit dir.
+fn dir_exists(p: &[u8]) -> bool {
+    if p.is_empty() || vdir_find(p).is_some() {
+        return true;
+    }
+    if p == b"proc" || p == b"proc/self" {
+        return true;
+    }
+    let mut pre = [0u8; 256];
+    if p.len() + 1 > pre.len() {
+        return false;
+    }
+    pre[..p.len()].copy_from_slice(p);
+    pre[p.len()] = b'/';
+    let pre = &pre[..p.len() + 1];
+    if let Some(arc) = unsafe { *core::ptr::addr_of!(INITRD) } {
+        for (n, _) in crate::cpio::entries(arc) {
+            if n.starts_with(pre) {
+                return true;
+            }
+        }
+    }
+    if unsafe { &*core::ptr::addr_of!(VFILES) }.iter().flatten().any(|v| {
+        !v.unlinked && v.name[..v.nlen].starts_with(pre)
+    }) {
+        return true;
+    }
+    unsafe { &*core::ptr::addr_of!(VDIRS) }.iter().flatten().any(|d| {
+        d.path[..d.nlen].starts_with(pre)
+    })
+}
+
+/// The canonical path a Dir OFD names — for dirfd resolution.
+pub fn fd_dir_path(fd: u64) -> Option<([u8; 128], usize)> {
+    let t = cur_mut()?;
+    let o = ofd(t, fd)?;
+    match &o.kind {
+        FdKind::Dir(dp) => Some((dp.b, dp.n as usize)),
+        _ => None,
+    }
+}
+
 /// Open-flag values we honor or refuse — O_ACCMODE(3) is the access
 /// mask, O_CLOEXEC the fd flag, O_DIRECTORY a kind check. Anything
 /// writable is EROFS on an archive file; anything else unknown EINVAL.
@@ -3696,12 +3998,7 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
     let acc = flags & O_ACCMODE;
     let writing = acc != 0;
     let Some(t) = cur_mut() else { return EBADF };
-    let kind = if path.is_empty() || path == b"." {
-        if writing || flags & O_CREAT != 0 {
-            return EISDIR;
-        }
-        FdKind::Dir
-    } else if let Some(i) = vfile_find(path) {
+    let kind = if let Some(i) = vfile_find(path) {
         // RAM file wins over the archive — mount-shadowing order.
         if flags & (O_CREAT | O_EXCL) == (O_CREAT | O_EXCL) {
             return EEXIST;
@@ -3713,7 +4010,10 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
         FdKind::Ram(i)
     } else if (unsafe { *core::ptr::addr_of!(INITRD) })
         .is_some_and(|arc| crate::cpio::find(arc, path).is_some())
+        && !dir_exists(path)
     {
+        // A cpio member names a file only when nothing lives beneath
+        // it — an entry that is also a path prefix is a directory.
         if writing {
             return EROFS;
         }
@@ -3722,16 +4022,36 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
         }
         let arc = unsafe { *core::ptr::addr_of!(INITRD) }.unwrap();
         FdKind::File(crate::cpio::find(arc, path).unwrap())
+    } else if dir_exists(path) {
+        // A real directory: read-only opens only, like Linux.
+        if writing || flags & O_CREAT != 0 {
+            return EISDIR;
+        }
+        FdKind::Dir(DirPath::of(path))
     } else if flags & O_CREAT != 0 {
+        // The parent must be a real directory; a file in a path
+        // component is ENOTDIR like Linux.
+        if let Some(pi) = path.iter().rposition(|&c| c == b'/') {
+            let par = &path[..pi];
+            if !dir_exists(par) {
+                return if is_file(par) { ENOTDIR } else { ENOENT };
+            }
+        }
         let r = vfile_create(path);
         if (r as i64) < 0 {
             return r;
         }
         FdKind::Ram(r as usize)
     } else {
+        // Miss — ENOTDIR when a path component names a file.
+        for i in (0..path.len()).rev() {
+            if path[i] == b'/' && is_file(&path[..i]) {
+                return ENOTDIR;
+            }
+        }
         return ENOENT;
     };
-    if flags & O_DIRECTORY != 0 && !matches!(kind, FdKind::Dir) {
+    if flags & O_DIRECTORY != 0 && !matches!(kind, FdKind::Dir(_)) {
         return ENOTDIR;
     }
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
@@ -3756,8 +4076,7 @@ pub fn fd_open(path: &[u8], flags: u64) -> u64 {
 /// Does `path` name anything in either namespace — access(2)'s only
 /// real question on a flat namespace.
 pub fn fs_exists(path: &[u8]) -> bool {
-    path.is_empty() || path == b"." || vfile_find(path).is_some()
-        || fs_lookup(path).is_some()
+    dir_exists(path) || is_file(path)
 }
 
 /// Drop a VFile's name. Storage dies immediately when no OFD still
@@ -3787,9 +4106,9 @@ fn vfile_remove(i: usize) {
 /// EISDIR and EROFS. A VFile loses its name; its bytes outlive the
 /// name while any OFD (or fd) still names it.
 pub fn fs_unlink(path: &[u8]) -> u64 {
-    const EROFS_: u64 = (-30i64) as u64;
     const EISDIR_: u64 = (-21i64) as u64;
-    if path.is_empty() || path == b"." {
+    const EROFS_: u64 = (-30i64) as u64;
+    if dir_exists(path) {
         return EISDIR_;
     }
     let Some(i) = vfile_find(path) else {
@@ -3809,7 +4128,7 @@ pub fn fs_rename(old: &[u8], new: &[u8]) -> u64 {
     if old.is_empty() || new.is_empty() || old == b"." || new == b"." {
         return EINVAL_;
     }
-    if new.len() > 32 {
+    if new.len() > 128 {
         return ENAMETOOLONG_;
     }
     let Some(i) = vfile_find(old) else {
@@ -3822,7 +4141,7 @@ pub fn fs_rename(old: &[u8], new: &[u8]) -> u64 {
         vfile_remove(j); // rename replaces the target
     }
     let Some(v) = vfile(i) else { return ENOENT };
-    v.name = [0; 32];
+    v.name = [0; 128];
     v.name[..new.len()].copy_from_slice(new);
     v.nlen = new.len();
     0
@@ -3896,7 +4215,7 @@ pub fn fd_lseek(fd: u64, off: i64, whence: u64) -> u64 {
     let Some(o) = ofd(t, fd) else { return EBADF };
     // A directory may only be rewound to the start — dir offsets are
     // opaque cookies, so a nonzero seek target is meaningless here.
-    if matches!(o.kind, FdKind::Dir) {
+    if matches!(o.kind, FdKind::Dir(_)) {
         if whence == 0 && off == 0 {
             o.pos = 0;
             return 0;
@@ -3925,14 +4244,6 @@ pub fn fd_lseek(fd: u64, off: i64, whence: u64) -> u64 {
     }
     o.pos = np as usize;
     np as u64
-}
-
-/// fd_is_dir(fd): Some(kind==Dir) when the fd is valid, None when
-/// it isn't — openat's dirfd gate needs exactly this much.
-pub fn fd_is_dir(fd: u64) -> Option<bool> {
-    let t = cur_mut()?;
-    let o = ofd(t, fd)?;
-    Some(matches!(o.kind, FdKind::Dir))
 }
 
 /// pread(fd, buf, len, pos): read `len` bytes at file offset `pos`
@@ -4369,7 +4680,7 @@ fn poll_revents(t: &Task, fd: i32, events: u16) -> u16 {
         }
         FdKind::Console => POLLOUT,
         // File and dir reads never block (EOF reads return 0).
-        FdKind::File(_) | FdKind::Dir => POLLIN,
+        FdKind::File(_) | FdKind::Dir(_) => POLLIN,
         // A RAM file is a regular file: reads never block at EOF and
         // writes never block — Linux polls both ready always.
         FdKind::Ram(_) => POLLIN | POLLOUT,
@@ -6008,7 +6319,7 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
     const MAX: u64 = 4096;
     let Some(t) = cur_mut() else { return EBADF };
     let Some(o) = ofd(t, fd) else { return EBADF };
-    if !matches!(o.kind, FdKind::Dir) {
+    if !matches!(o.kind, FdKind::Dir(_)) {
         return ENOTDIR;
     }
     if count == 0 || count > MAX {
@@ -6017,29 +6328,65 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
     if !range_ok_w(buf, count) {
         return EFAULT;
     }
+    let FdKind::Dir(dp) = &o.kind else { return ENOTDIR };
+    let dir = *dp;
+    let dpath = dir.bytes();
     let mut off = 0usize;
     let mut idx = o.pos;
-    // The directory is the archive entries [0, arc_n) followed by the
-    // live VFILES — pos walks one virtual concatenation.
-    let mut names: [Option<&[u8]>; 64] = [None; 64];
-    let mut n = 0usize;
+    // The stream: ".", "..", then each unique first component under
+    // this dir — deduped, since "usr/bin/x" and "usr/bin/y" both
+    // contribute "usr". Pseudo-dirs /proc + /proc/self fold in.
+    let mut names: [Option<&[u8]>; 96] = [None; 96];
+    names[0] = Some(b".");
+    names[1] = Some(b"..");
+    let mut n = 2usize;
+    fn child<'a>(dir: &[u8], name: &'a [u8]) -> Option<&'a [u8]> {
+        let rest = if dir.is_empty() {
+            name
+        } else if name.len() > dir.len()
+            && name.starts_with(dir)
+            && name[dir.len()] == b'/'
+        {
+            &name[dir.len() + 1..]
+        } else {
+            return None;
+        };
+        if rest.is_empty() {
+            return None;
+        }
+        let end = rest.iter().position(|&c| c == b'/').unwrap_or(rest.len());
+        Some(&rest[..end])
+    }
+    fn add<'a>(
+        dir: &[u8],
+        names: &mut [Option<&'a [u8]>; 96],
+        n: &mut usize,
+        name: &'a [u8],
+    ) {
+        if let Some(comp) = child(dir, name) {
+            if *n < names.len()
+                && !names[..*n].iter().flatten().any(|e| *e == comp)
+            {
+                names[*n] = Some(comp);
+                *n += 1;
+            }
+        }
+    }
+    add(dpath, &mut names, &mut n, b"proc");
+    add(dpath, &mut names, &mut n, b"proc/self");
+    add(dpath, &mut names, &mut n, b"proc/self/exe");
     if let Some(arc) = unsafe { *core::ptr::addr_of!(INITRD) } {
         for (name, _data) in crate::cpio::entries(arc) {
-            if n >= names.len() {
-                break;
-            }
-            names[n] = Some(name);
-            n += 1;
+            add(dpath, &mut names, &mut n, name);
         }
     }
     for v in unsafe { &*core::ptr::addr_of!(VFILES) }.iter().flatten() {
-        if n >= names.len() {
-            break;
-        }
         if !v.unlinked {
-            names[n] = Some(&v.name[..v.nlen]);
-            n += 1;
+            add(dpath, &mut names, &mut n, &v.name[..v.nlen]);
         }
+    }
+    for d in unsafe { &*core::ptr::addr_of!(VDIRS) }.iter().flatten() {
+        add(dpath, &mut names, &mut n, &d.path[..d.nlen]);
     }
     for name in names[..n].iter().flatten().skip(o.pos) {
         // linux_dirent64: ino@0 u64, off@8 u64, reclen@16 u16,
@@ -6059,7 +6406,23 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
             ((base) as *mut u64).write_unaligned(idx as u64 + 1);
             ((base + 8) as *mut u64).write_unaligned(idx as u64 + 1);
             ((base + 16) as *mut u16).write_unaligned(reclen as u16);
-            ((base + 18) as *mut u8).write(8); // DT_REG
+            // DT_DIR(4) when the component is itself a dir — the
+            // . / .. entries (stream positions 0/1) always are.
+            let mut full = [0u8; 256];
+            let mut fn_ = dpath.len();
+            full[..fn_].copy_from_slice(dpath);
+            if fn_ > 0 {
+                full[fn_] = b'/';
+                fn_ += 1;
+            }
+            full[fn_..fn_ + name.len()].copy_from_slice(name);
+            fn_ += name.len();
+            let ty = if idx < 2 || dir_exists(&full[..fn_]) {
+                4u8
+            } else {
+                8u8
+            };
+            ((base + 18) as *mut u8).write(ty);
             core::ptr::copy_nonoverlapping(
                 name.as_ptr(),
                 (base + 19) as *mut u8,
