@@ -1058,3 +1058,10 @@ the task model now supports fork/clone/wait as the next rung.
   clone() wrapper exists precisely to avoid that.
 - Verified: vmtest 0 failures + full suite green, 27 tasks,
   frames equal, boot PASS x2, native VM verified.
+
+## Run-76 — futex + CHILD_CLEARTID (pthread_join's mechanism)
+
+- futex(202) WAIT/WAKE: waiter sleeps as WaitOn::Futex(va) on its Task slot, keyed with the mm's pml4 so shared-mm siblings match and foreign processes cannot. Compare-then-block is atomic (syscalls run IF-masked on one CPU). EAGAIN on value mismatch, ETIMEDOUT via the generic deadline scanner, EINTR via the existing kill wake path, EFAULT on unmapped uaddr/timespec, ENOSYS on everything beyond WAIT/WAKE (REQUEUE, CMP_REQUEUE, PI ops, robust lists).
+- CHILD_CLEARTID is now real: sys_clone registers ctid on the child (fork-shaped and VM clones); task_exit_inner zeroes *ctid through the dying task's page tables (write_task_bytes → still-referenced mm) then futex_wake(pml4, ctva, 1) — glibc's pthread_join wait verbatim.
+- fxtest proves: a CLONE_VM child blocked in futex_wait is woken by the parent's store+FUTEX_WAKE; a ctid-registered child is joined by futex-waiting on its tid word; EAGAIN/ETIMEDOUT/EFAULT/ENOSYS honesty table.
+- Divergences recorded: FUTEX_PRIVATE/CLOCK flags collapse into one key space; the key is (pml4, va) rather than physical page (exact while no cross-mm shared pages exist); wake returns the count woken but waiters are not strictly FIFO.
