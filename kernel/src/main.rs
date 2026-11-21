@@ -1078,6 +1078,13 @@ fn main() -> Status {
         log::dropped()
     );
 
+    // Hold the final frame ~1.5s before exiting — serial readers
+    // already have the result, but the framebuffer should show it to
+    // anyone watching (and to headless screendump capture, which
+    // stops existing the instant we exit).
+    let t0 = apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    while apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) - t0 < 150 {}
+
     // Exit code 0x10 -> QEMU exits 0x21. Anything else means we never got here.
     qemu_exit(0x10);
 }
