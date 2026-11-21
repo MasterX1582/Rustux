@@ -309,7 +309,7 @@ fn maybe_deliver(t: &mut Task, ctx: &mut UCtx) {
     while let Some(sig) = unmasked_pending(t) {
         t.pending &= !(1u32 << (sig - 1));
         t.pending &= !(1u32 << (sig - 1));
-        match t.handlers.get(sig - 1).copied().unwrap_or(SIG_DFL) {
+        match sigt(t).handlers.get(sig - 1).copied().unwrap_or(SIG_DFL) {
             SIG_IGN => {}
             SIG_DFL => {
                 if sig_default_ignore(sig) {
@@ -356,7 +356,7 @@ pub fn fault_signal(signo: u64, ctx: &mut UCtx) -> (u64, u64, u64) {
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
-        let caught = t
+        let caught = sigt(t)
             .handlers
             .get(signo.saturating_sub(1) as usize)
             .copied()
@@ -395,6 +395,7 @@ fn deliver_for(n: usize) -> bool {
 /// before resume — a default-fatal signal marks it Exited and the
 /// loop picks again.
 fn pick_ready() -> Option<usize> {
+    reap_dead_threads();
     loop {
         let n = pick_next()?;
         if deliver_for(n) {
@@ -446,7 +447,7 @@ pub fn kill(pid: u64, sig: u64) -> u64 {
     // Wake a blocked target only when the signal actually interrupts:
     // an ignored disposition (SIG_IGN, or a default-ignore signal)
     // must not turn a sleeping syscall into a spurious EINTR.
-    let h = t.handlers.get(sig as usize - 1).copied().unwrap_or(SIG_DFL);
+    let h = sigt(t).handlers.get(sig as usize - 1).copied().unwrap_or(SIG_DFL);
     let ignored = h == SIG_IGN || (h == SIG_DFL && sig_default_ignore(sig as usize));
     if t.state == TaskState::Blocked && !ignored {
         // A nanosleep interrupted by this signal reports the unslept
@@ -490,7 +491,7 @@ pub fn sigaction(sig: u64, act: u64, oldact: u64) -> u64 {
             return EFAULT;
         }
         // SAFETY: validated writable user range.
-        unsafe { (oldact as *mut u64).write_unaligned(t.handlers[i]) };
+        unsafe { (oldact as *mut u64).write_unaligned(sigt(t).handlers[i]) };
     }
     if act != 0 {
         if !range_ok(act, 8) {
@@ -503,7 +504,7 @@ pub fn sigaction(sig: u64, act: u64, oldact: u64) -> u64 {
         if sig as usize == SIGKILL || sig as usize == SIGSTOP {
             return EINVAL;
         }
-        t.handlers[i] = h;
+        sigt(t).handlers[i] = h;
     }
     0
 }
@@ -581,6 +582,12 @@ pub struct Task {
     /// Index into FDTABS — this task fd table. CLONE_FILES
     /// children share the parent index; fork duplicates it.
     fdi: u8,
+    /// Index into SIGTABS — the disposition table. CLONE_SIGHAND
+    /// children share the parent index; fork duplicates it.
+    sigh: u8,
+    /// Thread-group id: the leader's pid. getpid() reports tgid,
+    /// gettid() reports pid; a non-leader thread has tgid != pid.
+    tgid: u64,
     /// Saved user context for switches — fabricated at spawn, then
     /// snapshotted by the timer IRQ on every preemption.
     ctx: UCtx,
@@ -609,9 +616,6 @@ pub struct Task {
     /// inherits it, exec preserves it. The mask may contain SIGKILL's
     /// bit like Linux, but delivery ignores it — see unmasked_pending.
     sigmask: u32,
-    /// Per-signal disposition: 0=SIG_DFL, 1=SIG_IGN, else a user VA
-    /// handler. SIGKILL/SIGSTOP can't be overridden (EINVAL).
-    handlers: [u64; 31],
     /// The image's cpio name — /proc/self/exe resolves to it. Copied
     /// at spawn, inherited at fork, replaced at exec.
     name: [u8; 16],
@@ -713,6 +717,57 @@ fn fdtab_release(i: u8) {
         }
     }
     tb.cloexec = 0;
+}
+
+/// A task signal-disposition table — the sighand_struct analogue.
+/// CLONE_SIGHAND shares the index (users++); fork duplicates it.
+/// sigaction on one thread is visible to every sharer.
+#[derive(Clone, Copy)]
+struct SigTab {
+    users: u8,
+    handlers: [u64; 31],
+}
+const SIGH_EMPTY: SigTab = SigTab { users: 0, handlers: [0; 31] };
+const MAX_SIGTABS: usize = 40;
+/// Task.sigh sentinel after release — second release is a no-op.
+const SIGH_NONE: u8 = u8::MAX;
+static mut SIGTABS: [SigTab; MAX_SIGTABS] = [SIGH_EMPTY; MAX_SIGTABS];
+
+/// The task live disposition table — same global-table discipline
+/// as fdt().
+#[allow(clippy::mut_from_ref)]
+fn sigt(t: &Task) -> &mut SigTab {
+    unsafe { &mut (*core::ptr::addr_of_mut!(SIGTABS))[t.sigh as usize] }
+}
+
+fn sigtab_alloc() -> Option<u8> {
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(SIGTABS) };
+    ts.iter().position(|x| x.users == 0).map(|i| {
+        ts[i] = SIGH_EMPTY;
+        ts[i].users = 1;
+        i as u8
+    })
+}
+
+/// Fork side: private copy of the parent's dispositions.
+fn sigtab_dup(src: u8) -> Option<u8> {
+    let i = sigtab_alloc()? as usize;
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(SIGTABS) };
+    ts[i] = SigTab { users: 1, ..ts[src as usize] };
+    Some(i as u8)
+}
+
+/// CLONE_SIGHAND: another task points at the same table.
+fn sigtab_share(i: u8) {
+    unsafe { (*core::ptr::addr_of_mut!(SIGTABS))[i as usize].users += 1 };
+}
+
+fn sigtab_release(i: u8) {
+    if i == SIGH_NONE {
+        return;
+    }
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(SIGTABS) };
+    ts[i as usize].users -= 1;
 }
 
 /// The shared open-file-description table. 32 tasks hold 3 std OFDs
@@ -878,8 +933,15 @@ impl Task {
         fdtab_release(i);
     }
 
+    fn release_sighand(&mut self) {
+        let i = self.sigh;
+        self.sigh = SIGH_NONE;
+        sigtab_release(i);
+    }
+
     fn reap(&mut self) {
         self.release_fds();
+        self.release_sighand();
         // A shared mm (CLONE_VM) outlives its users — only the last
         // one frees the mappings and the pml4 frame itself.
         if mm_release(self.pml4) {
@@ -898,6 +960,36 @@ impl Task {
 /// The task table — the scheduler's world. Tasks are never moved
 /// once slotted: ctx pointers handed to the asm must stay stable.
 static mut TASKS: [Option<Task>; MAX_TASKS] = [const { None }; MAX_TASKS];
+/// A non-leader thread exited — its slot waits for the sweep; the
+/// exit path must not free the kstack/cr3 it still runs on.
+static mut DEAD_THREADS: bool = false;
+
+/// Reap exited non-leader threads: fds/sighand already released at
+/// exit; this drops the mm user count, frees kstack + slot. Called
+/// from the scheduler — never on the dead task's own context.
+fn reap_dead_threads() {
+    if !unsafe { *core::ptr::addr_of!(DEAD_THREADS) } {
+        return;
+    }
+    unsafe { *core::ptr::addr_of_mut!(DEAD_THREADS) = false };
+    let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
+    let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    for (i, s) in tasks.iter_mut().enumerate() {
+        if i == cur {
+            continue; // never self-reap — our own stack is in use
+        }
+        let dead = matches!(
+            s.as_ref(),
+            Some(t) if t.state == TaskState::Exited && t.tgid != t.pid
+        );
+        if dead {
+            if let Some(t) = s.as_mut() {
+                t.reap();
+            }
+            *s = None;
+        }
+    }
+}
 
 /// Index of the running task; usize::MAX when the scheduler isn't
 /// running (before launch / after the last exit unwound to main).
@@ -1133,9 +1225,16 @@ fn load(img: &[u8]) -> Option<Task> {
         kalloc::free_frame(pml4);
         return None;
     };
+    let Some(sigh) = sigtab_alloc() else {
+        fdtab_release(fdi);
+        kalloc::free_frame(pml4);
+        return None;
+    };
     let mut t = Task {
         pml4,
         fdi,
+        sigh,
+        tgid: 0, // spawn() sets tgid = pid once the pid exists
         entry: e.entry,
         stack_top: 0,
         kstack_base: 0,
@@ -1157,7 +1256,6 @@ fn load(img: &[u8]) -> Option<Task> {
         wait_deadline: 0,
         pending: 0,
         sigmask: 0,
-        handlers: [0; 31],
         // SAFETY: read of the init-time capture.
         fx: unsafe { *core::ptr::addr_of!(INIT_FX) },
         name: [0; 16],
@@ -2448,7 +2546,9 @@ pub fn sys_clone(
 ) -> u64 {
     const ENOSYS_: u64 = (-38i64) as u64;
     const CLONE_FILES: u64 = 0x0000_0400;
+    const CLONE_SIGHAND: u64 = 0x0000_0800;
     const CLONE_VM: u64 = 0x0000_0100;
+    const CLONE_THREAD: u64 = 0x0001_0000;
     const CLONE_SETTLS: u64 = 0x0008_0000;
     const PARENT_SETTID: u64 = 0x0010_0000;
     const CHILD_CLEARTID: u64 = 0x0020_0000;
@@ -2456,6 +2556,8 @@ pub fn sys_clone(
     const SIGMASK: u64 = 0xff;
     const KNOWN: u64 = SIGMASK
         | CLONE_FILES
+        | CLONE_SIGHAND
+        | CLONE_THREAD
         | CLONE_VM
         | CLONE_SETTLS
         | PARENT_SETTID
@@ -2480,9 +2582,26 @@ pub fn sys_clone(
     if ptid != 0 && flags & PARENT_SETTID != 0 && !range_ok_w(ptid, 4) {
         return EFAULT;
     }
+    // Linux pairs: shared dispositions need a shared mm, and a
+    // thread-group member must share dispositions (EINVALs, not
+    // ENOSYS — the combo is invalid, not unimplemented).
+    if flags & CLONE_SIGHAND != 0 && flags & CLONE_VM == 0 {
+        return EINVAL;
+    }
+    if flags & CLONE_THREAD != 0 && flags & CLONE_SIGHAND == 0 {
+        return EINVAL;
+    }
     let files = flags & CLONE_FILES != 0;
     let child = if flags & CLONE_VM != 0 {
-        clone_vm(ctx, stack, tls, flags & CLONE_SETTLS != 0, files)
+        clone_vm(
+            ctx,
+            stack,
+            tls,
+            flags & CLONE_SETTLS != 0,
+            files,
+            flags & CLONE_SIGHAND != 0,
+            flags & CLONE_THREAD != 0,
+        )
     } else {
         fork(ctx, files)
     };
@@ -2521,8 +2640,10 @@ pub fn sys_clone(
 
 /// tgkill(tgid, tid, sig): no threads — tgid == tid == pid, so this
 /// is kill() with an extra ABI arg. glibc's abort() lands here.
-pub fn sys_tgkill(tgid: u64, _tid: u64, sig: u64) -> u64 {
-    kill(tgid, sig)
+pub fn sys_tgkill(tgid: u64, tid: u64, sig: u64) -> u64 {
+    // With threads, tid names the target task; a bare tgid hits the
+    // leader (tgid == leader pid), matching Linux tgkill semantics.
+    kill(if tid != 0 { tid } else { tgid }, sig)
 }
 
 /// rt_sigprocmask(how, set, oldset, sigsetsize): the per-task signal
@@ -5779,7 +5900,7 @@ pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     unsafe { core::arch::asm!("mov {0}, cr3", "mov cr3, {0}", out(reg) _) };
     // exec resets caught handlers to default (SIG_IGN survives) —
     // a handler in the OLD image would be unmapped garbage here.
-    for h in t.handlers.iter_mut() {
+    for h in sigt(t).handlers.iter_mut() {
         if *h != SIG_IGN {
             *h = SIG_DFL;
         }
@@ -5819,6 +5940,7 @@ pub fn spawn(img: &[u8], name: &str) -> bool {
     };
     t.ctx = UCtx::launch(t.entry, rsp);
     t.pid = next_pid();
+    t.tgid = t.pid;
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     for s in tasks.iter_mut() {
         if s.is_none() {
@@ -5939,13 +6061,13 @@ fn die_signal(signo: u64) -> ! {
 /// orphan children, then switch away or unwind.
 fn task_exit_inner() -> ! {
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
-    let (cpid, cppid, wstatus) = {
+    let (cpid, cppid, wstatus, is_thread) = {
         let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
         if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
             t.state = TaskState::Exited;
-            (t.pid, t.ppid, t.exit_status)
+            (t.pid, t.ppid, t.exit_status, t.tgid != t.pid)
         } else {
-            (0, 0, 0)
+            (0, 0, 0, false)
         }
     };
     // exit_files(2): the dying task's fds release NOW, not at reap —
@@ -5957,6 +6079,7 @@ fn task_exit_inner() -> ! {
         let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
         if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
             t.release_fds();
+            t.release_sighand();
         }
     }
     // CHILD_CLEARTID: zero *ctid through the dying task's tables and
@@ -5975,6 +6098,26 @@ fn task_exit_inner() -> ! {
         futex_wake(tpml4, ctva, 1);
     }
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
+    // A non-leader thread is invisible to wait4 and raises no
+    // SIGCHLD — pthread_join already got its ctid wake above. Mark
+    // the sweep and skip the parent bookkeeping entirely.
+    if is_thread {
+        unsafe { *core::ptr::addr_of_mut!(DEAD_THREADS) = true };
+        for s in tasks.iter_mut() {
+            if let Some(t) = s.as_mut() {
+                if t.ppid == cpid && t.state != TaskState::Exited {
+                    t.ppid = 0;
+                }
+            }
+        }
+        if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
+            t.ppid = 0; // never a waitable zombie
+        }
+        if let Some(n) = pick_ready() {
+            switch_to(n)
+        }
+        syscall::terminate()
+    }
     // Wake a wait-blocked parent whose target just exited.
     let mut collected = false;
     for s in tasks.iter_mut() {
@@ -6239,13 +6382,20 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
     };
     // CLONE_FILES shares the parent's table (users++); otherwise a
     // private copy with each named OFD ref bumped (fdtab_dup).
+    // Dispositions always copy at fork (SIGHAND needs VM).
+    let Some(csigh) = sigtab_dup(p.sigh) else {
+        return ENOMEM;
+    };
     let cfdi = if files {
         fdtab_share(p.fdi);
         p.fdi
     } else {
         match fdtab_dup(p.fdi) {
             Some(i) => i,
-            None => return ENOMEM,
+            None => {
+                sigtab_release(csigh);
+                return ENOMEM;
+            }
         }
     };
     let mut c = Task {
@@ -6265,6 +6415,8 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
         brk_base: p.brk_base,
         brk_cur: p.brk_cur,
         fdi: cfdi,
+        sigh: csigh,
+        tgid: 0, // set to cpid below once known
         ctx: {
             let mut x = *ctx;
             x.rax = 0; // child sees fork()==0
@@ -6283,7 +6435,6 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
         // the pending set does not.
         pending: 0,
         sigmask: p.sigmask,
-        handlers: p.handlers,
         fx: p.fx,
         name: p.name,
         fs_base: p.fs_base,
@@ -6307,6 +6458,7 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
     }
     c.kstack_base = ks;
     c.kstack_top = ks + KSTACK_SIZE as u64;
+    c.tgid = c.pid; // a fork child leads its own group
     let cpid = c.pid;
     tasks[slot] = Some(c);
     cpid
@@ -6317,7 +6469,7 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
 /// own kernel stack, its own user rsp on the caller-supplied stack,
 /// and SETTLS wiring when asked. The task is still a distinct
 /// process for wait4 (no CLONE_THREAD group semantics yet).
-fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> u64 {
+fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sighand: bool, thread: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
@@ -6338,6 +6490,20 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> 
         return ENOMEM;
     }
     // Same table rule as fork — FILES shares, else a bumped copy.
+    // SIGHAND shares the disposition table; else a private copy.
+    let csigh = if sighand {
+        sigtab_share(p.sigh);
+        p.sigh
+    } else {
+        match sigtab_dup(p.sigh) {
+            Some(i) => i,
+            None => {
+                mm_release(p.pml4);
+                unsafe { kalloc::kfree(ks as *mut u8) };
+                return ENOMEM;
+            }
+        }
+    };
     let cfdi = if files {
         fdtab_share(p.fdi);
         p.fdi
@@ -6346,13 +6512,14 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> 
             Some(i) => i,
             None => {
                 // mm_share's +1 must go back — the child never ran.
+                sigtab_release(csigh);
                 mm_release(p.pml4);
                 unsafe { kalloc::kfree(ks as *mut u8) };
                 return ENOMEM;
             }
         }
     };
-    let c = Task {
+    let mut c = Task {
         pml4: p.pml4, // SHARED — freed by the last mm user at reap
         entry: p.entry,
         stack_top: p.stack_top,
@@ -6366,6 +6533,11 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> 
         brk_base: p.brk_base,
         brk_cur: p.brk_cur,
         fdi: cfdi,
+        sigh: csigh,
+        // A CLONE_THREAD member reports the leader's group id and
+        // shares the leader's parent; a VM-only clone is its own
+        // process — wait4-visible, tgid = own pid.
+        tgid: if thread { p.tgid } else { 0 },
         ctx: {
             let mut x = *ctx;
             x.rax = 0; // child sees clone()==0
@@ -6374,7 +6546,7 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> 
         },
         state: TaskState::Runnable,
         pid: next_pid(),
-        ppid: p.pid,
+        ppid: if thread { p.ppid } else { p.pid },
         exit_status: 0,
         wait_on: WaitOn::None,
         wait_ptr: 0,
@@ -6383,12 +6555,14 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool) -> 
         wait_deadline: 0,
         pending: 0,
         sigmask: p.sigmask,
-        handlers: p.handlers,
         fx: p.fx,
         name: p.name,
         fs_base: if settls { tls } else { p.fs_base },
         clear_ctid: 0,
     };
+    if c.tgid == 0 {
+        c.tgid = c.pid; // a non-THREAD clone leads its own group
+    }
     let cpid = c.pid;
     tasks[slot] = Some(c);
     cpid
@@ -6453,7 +6627,7 @@ pub fn wait4(ctx: &mut UCtx, pid: i64, status_va: u64, _flags: u64) -> u64 {
 
 /// getpid() -> current task's pid.
 pub fn getpid() -> u64 {
-    cur_mut().map(|t| t.pid).unwrap_or(0)
+    cur_mut().map(|t| t.tgid).unwrap_or(0)
 }
 
 /// getppid() -> current task's parent pid (0 for spawned roots).

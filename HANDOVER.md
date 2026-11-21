@@ -1073,3 +1073,12 @@ the task model now supports fork/clone/wait as the next rung.
 - ftest proves: FILES|VM child opens /motd.txt — parent reads the same fd number and sees the child's dup slot; FILES-only child reports its fd over an inherited pipe (copied memory can't share variables) and the fd stays alive in the parent after the child dies — the table outlives either user.
 - vmtest's honesty row updated: FILES left the ENOSYS set, SIGHAND/THREAD keep it honest.
 - Divergences: exec's cloexec sweep edits the shared table directly (Linux unshares files on de_thread); MAX_FDTABS exhaustion is ENOMEM; no fdtable resize (fixed 16 slots like before).
+
+## Run-78 — CLONE_SIGHAND + CLONE_THREAD: thread groups
+
+- SIGTABS mirrors FDTABS: {users, handlers[31]} sighand_struct analogue, Task.sigh indexes it; sigaction on any sharer is visible to all. release_sighand pairs with release_fds at exit+reap (SIGH_NONE sentinel, idempotent).
+- tgid: group id = leader pid; getpid() reports tgid, gettid() pid. CLONE_THREAD child inherits parent tgid and takes the parent's ppid (leader's parent — Linux lineage); non-THREAD clones lead their own group (tgid = own pid, fork unchanged).
+- Thread exit: invisible to wait4 and raises no SIGCHLD — join is the ctid futex (run-76). The exit path still releases fds/sighand/ctid/orphans, then marks DEAD_THREADS; reap_dead_threads() in pick_ready frees the slot — the sweep runs from a live context because a task can never free its own running kstack or the pml4 under its own cr3 (last-mm-user case included).
+- Gate honesty: SIGHAND without VM -> EINVAL, THREAD without SIGHAND -> EINVAL (Linux's pairing); tgkill(tgid,tid) now targets the tid task.
+- thrtest proves: shared disposition readback both directions, getpid==leader tgid / gettid==clone tid, ctid futex join, waitpid(thread)->ECHILD, EINVAL pairings.
+- Divergences: exec sighand-reset edits the shared table (Linux unshares on de_thread); leader reap isn't delayed to group exit; no CLONE_FS/SYSVSEM yet.

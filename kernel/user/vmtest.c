@@ -72,11 +72,11 @@ int main(void) {
     // CLONE_VM with no child stack is EINVAL.
     errno = 0;
     long e1 = syscall(SYS_clone, 0x800 /*CLONE_SIGHAND*/, 0, 0, 0, 0);
-    check(e1 == -1 && errno == ENOSYS, "CLONE_SIGHAND -> ENOSYS");
+    check(e1 == -1 && errno == EINVAL, "CLONE_SIGHAND no-VM -> EINVAL");
     errno = 0;
     long e2 = syscall(SYS_clone, CLONE_VM | 0x10000 /*THREAD*/,
                       tstack + sizeof(tstack), 0, 0, 0);
-    check(e2 == -1 && errno == ENOSYS, "CLONE_VM|THREAD -> ENOSYS");
+    check(e2 == -1 && errno == EINVAL, "CLONE_VM|THREAD no-SIGHAND -> EINVAL");
     errno = 0;
     long e3 = syscall(SYS_clone, CLONE_VM, 0, 0, 0, 0);
     check(e3 == -1 && errno == EINVAL, "CLONE_VM no-stack -> EINVAL");

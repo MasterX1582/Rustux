@@ -74,15 +74,20 @@ int main(void) {
     check(pread(cf, buf, 5, 0) == 5 && buf[0] != 0,
           "fd alive in parent after child exit");
 
-    // Honesty: SIGHAND/THREAD still ENOSYS.
+    // Honesty: bad pairings EINVAL, unknown flags ENOSYS.
     errno = 0;
     check(syscall(SYS_clone, 0x00000800 | SIGCHLD, 0, 0, 0, 0) == -1 &&
-              errno == ENOSYS,
-          "CLONE_SIGHAND -> ENOSYS");
+              errno == EINVAL,
+          "CLONE_SIGHAND no-VM -> EINVAL");
     errno = 0;
     check(syscall(SYS_clone, 0x00010000 | SIGCHLD, 0, 0, 0, 0) == -1 &&
+              errno == EINVAL,
+          "CLONE_THREAD no-SIGHAND -> EINVAL");
+    errno = 0;
+    check(syscall(SYS_clone, 0x4000 /*CLONE_VFORK*/ | SIGCHLD, 0, 0, 0, 0) ==
+                  -1 &&
               errno == ENOSYS,
-          "CLONE_THREAD -> ENOSYS");
+          "CLONE_VFORK -> ENOSYS");
 
     printf("ftest: %d failure%s, done\n", fails, fails == 1 ? "" : "s");
     return fails;

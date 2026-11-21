@@ -5,7 +5,7 @@ that covers it and the verdict. GENERATED from
 `docs/cve-matrix.md` by `tools/cve-ledger.py` — do not edit
 by hand; append to the matrix and regenerate.
 
-**84 unique CVEs recorded.**
+**85 unique CVEs recorded.**
 
 ## klib ports
 
@@ -112,6 +112,7 @@ by hand; append to the matrix and regenerate.
 | CVE-2026-89596 | `pci` | **n/a to mechanism** — our CF8/CFC access has no save/restore arrays; reminder: all config ops must stay IRQ-safe (they are — port I/O only) |
 | CVE-2026-90003 | futex(202): FUTEX_WAIT/WAKE + real CHILD_CLEARTID (exit zeroes *ctid + futex-wakes = pthr… | all hits are requeue-PI and private-hash-pivot races — structurally absent: no PI/requeue ops (ENOSYS), no hash table to pivot (waiters live as WaitOn::Futex in TASKS), synchronou… |
 | CVE-2026-90138 | TCP sockets: socket/bind/listen/connect/accept + stream send/recv over loopback | ISN = siphash(4-tuple,rdtsc,boot-key) per isn_key; accept mints a DISTINCT conn slot (no listener-clone UAF, 99116 class); listener keeps no stale conn errors (90138); data-offset… |
+| CVE-2026-98163 | CLONE_SIGHAND+CLONE_THREAD: SIGTABS shared-disposition ledger (users refcount, sighand_st… | cgroup dying-task iteration UAF class — structurally absent: no cgroups, no resurrect-able task refs, slot free is synchronous under the IF-masked sweep; DEAD_THREADS flag + cur-g… |
 | CVE-2026-98788 | futex(202): FUTEX_WAIT/WAKE + real CHILD_CLEARTID (exit zeroes *ctid + futex-wakes = pthr… | all hits are requeue-PI and private-hash-pivot races — structurally absent: no PI/requeue ops (ENOSYS), no hash table to pivot (waiters live as WaitOn::Futex in TASKS), synchronou… |
 | CVE-2026-98839 | tty stdin: IRQ1->scancode ring->line discipline->read(0)/poll(0)/FIONREAD, WaitOn::Stdin,… | bounded queues throughout: 256B canonical edit buffer + 4KiB ready queue, drop-on-full = Linux input discard; feed runs from the timer tick (printk is irq_save-safe, kill marks pe… |
 | CVE-2026-98866 | CLONE_VM threads: shared address space via MM_REFS (pml4,users) ledger, exec_mmap-style d… | SELF-REVIEW CAUGHT two refcount-safety bugs pre-commit: mm_share silently dropped the ref when the (provably-unreachable) table was full — a shared pml4 would have freed under a l… |
