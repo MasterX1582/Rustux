@@ -1302,3 +1302,40 @@ isn't suite-tight anymore. parent's fork failure now reports errno
 
 Audit run-62 scoped to the diff: 0 confirmed. CVE ledger: 91.
 41 tasks, zero leak, boot PASS x3 WSL.
+
+## run-89 — process groups, sessions, job control; scheduler idle semantics
+
+The last big stub family becomes real: `Task.pgid`/`sid`/`did_exec`,
+`TaskState::Stopped`, `WaitOn::Group`. Real setsid/setpgid (self-or-child,
+same-session, no-leader, pre-exec-child, group-exists rules), getpgid/
+getsid/getpgrp. `kill` fans out: pid, 0 = own group, -1 = everyone,
+-pgid = group, sig 0 = probe. SIGKILL/SIGSTOP force through masks;
+SIGCONT wakes stopped tasks + reports WCONTINUED once; stop signals
+19-22 stop, once per WUNTRACED. wait4 takes pid<0/-1/0 group selectors
++ WNOHANG/WUNTRACED/WCONTINUED (+__WALL/__WNOTHREAD no-ops). Console gets
+a real fg-pgrp: TIOC*PGRP read/write it, ^C/^Z route to the fg group,
+bg tty reads SIGTTIN, orphaned groups get EIO.
+
+bash -m works end-to-end: `jobs` lists `[1] Running`, `kill -0 -pgid`
+probes groups, kill/wait reap cleanly. pgtest adds 18 checks across
+identity/setsid/setpgid/group-signal/stop-cont/group-wait/tcsetpgrp/
+TTIN/orphan-EIO.
+
+Audit run-63 scoped to the diff caught 4 real bugs, all fixed:
+(1) "no runnable" was treated as end-of-run — the suite would either
+reap live Stopped/Blocked tasks or hlt-wedge with no serviced wake
+sources; tick now runs poll_expire/rx_drain/stdin_pump on every frame
+and idle is honest. Its completion: rsh is *correctly* parked on
+WaitOn::Stdin forever — new `run_over()` predicate ends the run only
+when survivors are all Exited or Stdin-blocked (CVE-2006-6921 class:
+stranded-process DoS, prevented by construction). (2) stop/cont wait
+reports duplicated — flags now consumed on wake. (3) setpgid didn't
+re-wake group waiters — fixed (Linux ECHILD parity). (4) SIGCHLD was
+pended raw, bypassing handler-EINTR — routed through pend_one.
+
+Debugging note for future runs: printk only reaches serial via drain
+(syscall/main contexts); an hlt-idle machine never drains — post-hang
+ring reads silently pile up. Raw-UART breadcrumbs (single-byte outb
+markers) were the working instrument.
+
+42 tasks, frames zero leak, boot PASS x3 WSL. CVE ledger: 95.
