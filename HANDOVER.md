@@ -916,3 +916,29 @@ the task model now supports fork/clone/wait as the next rung.
   UAF classes (CVE-2022-49349, CVE-2025-21887) structurally absent
   under the OFD-pins-storage invariant. NV-63-1 reentrant-statics
   extends (VFILES under OFDS borrow in vfile_remove).
+
+## Terminal ABI — real ioctl dispatch (audit run-72)
+
+- ioctl(16) finally dispatches instead of blanket-ENOTTY: the
+  Stdin|Console pair is our one tty and answers the termios family —
+  TCGETS/TCSETS/TCSETSW/TCSETSF on a shared 36-byte kernel-ABI
+  termios (cooked defaults: ICRNL|IXON, OPOST|ONLCR, B38400|CS8,
+  ISIG|ICANON|ECHO). glibc's isatty() is just "does TCGETS succeed",
+  so the kind gate is the entire isatty answer — files ENOTTY.
+- TIOCGWINSZ reports the REAL grid: fbcon records cols/rows (GOP
+  width/8 x height/16, currently 160x50) into TTY_DIMS at init,
+  80x25 fallback when no framebuffer exists. TIOCGPGRP returns the
+  task's own pid; TIOCSPGRP/TIOCSWINSZ validate the arg then accept
+  (the geometry and the single pgrp can't change).
+- FIONREAD is per-kind honest: pipe ring fill, File/Ram bytes
+  remaining, TCP rxl, UDP next-datagram size, write-end pipe and
+  dir EINVAL, stdin/console 0 (no input queue exists). FIONBIO
+  EINVALs — no nonblocking mode exists to fake.
+- Proof: kernel/user/termtest.c (static-pie) -- 18 checks: isatty
+  0/1 + file ENOTTY, tcgetattr flag values, tcsetattr round-trip,
+  winsize nonzero, pgrp==pid, FIONREAD empty/queued/file, EBADF +
+  EINVAL refusals: 0 failures, exit(0). 23 tasks, zero leak, WSL x3.
+- Audit run-72 (scoped): 0 confirmed -- every arg extent is bounded
+  with the exact struct size before copy; TIOCSTI absent by
+  omission (no input queue to inject); ldisc CVE family n/a.
+  NV-63-1 reentrant-statics extends (TERMIOS cell).
