@@ -1106,3 +1106,13 @@ Two fixes the process caught: dtest found dir_exists/fs_rmdir missed VDIRS child
 Divergences recorded: mkdir mode ignored (no file modes), no permission checks, Dir OFDs hold names not inodes (getdents after the dir is removed relists by name — Linux shows the stale inode listing), cwd cap 128B vs Linux PATH_MAX 4096, no mount/share boundaries so '..' only ever clamps at root.
 
 dtest.c (static-pie, 40+ checks): mkdir/mkdirat, stat S_IFDIR, chdir/getcwd/'..'/relative, openat+fchdir+unlinkat dirfd, per-dir getdents with DT_DIR on dot entries, full EEXIST/ENOENT/ENOTEMPTY/ENOTDIR/EISDIR honesty table — 0 failures, 33 tasks, frames 14455->14455, WSL + native VM.
+
+## run-82 — file-backed mmap: MAP_PRIVATE file mappings (the ld.so primitive)
+
+sys_mmap's ENODEV wall falls for private file mappings: the fd's OFD supplies (ptr,len) — a cpio slice or VFile buffer — and after the pages map, write_task_bytes_force eager-fills them from off..off+len. MAP_PRIVATE is trivially-correct COW: pages are private copies, writes never reach the file (fmaptest proves a write lands in the map while pread still sees the original byte). off must be page-aligned (EINVAL), the fd must be open for reading (O_WRONLY -> EACCES) and regular (dirs/pipes/sockets -> ENODEV).
+
+MAP_SHARED is honest ENODEV — ordered BEFORE the MAP_PRIVATE-required gate so shared-only maps get the real answer (writable shared mappings need writeback; silently private-izing them would be dishonest). The fill needed a new primitive: write_task_bytes honors the PTE writable bit (it's for user-stack/ctid targets), so PROT_READ maps silently skipped the fill — write_task_bytes_force walks present-only via translate_r, which is exactly the kernel folio-fill privilege over fresh private frames.
+
+Divergences recorded: eager fill, no demand paging or page cache; past-EOF bytes read as zeros (Linux SIGBUS on whole pages past EOF — test pins the zeros); MAP_DENYWRITE ignored (no exec-from-mapped-file path); no msync/madvise.
+
+fmaptest.c (static-pie, 18 checks): mmap content == read() content, PROT_WRITE private-copy isolation, off=4096 offset mapping + sub-page tail zero, len>file zero tail, MAP_SHARED->ENODEV, unaligned-off EINVAL, O_WRONLY->EACCES, dir/pipe fd->ENODEV, bad fd->EBADF, MAP_FIXED replace+refill — 0 failures, 34 tasks, frames 14442->14442, WSL + native VM.
