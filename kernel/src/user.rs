@@ -57,7 +57,7 @@ const MAX_RANGES: usize = 32;
 
 /// Max resident tasks — a hard bound so spawn can't exhaust the
 /// kernel heap by enqueueing forever.
-const MAX_TASKS: usize = 40;
+const MAX_TASKS: usize = 48;
 
 /// A resumable user-mode context: the 15 GPRs in sched_dispatch's
 /// push order plus the iret frame. Every task transition — first
@@ -716,7 +716,7 @@ struct FdTab {
 const FDT_EMPTY: FdTab = FdTab { users: 0, cloexec: 0, fds: [None; MAX_FDS] };
 /// 32 tasks plus CLONE_FILES slack — a full table ENOMEMs, never
 /// corrupts, same discipline as MM_REFS.
-const MAX_FDTABS: usize = 40;
+const MAX_FDTABS: usize = 48;
 /// Task.fdi sentinel after release — makes a second release_fds a
 /// no-op instead of a double-decrement.
 const FDI_NONE: u8 = u8::MAX;
@@ -788,7 +788,7 @@ struct SigTab {
     handlers: [u64; 31],
 }
 const SIGH_EMPTY: SigTab = SigTab { users: 0, handlers: [0; 31] };
-const MAX_SIGTABS: usize = 40;
+const MAX_SIGTABS: usize = 48;
 /// Task.sigh sentinel after release — second release is a no-op.
 const SIGH_NONE: u8 = u8::MAX;
 static mut SIGTABS: [SigTab; MAX_SIGTABS] = [SIGH_EMPTY; MAX_SIGTABS];
@@ -844,7 +844,7 @@ struct FsTab {
     cwdlen: u8,
 }
 const FS_EMPTY: FsTab = FsTab { users: 0, umask: 0, cwd: [0; 128], cwdlen: 0 };
-const MAX_FSTABS: usize = 40;
+const MAX_FSTABS: usize = 48;
 /// Task.fsi sentinel after release.
 const FSI_NONE: u8 = u8::MAX;
 static mut FSTABS: [FsTab; MAX_FSTABS] = [FS_EMPTY; MAX_FSTABS];
@@ -887,7 +887,7 @@ fn fstab_release(i: u8) {
 /// The shared open-file-description table. 32 tasks hold 3 std OFDs
 /// each (96 worst case) before a single pipe/socket exists — 64 was
 /// a real transient-ENOMEM under scheduling-dependent occupancy.
-const MAX_OFDS: usize = 160;
+const MAX_OFDS: usize = 192;
 
 /// RAM-backed scratch files — the writable half of the flat
 /// namespace. Linux mounts a tmpfs; our tmpfs is this table:
