@@ -343,7 +343,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_DUP => user::fd_dup(a1),
         NR_DUP2 => user::fd_dup2(a1, a2),
         NR_GETPID => user::getpid(),
-        NR_FORK => user::fork(ctx, false),
+        NR_FORK => user::fork(ctx, false, false),
         NR_WAIT4 => user::wait4(ctx, a1 as i64, a2, a3),
         NR_KILL => user::kill(a1, a2),
         NR_GETPPID => user::getppid(),
@@ -411,7 +411,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_SCHED_GETAFFINITY => user::sys_sched_getaffinity(a1, a2, a3),
         // vfork is fork with a parent-pause contract — plain fork
         // is the honest superset for our single-CPU model.
-        NR_VFORK => user::fork(ctx, false),
+        NR_VFORK => user::fork(ctx, false, false),
         NR_SYNC => 0,
         NR_REBOOT => user::sys_reboot(a1, a2, a3),
         NR_EXIT => sys_exit(a1),

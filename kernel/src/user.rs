@@ -585,9 +585,10 @@ pub struct Task {
     /// Index into SIGTABS — the disposition table. CLONE_SIGHAND
     /// children share the parent index; fork duplicates it.
     sigh: u8,
-    /// File-mode creation mask — the fs_struct's umask, per-task
-    /// until CLONE_FS shares it. Default 0o022, fork-inherited.
-    umask: u16,
+    /// Index into FSTABS — the fs_struct analogue (umask today,
+    /// cwd/root when the fs grows them). CLONE_FS shares the index;
+    /// fork duplicates it.
+    fsi: u8,
     /// Thread-group id: the leader's pid. getpid() reports tgid,
     /// gettid() reports pid; a non-leader thread has tgid != pid.
     tgid: u64,
@@ -773,6 +774,56 @@ fn sigtab_release(i: u8) {
     ts[i as usize].users -= 1;
 }
 
+/// The shared fs_struct analogue (CLONE_FS): what would be root +
+/// pwd + umask on Linux. Our fs is flat (no cwd/root state yet), so
+/// the table carries umask alone — the shape is right for the day
+/// real cwd lands. Same ledger discipline as FDTABS/SIGTABS.
+#[derive(Clone, Copy)]
+struct FsTab {
+    users: u8,
+    umask: u16,
+}
+const FS_EMPTY: FsTab = FsTab { users: 0, umask: 0 };
+const MAX_FSTABS: usize = 40;
+/// Task.fsi sentinel after release.
+const FSI_NONE: u8 = u8::MAX;
+static mut FSTABS: [FsTab; MAX_FSTABS] = [FS_EMPTY; MAX_FSTABS];
+
+/// The task live fs table — same global-table discipline as fdt().
+#[allow(clippy::mut_from_ref)]
+fn fst(t: &Task) -> &mut FsTab {
+    unsafe { &mut (*core::ptr::addr_of_mut!(FSTABS))[t.fsi as usize] }
+}
+
+fn fstab_alloc(umask: u16) -> Option<u8> {
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(FSTABS) };
+    ts.iter().position(|x| x.users == 0).map(|i| {
+        ts[i] = FsTab { users: 1, umask };
+        i as u8
+    })
+}
+
+/// Fork side: private copy (umask included) of the parent's table.
+fn fstab_dup(src: u8) -> Option<u8> {
+    let i = fstab_alloc(0)? as usize;
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(FSTABS) };
+    ts[i] = FsTab { users: 1, ..ts[src as usize] };
+    Some(i as u8)
+}
+
+/// CLONE_FS: another task points at the same table.
+fn fstab_share(i: u8) {
+    unsafe { (*core::ptr::addr_of_mut!(FSTABS))[i as usize].users += 1 };
+}
+
+fn fstab_release(i: u8) {
+    if i == FSI_NONE {
+        return;
+    }
+    let ts = unsafe { &mut *core::ptr::addr_of_mut!(FSTABS) };
+    ts[i as usize].users -= 1;
+}
+
 /// The shared open-file-description table. 32 tasks hold 3 std OFDs
 /// each (96 worst case) before a single pipe/socket exists — 64 was
 /// a real transient-ENOMEM under scheduling-dependent occupancy.
@@ -942,9 +993,16 @@ impl Task {
         sigtab_release(i);
     }
 
+    fn release_fstab(&mut self) {
+        let i = self.fsi;
+        self.fsi = FSI_NONE;
+        fstab_release(i);
+    }
+
     fn reap(&mut self) {
         self.release_fds();
         self.release_sighand();
+        self.release_fstab();
         // A shared mm (CLONE_VM) outlives its users — only the last
         // one frees the mappings and the pml4 frame itself.
         if mm_release(self.pml4) {
@@ -1233,11 +1291,17 @@ fn load(img: &[u8]) -> Option<Task> {
         kalloc::free_frame(pml4);
         return None;
     };
+    let Some(fsi) = fstab_alloc(0o022) else {
+        sigtab_release(sigh);
+        fdtab_release(fdi);
+        kalloc::free_frame(pml4);
+        return None;
+    };
     let mut t = Task {
         pml4,
         fdi,
         sigh,
-        umask: 0o022,
+        fsi,
         tgid: 0, // spawn() sets tgid = pid once the pid exists
         entry: e.entry,
         stack_top: 0,
@@ -2549,10 +2613,12 @@ pub fn sys_clone(
     tls: u64,
 ) -> u64 {
     const ENOSYS_: u64 = (-38i64) as u64;
+    const CLONE_VM: u64 = 0x0000_0100;
+    const CLONE_FS: u64 = 0x0000_0200;
     const CLONE_FILES: u64 = 0x0000_0400;
     const CLONE_SIGHAND: u64 = 0x0000_0800;
-    const CLONE_VM: u64 = 0x0000_0100;
     const CLONE_THREAD: u64 = 0x0001_0000;
+    const CLONE_SYSVSEM: u64 = 0x0004_0000;
     const CLONE_SETTLS: u64 = 0x0008_0000;
     const PARENT_SETTID: u64 = 0x0010_0000;
     const CHILD_CLEARTID: u64 = 0x0020_0000;
@@ -2563,6 +2629,8 @@ pub fn sys_clone(
         | CLONE_SIGHAND
         | CLONE_THREAD
         | CLONE_VM
+        | CLONE_FS
+        | CLONE_SYSVSEM
         | CLONE_SETTLS
         | PARENT_SETTID
         | CHILD_CLEARTID
@@ -2596,6 +2664,9 @@ pub fn sys_clone(
         return EINVAL;
     }
     let files = flags & CLONE_FILES != 0;
+    let fs = flags & CLONE_FS != 0;
+    // CLONE_SYSVSEM shares the sem-undo list — no SysV semaphore
+    // syscalls exist, so sharing the empty list is a true no-op.
     let child = if flags & CLONE_VM != 0 {
         clone_vm(
             ctx,
@@ -2605,9 +2676,10 @@ pub fn sys_clone(
             files,
             flags & CLONE_SIGHAND != 0,
             flags & CLONE_THREAD != 0,
+            fs,
         )
     } else {
-        fork(ctx, files)
+        fork(ctx, files, fs)
     };
     if (child as i64) < 0 {
         return child;
@@ -2838,8 +2910,9 @@ pub fn sys_clock_gettime(_clk: u64, ts: u64) -> u64 {
 /// full ABI, no stubbing needed since the field exists.
 pub fn sys_umask(mask: u64) -> u64 {
     let Some(t) = cur_mut() else { return 0o022 };
-    let old = t.umask as u64;
-    t.umask = (mask & 0o777) as u16;
+    let f = fst(t);
+    let old = f.umask as u64;
+    f.umask = (mask & 0o777) as u16;
     old
 }
 
@@ -6254,6 +6327,7 @@ fn task_exit_inner() -> ! {
         if let Some(t) = tasks.get_mut(cur).and_then(|s| s.as_mut()) {
             t.release_fds();
             t.release_sighand();
+            t.release_fstab();
         }
     }
     // CHILD_CLEARTID: zero *ctid through the dying task's tables and
@@ -6543,7 +6617,7 @@ fn fork_address_space(c: &mut Task, ppml4: u64) -> bool {
 /// address-space copy, copied fd table pointing at the SAME global
 /// OFDs (shared offsets — the Linux semantic), and a ctx equal to
 /// the parent's except rax=0. Parent's rax gets the child pid.
-pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
+pub fn fork(ctx: &mut UCtx, files: bool, fs: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
     reap_dead_threads(); // reclaim dead-thread slots first
@@ -6573,11 +6647,26 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
             }
         }
     };
+    let cfsi = if fs {
+        fstab_share(p.fsi);
+        p.fsi
+    } else {
+        match fstab_dup(p.fsi) {
+            Some(i) => i,
+            None => {
+                fdtab_release(cfdi);
+                sigtab_release(csigh);
+                return ENOMEM;
+            }
+        }
+    };
     let mut c = Task {
         pml4: match kalloc::alloc_frame() {
             Some(f) => f,
             None => {
+                fstab_release(cfsi);
                 fdtab_release(cfdi);
+                sigtab_release(csigh);
                 return ENOMEM;
             }
         },
@@ -6591,7 +6680,7 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
         brk_cur: p.brk_cur,
         fdi: cfdi,
         sigh: csigh,
-        umask: p.umask,
+        fsi: cfsi,
         tgid: 0, // set to cpid below once known
         ctx: {
             let mut x = *ctx;
@@ -6622,14 +6711,18 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
     if !fork_address_space(&mut c, p.pml4) {
         c.free_user_mappings();
         kalloc::free_frame(c.pml4);
+        fstab_release(cfsi);
         fdtab_release(cfdi);
+        sigtab_release(csigh);
         return ENOMEM;
     }
     let ks = kalloc::kmalloc(KSTACK_SIZE) as u64;
     if ks == 0 {
         c.free_user_mappings();
         kalloc::free_frame(c.pml4);
+        fstab_release(cfsi);
         fdtab_release(cfdi);
+        sigtab_release(csigh);
         return ENOMEM;
     }
     c.kstack_base = ks;
@@ -6645,7 +6738,8 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
 /// own kernel stack, its own user rsp on the caller-supplied stack,
 /// and SETTLS wiring when asked. The task is still a distinct
 /// process for wait4 (no CLONE_THREAD group semantics yet).
-fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sighand: bool, thread: bool) -> u64 {
+#[allow(clippy::too_many_arguments)]
+fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sighand: bool, thread: bool, fs: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
     reap_dead_threads(); // reclaim dead-thread slots first
@@ -6696,6 +6790,21 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
             }
         }
     };
+    let cfsi = if fs {
+        fstab_share(p.fsi);
+        p.fsi
+    } else {
+        match fstab_dup(p.fsi) {
+            Some(i) => i,
+            None => {
+                fdtab_release(cfdi);
+                sigtab_release(csigh);
+                mm_release(p.pml4);
+                unsafe { kalloc::kfree(ks as *mut u8) };
+                return ENOMEM;
+            }
+        }
+    };
     let mut c = Task {
         pml4: p.pml4, // SHARED — freed by the last mm user at reap
         entry: p.entry,
@@ -6711,7 +6820,7 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
         brk_cur: p.brk_cur,
         fdi: cfdi,
         sigh: csigh,
-        umask: p.umask,
+        fsi: cfsi,
         // A CLONE_THREAD member reports the leader's group id and
         // shares the leader's parent; a VM-only clone is its own
         // process — wait4-visible, tgid = own pid.
