@@ -22,8 +22,16 @@ static void check(int ok, const char *what) {
 static int sh_run(const char *script, char *buf, size_t cap,
                   int *exit_code) {
     int p[2];
-    if (pipe(p) < 0) return -1;
+    if (pipe(p) < 0) {
+        fprintf(stderr, "sh_run: pipe() -> %d\n", errno);
+        goto fail;
+    }
     pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "sh_run: fork() -> %d\n", errno);
+        close(p[0]); close(p[1]);
+        goto fail;
+    }
     if (pid == 0) {
         dup2(p[1], 1);
         dup2(p[1], 2);
@@ -44,6 +52,12 @@ static int sh_run(const char *script, char *buf, size_t cap,
     waitpid(pid, &st, 0);
     if (exit_code) *exit_code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
     return (int)n;
+fail:
+    /* Leave no stale result behind: a failed harness must never
+       let a check pass on the previous run's buffer. */
+    buf[0] = 0;
+    if (exit_code) *exit_code = -1;
+    return -1;
 }
 
 int main(void) {

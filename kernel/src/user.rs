@@ -56,8 +56,9 @@ const KSTACK_SIZE: usize = 16384;
 const MAX_RANGES: usize = 32;
 
 /// Max resident tasks — a hard bound so spawn can't exhaust the
-/// kernel heap by enqueueing forever.
-const MAX_TASKS: usize = 48;
+/// kernel heap by enqueueing forever. 48 was fork-EAGAIN-tight
+/// for the 39-task suite + concurrent children (observed on VM).
+const MAX_TASKS: usize = 64;
 
 /// A resumable user-mode context: the 15 GPRs in sched_dispatch's
 /// push order plus the iret frame. Every task transition — first
@@ -222,8 +223,10 @@ enum FdKind {
 }
 
 /// Max concurrent pipes — a hard bound on kernel frame pressure,
-/// same discipline as the fd/OFD tables.
-const MAX_PIPES: usize = 8;
+/// same discipline as the fd/OFD tables. 8 was exhaustible under
+/// concurrent test load (multiple pipelining tasks + dash's own
+/// substitution pipes) — ENFILE is honest but the bound was low.
+const MAX_PIPES: usize = 32;
 /// Ring capacity: one frame per pipe, exactly PIPE_BUF — writes of
 /// up to this size are atomic (the Linux promise).
 const PIPE_SIZE: usize = 4096;

@@ -21,8 +21,16 @@ static void check(int ok, const char *what) {
 static int bb_run(char *const argv[], char *buf, size_t cap,
                   int *exit_code) {
     int p[2];
-    if (pipe(p) < 0) return -1;
+    if (pipe(p) < 0) {
+        fprintf(stderr, "bb_run: pipe() -> %d\n", errno);
+        goto fail;
+    }
     pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "bb_run: fork() -> %d\n", errno);
+        close(p[0]); close(p[1]);
+        goto fail;
+    }
     if (pid == 0) {
         dup2(p[1], 1);
         close(p[0]); close(p[1]);
@@ -41,6 +49,12 @@ static int bb_run(char *const argv[], char *buf, size_t cap,
     waitpid(pid, &st, 0);
     if (exit_code) *exit_code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
     return (int)n;
+fail:
+    /* Leave no stale result behind: a failed harness must never
+       let a check pass on the previous run's buffer. */
+    buf[0] = 0;
+    if (exit_code) *exit_code = -1;
+    return -1;
 }
 
 int main(void) {
@@ -75,13 +89,16 @@ int main(void) {
     check(wn > 0 && n == (int)wn && memcmp(out, want, wn) == 0,
           "cat output == file bytes");
 
-    /* ls exercises getdents64 + stat from a foreign binary. */
-    char *a5[] = {"ls", "/", NULL};
+    /* ls exercises getdents64 + stat from a foreign binary. /lib64
+       holds exactly ld.so and nothing else mutates it — a root
+       listing can legitimately lose a transient name between
+       getdents and stat (wiotest's listed.tmp raced this once:
+       "ls: /listed.tmp: No such file or directory" -> exit 1). */
+    char *a5[] = {"ls", "/lib64", NULL};
     n = bb_run(a5, out, sizeof(out), &code);
-    check(n > 0 && code == 0, "ls / runs");
-    check(strstr(out, "motd.txt") != NULL &&
-          strstr(out, "busybox") != NULL,
-          "ls / sees motd.txt + busybox");
+    check(n > 0 && code == 0, "ls /lib64 runs");
+    check(strstr(out, "ld-linux-x86-64.so.2") != NULL,
+          "ls /lib64 sees ld-linux");
     char *a6[] = {"mkdir", "/bbdir", NULL};
     bb_run(a6, out, sizeof(out), &code);
     char *a7[] = {"ls", "/bbdir", NULL};
