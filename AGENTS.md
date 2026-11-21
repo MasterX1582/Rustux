@@ -28,6 +28,10 @@ before.
    record `needs_validation`.
 8. Append the run's row to `docs/cve-matrix.md` and a section to
    `HANDOVER.md` (established format — terse, semicolon-separated).
+   Then regenerate the flat CVE ledger — every CVE checked and
+   protected against lives in `docs/cves-addressed.md`:
+   `python3 tools/cve-ledger.py`. Full CVE IDs, no shorthand, so
+   the extractor catches them.
 9. Commit impl and docs separately, push `origin main`.
 10. Verify on native VM-3 (`/home/zorin/rustux`, fetch+reset+`make run`).
 11. Continue to the next rung (rule 2) unless the user says stop.
