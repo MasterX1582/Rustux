@@ -773,3 +773,50 @@ the task model now supports fork/clone/wait as the next rung.
   ET_DYN va wrap (saturating), UCtx/sigframe growth (not needed),
   iovec under-validation (per-buffer gates), uname infoleak (zeroed);
   NV-63-1 reentrant-statics debt extends to the new paths.
+## Process-lifecycle ABI: clone fork-subset, sigmask, identity/metadata (audit run-68)
+- clone(56): the fork-shaped subset -- exit-signal 0 or SIGCHLD plus
+  the child-TID writes glibc asks for (0x1200011 = SIGCHLD |
+  CHILD_SETTID | CHILD_CLEARTID). PARENT_SETTID writes the child pid
+  to *ptid in our space (range-gated); CHILD_SETTID writes it to
+  *ctid in the CHILD's space via its own pml4; CHILD_CLEARTID is a
+  futex-registration no-op -- no clear_child_tid state is ever
+  stored, so the CVE-2009-2848 execve-forgot-to-clear class is
+  structurally absent. stack!=0 or any other flag -> ENOSYS.
+  clone3 stays ENOSYS; glibc falls back.
+- rt_sigprocmask(14): a real per-task u32 sigmask. SIG_BLOCK/
+  UNBLOCK/SETMASK, how validated only when set!=NULL, glibc's 8-byte
+  set truncated to our 31 signals. deliverable() = pending & !mask
+  gates BOTH delivery and every EINTR wake check, so a masked signal
+  stays pending without interrupting sleeps; SIGKILL's bit is
+  ignored on delivery (Linux: sig_kernel_only signals can't be
+  blocked -- the self-review caught a masked-SIGKILL-survives bug
+  here before commit).
+- REVIEW-CAUGHT SECURITY FIX: translate()/translate_r() walked ANY
+  va through the task's pml4, which shares kernel upper-half slots.
+  A user-controlled VA therefore reached kernel memory: clone's ctid
+  (4-byte kernel write of a pid), the sigframe rsp (user rsp=kernel
+  va -> signal delivery writes [signo][UCtx] into kernel space --
+  pre-existing!), and the argv/envp walkers (kernel infoleak into
+  user stack). Both walkers now bound va to [USER_VA_LO,USER_VA_HI),
+  covering every task-memory path at once.
+- Task.name: cpio name stored at spawn, inherited at fork, replaced
+  at exec. readlinkat(/proc/self/exe) returns / + name -- the
+  absolute path glibc's _dl_get_origin asserts (dl-origin.c:41
+  linkval[0]=='/'). The relative name made BOTH C binaries abort
+  silently at glibc init via tgkill(SIGABRT) -- the bug this rung's
+  real binaries caught.
+- Metadata cluster: getcwd (/), stat/lstat/faccessat over the flat
+  cpio fs, fstat by OFD kind (chr console, fifo pipe, sock socket),
+  clock_getres (100Hz = 10ms), getrlimit aliased onto prlimit64.
+  tgkill(234) -> kill (tgid==tid, no threads) -- glibc abort() lands
+  there. sched_yield(24): ctx-save + pick_ready handoff.
+- parent.c (gcc -static-pie): metadata checks all ok, then
+  clone fork -> execve(realbin, argv, envp) -> waitpid: the child
+  prints argc=2 argv1=from-parent env=child and exits 42; parent
+  verifies WIFEXITED + status==42 -> "0 failures, done" exit(0).
+  realbin still exits 42 standalone. MAX_INITRD bumped 1->8MiB (two
+  ~830KB static-PIE binaries). 19 tasks, zero leak, WSL x4.
+- Audit run-68 (scoped on the diff): 1 confirmed (unbounded task-
+  space translate = kernel write/infoleak primitive) -- fixed
+  pre-commit; copy_process race family n/a (single CPU); NV-63-1
+  reentrant-statics debt extends.
