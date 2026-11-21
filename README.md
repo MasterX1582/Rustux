@@ -15,12 +15,13 @@ behavior is recorded to `cases.jsonl`, the Rust port must match every recorded
 case (`diff`) and pass `gate` before it is adopted.
 
 <p align="center">
-  <img src="docs/assets/rustux-boot.gif" alt="Rustux booting under OVMF/QEMU — GOP framebuffer console: memory map, APIC, PCI, e1000 DHCP, then the 19-task userspace suite">
+  <img src="docs/assets/rustux-boot.gif" alt="Rustux booting under OVMF/QEMU — GOP framebuffer console: memory map, APIC, PCI, e1000 DHCP, then the 37-task userspace suite including a real static BusyBox">
 </p>
 
 *Booting under OVMF/QEMU: memory map, APIC and PCI bring-up, the e1000
-driver doing ARP/IPv4 ping/DHCP over slirp, then the 19-task userspace
-test suite on the GOP framebuffer console (recorded headless via QMP
+driver doing ARP/IPv4 ping/DHCP over slirp, then the 37-task userspace
+test suite — including real BusyBox applets, pipes, signals, threads and
+vfork — on the GOP framebuffer console (recorded headless via QMP
 screendump).*
 
 ## A world's first
@@ -49,7 +50,21 @@ A `#![no_std]` UEFI kernel that boots under OVMF with its own GDT/IDT,
 identity-mapped page tables, buddy allocator and slab heap, ACPI/LAPIC/
 I/O-APIC interrupt routing, printk ring buffer, PCI enumeration, and an
 e1000e NIC driver with real TX/RX DMA rings, MSI-X interrupt delivery,
-ARP, IPv4 and ICMP echo — plus the IPv8 path above.
+ARP, IPv4, ICMP echo, and UDP/TCP over e1000 and loopback — plus the
+IPv8 path above.
+
+On top of that sits a growing Linux-ABI userspace: ring-3 tasks running
+static-PIE ELFs from a cpio initrd, a 100+-call syscall surface covering
+`fork`/`execve`/`waitpid`, real signals with a sigreturn restorer
+trampoline, `brk`/anonymous and file-backed `mmap`/`munmap`/`mprotect`,
+a hierarchical VFS with `/proc`, pipes, a keyboard-driven terminal with
+canonical/raw line discipline, `clone` flags up to full pthread-style
+thread groups (`CLONE_VM|FS|FILES|SIGHAND|THREAD`, `SETTLS`, futex
+wait/wake, `CHILD_CLEARTID`), and real `vfork` semantics — a shared-mm
+child running on the parent's stack while the parent sleeps. The suite
+finishes by booting a real static **BusyBox**: `sh`, applets,
+`ls`/`cat`/`mkdir`/`rmdir`, and pipelines that re-exec through
+`/proc/self/exe` — 37 tasks, all passing, zero frame leaks.
 
 ## Acknowledgements
 
