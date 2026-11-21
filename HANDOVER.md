@@ -1128,3 +1128,15 @@ The big one: the sigframe was [signo][UCtx] with rsp=frame — a normal C handle
 Open-flag acceptances: O_LARGEFILE (0o100000, glibc busybox adds it unconditionally — LP64 no-op), O_NONBLOCK on dir opens (glibc opendir), O_NOCTTY. getdents64 cap raised to 1MiB (busybox passes big buffers). time(201) added. MAX_INITRD 16->32MiB for the 2.8MB binary; busybox added to the initrd prerequisites (stale-archive bug fixed).
 
 Audit run-83: 0 confirmed — sigreturn privilege pins intact (cs/ss/rflags/rip/rsp), tramp page user-RX kernel-written-once, /proc/self/exe resolves only the caller's exe. vfork remains fork-shaped (documented divergence). bbtest: 0 failures, 36 tasks, zero leak, boot PASS x4.
+
+## run-84 — real vfork: shared-mm child + suspended parent, and the exec-on-shared-mm fix
+
+vfork(58) is no longer fork-shaped: the child is a clone_vm task on the parent's own user rsp (private fd/sighand/fs copies, matching clone(CLONE_VM|CLONE_VFORK|SIGCHLD,0)), and the parent sleeps in WaitOn::Vfork(child pid) — uninterruptible like Linux's vfork_done completion (kill() exempts the variant; pending signals deliver on resume via deliver_for). The wait completes at the child's exec mm-swap (wake_vfork_parent_of inside exec, the exec_mmap point) or its exit (task_exit_inner's parent-wake covers Vfork).
+
+vtest.c caught two real bugs. First, a zombie-collection subtlety: the exit wake marks the zombie "collected" (ppid=0) once a wait4 status is delivered — but a Vfork wake delivers no status, so the child vanished from the parent's own waitpid (ECHILD). collected now only fires for real wait4 wakes.
+
+Second, the bigger one — exec from a shared mm was a never-exercised path with three defects: np got no kernel slots (a cr3 switch would fault instantly), cr3 was never switched to np at all (the syscall path doesn't reload it, so the child returned to user on the torn shared table and exec-fetch-faulted at entry), and load_inner's read_cr3 slot-copy would have imported the shared user page tables by reference — mapping the new image into the still-shared mm. The #GP was real kernel memory corruption; now np gets kernel slots 0..127 and cr3 switches before load_inner (self-copy becomes a no-op). Any CLONE_VM task exec'ing — not just vfork — benefits.
+
+Divergences recorded: clone(CLONE_VFORK) flag form unparsed (glibc uses nr 58); a vfork child's mm mutations don't reach siblings' range ledgers (same CLONE_VM limitation).
+
+vtest: shared-write visible + suspended-ordering + stack integrity + waitpid(7); exec path + waitpid(0); fork-no-suspend contrast. 0 failures, 37 tasks, zero leak, boot PASS; audit run-84: 0 confirmed.
