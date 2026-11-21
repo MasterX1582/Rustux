@@ -142,16 +142,21 @@ int main(void) {
     check(access("listed.tmp", F_OK) == 0, "access finds new file");
     {
         int d = open(".", O_RDONLY | O_DIRECTORY);
-        char dbuf[1024];
+        char dbuf[2048];
         int found = 0;
         if (d >= 0) {
-            long got = syscall(SYS_getdents64, d, dbuf, sizeof(dbuf));
-            for (long off = 0; off + 19 <= got; ) {
-                struct { unsigned long ino, off; unsigned short len;
-                         unsigned char type; char name[]; } *e =
-                    (void *)(dbuf + off);
-                if (strcmp(e->name, "listed.tmp") == 0) found = 1;
-                off += e->len;
+            long got;
+            /* getdents streams — a partial page is normal, keep
+               calling until EOF like Linux callers must. */
+            while ((got = syscall(SYS_getdents64, d, dbuf,
+                                  sizeof(dbuf))) > 0) {
+                for (long off = 0; off + 19 <= got; ) {
+                    struct { unsigned long ino, off; unsigned short len;
+                             unsigned char type; char name[]; } *e =
+                        (void *)(dbuf + off);
+                    if (strcmp(e->name, "listed.tmp") == 0) found = 1;
+                    off += e->len;
+                }
             }
             close(d);
         }

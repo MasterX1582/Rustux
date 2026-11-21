@@ -235,6 +235,18 @@ const NR_FSTAT: u64 = 5;
 const NR_LSTAT: u64 = 6;
 const NR_ACCESS: u64 = 21;
 const NR_SCHED_YIELD: u64 = 24;
+const NR_UMASK: u64 = 95;
+const NR_SYSINFO: u64 = 99;
+const NR_TIMES: u64 = 100;
+const NR_GETRUSAGE: u64 = 98;
+const NR_STATFS: u64 = 137;
+const NR_FSTATFS: u64 = 138;
+const NR_PRCTL: u64 = 157;
+const NR_VFORK: u64 = 58;
+const NR_GETGROUPS: u64 = 115;
+const NR_SCHED_GETAFFINITY: u64 = 204;
+const NR_SYNC: u64 = 162;
+const NR_REBOOT: u64 = 169;
 const NR_CLONE: u64 = 56;
 const NR_GETCWD: u64 = 79;
 const NR_READLINK: u64 = 89;
@@ -389,6 +401,19 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_SETSID => user::getpid(),
         NR_SETPGID | NR_SETPRIORITY => 0,
         NR_GETPRIORITY => 0,
+        NR_UMASK => user::sys_umask(a1),
+        NR_SYSINFO => user::sys_sysinfo(a1),
+        NR_TIMES => user::sys_times(a1),
+        NR_GETRUSAGE => user::sys_getrusage(a1, a2),
+        NR_STATFS | NR_FSTATFS => user::sys_statfs(a2),
+        NR_PRCTL => user::sys_prctl(a1, a2),
+        NR_GETGROUPS => user::sys_getgroups(a1, a2),
+        NR_SCHED_GETAFFINITY => user::sys_sched_getaffinity(a1, a2, a3),
+        // vfork is fork with a parent-pause contract — plain fork
+        // is the honest superset for our single-CPU model.
+        NR_VFORK => user::fork(ctx, false),
+        NR_SYNC => 0,
+        NR_REBOOT => user::sys_reboot(a1, a2, a3),
         NR_EXIT => sys_exit(a1),
         _ => {
             // Bring-up aid: real binaries probe ABI surface. Linux

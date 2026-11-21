@@ -585,6 +585,9 @@ pub struct Task {
     /// Index into SIGTABS — the disposition table. CLONE_SIGHAND
     /// children share the parent index; fork duplicates it.
     sigh: u8,
+    /// File-mode creation mask — the fs_struct's umask, per-task
+    /// until CLONE_FS shares it. Default 0o022, fork-inherited.
+    umask: u16,
     /// Thread-group id: the leader's pid. getpid() reports tgid,
     /// gettid() reports pid; a non-leader thread has tgid != pid.
     tgid: u64,
@@ -1234,6 +1237,7 @@ fn load(img: &[u8]) -> Option<Task> {
         pml4,
         fdi,
         sigh,
+        umask: 0o022,
         tgid: 0, // spawn() sets tgid = pid once the pid exists
         entry: e.entry,
         stack_top: 0,
@@ -2828,6 +2832,176 @@ pub fn sys_clock_gettime(_clk: u64, ts: u64) -> u64 {
         (ts as *mut u64).add(1).write_unaligned((t % 100) * 10_000_000);
     }
     0
+}
+
+/// umask(mask): set the creation mask, return the old one — the
+/// full ABI, no stubbing needed since the field exists.
+pub fn sys_umask(mask: u64) -> u64 {
+    let Some(t) = cur_mut() else { return 0o022 };
+    let old = t.umask as u64;
+    t.umask = (mask & 0o777) as u16;
+    old
+}
+
+/// sysinfo(buf): uptime + memory totals — real counters where we
+/// have them, honest zeros elsewhere (loadavg always 0.0).
+pub fn sys_sysinfo(buf: u64) -> u64 {
+    if !range_ok_w(buf, 112) {
+        return EFAULT;
+    }
+    let up = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed) / 100;
+    let free = kalloc::free_frames();
+    // SAFETY: buf validated writable for the 64-bit header fields.
+    unsafe {
+        (buf as *mut u64).write_unaligned(up); // uptime secs
+        (buf as *mut u64).add(1).write_unaligned(0); // loads[0]
+        (buf as *mut u64).add(2).write_unaligned(0); // loads[1]
+        (buf as *mut u64).add(3).write_unaligned(0); // loads[2]
+        (buf as *mut u64).add(4).write_unaligned(0); // totalram (0=unknown)
+        (buf as *mut u64).add(5).write_unaligned(free * 4096); // freeram
+    }
+    0
+}
+
+/// times(buf): per-task user/system tick accounting in {tms}.
+/// Cooperative single-CPU: a task's utime is its runnable ticks —
+/// tracked crudely as TICKS at syscall time (0 stime split, like a
+/// kernel that never accounts system time).
+pub fn sys_times(buf: u64) -> u64 {
+    let t = crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    if buf != 0 {
+        if !range_ok_w(buf, 32) {
+            return EFAULT;
+        }
+        // SAFETY: buf validated writable for 4 longs.
+        unsafe {
+            (buf as *mut u64).write_unaligned(t);
+            (buf as *mut u64).add(1).write_unaligned(0);
+            (buf as *mut u64).add(2).write_unaligned(0);
+            (buf as *mut u64).add(3).write_unaligned(0);
+        }
+    }
+    t
+}
+
+/// getrusage(who, ru): RUSAGE_SELF -> utime/stime zeroed except the
+/// real tick count in ru_utime; RUSAGE_CHILDREN -> zeros.
+pub fn sys_getrusage(who: u64, ru: u64) -> u64 {
+    // RUSAGE_SELF=0, RUSAGE_CHILDREN=-1, RUSAGE_THREAD=1 — anything
+    // else is EINVAL on Linux, not a silent zero.
+    let ticks = match who {
+        0 | 1 => crate::apic::TICKS.load(core::sync::atomic::Ordering::Relaxed),
+        u64::MAX => 0, // -1: CHILDREN — no accounting, honest zeros
+        _ => return EINVAL,
+    };
+    if !range_ok_w(ru, 144) {
+        return EFAULT;
+    }
+    // SAFETY: ru validated writable; zero the struct then fill the
+    // two timeval pairs we can honestly report.
+    unsafe {
+        core::ptr::write_bytes(ru as *mut u8, 0, 144);
+        (ru as *mut u64).write_unaligned(ticks / 100); // ru_utime sec
+        (ru as *mut u64)
+            .add(1)
+            .write_unaligned((ticks % 100) * 10_000); // ru_utime usec
+    }
+    0
+}
+
+/// statfs(path, buf) / fstatfs(fd, buf): one filesystem — the cpio
+/// initrd + ram layer — so a fixed honest answer: RAMFS_MAGIC,
+/// 4KiB blocks, no persistent capacity claims.
+pub fn sys_statfs(buf: u64) -> u64 {
+    if !range_ok_w(buf, 120) {
+        return EFAULT;
+    }
+    // SAFETY: buf validated writable; zero the struct then fill the
+    // fields we can honestly report (fsid/spare stay 0).
+    unsafe {
+        core::ptr::write_bytes(buf as *mut u8, 0, 120);
+        (buf as *mut u64).write_unaligned(0x8584_58f6); // RAMFS_MAGIC
+        (buf as *mut u64).add(1).write_unaligned(4096); // f_bsize
+        (buf as *mut u64).add(10).write_unaligned(255); // f_namelen
+        (buf as *mut u64).add(11).write_unaligned(4096); // f_frsize
+    }
+    0
+}
+
+/// getgroups(n, list): single-user model — the task is in no
+/// supplementary groups; size 0 either way.
+pub fn sys_getgroups(_n: u64, _list: u64) -> u64 {
+    0
+}
+
+/// sched_getaffinity(pid, size, mask): one CPU — the mask is 1,
+/// truncated honestly to the caller's size like Linux.
+pub fn sys_sched_getaffinity(_pid: u64, size: u64, mask: u64) -> u64 {
+    if size == 0 || !range_ok_w(mask, size.min(128)) {
+        return EINVAL;
+    }
+    let n = size.min(8);
+    // SAFETY: mask validated writable for size bytes.
+    unsafe {
+        core::ptr::write_bytes(mask as *mut u8, 0, size.min(128) as usize);
+        *(mask as *mut u8) = 1;
+    }
+    n
+}
+
+/// prctl(option, ...): PR_SET_NAME (15) truncates into the task's
+/// 15-byte name like Linux comm; everything else is honest EINVAL.
+pub fn sys_prctl(op: u64, a2: u64) -> u64 {
+    let Some(t) = cur_mut() else { return EINVAL };
+    match op {
+        15 => {
+            // PR_SET_NAME — copy ≤15 bytes from the user string.
+            let mut i = 0usize;
+            while i < 15 {
+                if !range_ok(a2 + i as u64, 1) {
+                    break;
+                }
+                // SAFETY: validated single user byte.
+                let c = unsafe { ((a2 + i as u64) as *const u8).read_unaligned() };
+                if c == 0 {
+                    break;
+                }
+                t.name[i] = c;
+                i += 1;
+            }
+            if i < 16 {
+                t.name[i.min(15)] = 0;
+            }
+            0
+        }
+        _ => EINVAL,
+    }
+}
+
+/// reboot(magic1, magic2, cmd): Linux requires the double magic;
+/// CAD_ON/CAD_OFF are acknowledged no-ops, the rest trigger a real
+/// chipset reset through port 0xCF9 (under -no-reboot QEMU exits).
+pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64) -> u64 {
+    // magic2 accepts Linux's full set (some callers use the alternates).
+    if magic1 != 0xfee1dead
+        || !matches!(magic2, 672274793 | 85072278 | 369367448 | 537993216)
+    {
+        return EINVAL;
+    }
+    match cmd {
+        0x89abcdef | 0 => 0, // CAD_ON / CAD_OFF — acknowledged no-ops
+        0x01234567 | 0xcdef0123 | 0x4321fedc | 0xa1b2c3d4 => {
+            // RB_AUTOBOOT/RESTART/HALT/POWER_OFF/RESTART2 — one real
+            // 0xCF9 reset for all of them; under -no-reboot QEMU exits.
+            // SAFETY: 0xCF9 is the standard x86 reset-control port;
+            // if the machine somehow survives, fall through to success.
+            unsafe {
+                core::arch::asm!("out dx, al", in("dx") 0xcf9u16, in("al") 0x0eu8);
+            }
+            0
+        }
+        _ => EINVAL, // unknown commands EINVAL like Linux
+    }
 }
 
 /// gettimeofday(tv, tz): same counter, {sec,usec} layout.
@@ -6417,6 +6591,7 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
         brk_cur: p.brk_cur,
         fdi: cfdi,
         sigh: csigh,
+        umask: p.umask,
         tgid: 0, // set to cpid below once known
         ctx: {
             let mut x = *ctx;
@@ -6536,6 +6711,7 @@ fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sig
         brk_cur: p.brk_cur,
         fdi: cfdi,
         sigh: csigh,
+        umask: p.umask,
         // A CLONE_THREAD member reports the leader's group id and
         // shares the leader's parent; a VM-only clone is its own
         // process — wait4-visible, tgid = own pid.
