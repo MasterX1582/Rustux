@@ -1185,3 +1185,37 @@ Audit run-85 (run-58): 0 confirmed — interp bounds absolute+NUL+4KiB, first-
 PT_INTERP-only, archive-member resolution only, mmap-arena collision-free by
 construction, mid-exec failure tears down at reap. CVE ledger: 88.
 
+## run-86 — real Debian dash: dynamic userspace end-to-end + wait4 pid_t ABI fix
+
+A real `dash` 0.5.12 binary (Debian amd64 .deb via apt download) now
+boots inside Rustux: staged as `bin/dash` (support file, not
+auto-spawned), it loads through the run-85 PT_INTERP path — real
+ld.so, real libc.so.6. `dashtest.elf` drives it through pipes:
+vfork+exec `dash -c` scripts covering builtins, expansion,
+substitution, pipelines, globs, redirects, and external exec of
+`/init`.
+
+Real-binary-caught ABI bug: glibc wait wrappers zero-extend
+`mov edi,-1` to 0xffffffff — dispatching wait4s
+
+## run-86 — real Debian dash: dynamic userspace end-to-end + wait4 pid_t ABI fix
+
+A real `dash` 0.5.12 binary (Debian amd64 .deb via apt download) now
+boots inside Rustux: staged as `bin/dash` (support file, not
+auto-spawned), it loads through the run-85 PT_INTERP path — real
+ld.so, real libc.so.6. `dashtest.elf` drives it through pipes:
+vfork+exec `dash -c` scripts covering builtins, expansion,
+substitution, pipelines, globs, redirects, and external exec of
+`/init`.
+
+Real-binary-caught ABI bug: glibc wait wrappers zero-extend
+`mov edi,-1` to 0xffffffff — dispatching wait4's pid arg raw made
+wait4(-1) search pid 4294967295 -> ECHILD -> dash exited 255 on a
+bare external command. syscall.rs now passes `a1 as i32 as i64`
+(truncate+sign-extend, matching Linux's pid_t ABI). Verified
+boundary: wait4 gates on ppid==caller before any pid filter, so no
+pid value can reap across principals.
+
+dashtest: 15 checks, 0 failures — 39 tasks, frames 10335->10335
+zero leak, boot PASS. Audit run-59: 0 confirmed (dash binary is a
+test fixture; provenance = Debian-signed .deb). CVE ledger: 89.
