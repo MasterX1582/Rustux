@@ -15,6 +15,17 @@ use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
 use klib::font::{FONT_8X16, FONT_8X16_H, FONT_8X16_W};
 
+/// Terminal grid (cols, rows) for TIOCGWINSZ — recorded when the GOP
+/// console initializes; (0,0) means no console exists and callers
+/// fall back to the 80x25 convention.
+static mut TTY_DIMS: (u16, u16) = (0, 0);
+
+/// The console's (cols, rows), or (0,0) before init/without a GOP.
+pub fn tty_dims() -> (u16, u16) {
+    // SAFETY: set once at init before any syscall can run; single CPU.
+    unsafe { *core::ptr::addr_of!(TTY_DIMS) }
+}
+
 use crate::logo_data::{LOGO_H, LOGO_RGB, LOGO_W};
 
 const FG: u32 = 0x00c0c0c0; // light gray text
@@ -55,6 +66,13 @@ impl FbConsole {
         if base.is_null() || size < stride * 4 || width < FONT_8X16_W || height < FONT_8X16_H {
             return None;
         }
+        let cols = width / FONT_8X16_W;
+        let rows = height / FONT_8X16_H;
+        // Record the tty grid for TIOCGWINSZ before the console moves
+        // out — a u16 can't overflow since GOP modes stay < 65536px.
+        unsafe {
+            *core::ptr::addr_of_mut!(TTY_DIMS) = (cols as u16, rows as u16)
+        };
         let mut con = Self {
             base,
             size,
@@ -62,8 +80,8 @@ impl FbConsole {
             width,
             height,
             bgr,
-            cols: width / FONT_8X16_W,
-            rows: height / FONT_8X16_H,
+            cols,
+            rows,
             top: 0,
             cx: 0,
             cy: 0,

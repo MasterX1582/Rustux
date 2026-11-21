@@ -1827,10 +1827,183 @@ pub fn sys_getrandom(buf: u64, len: u64, _flags: u64) -> u64 {
     len
 }
 
-/// ioctl(fd, req, arg): nothing here is a tty — ENOTTY like Linux on
-/// a device that doesn't speak ioctl.
-pub fn sys_ioctl() -> u64 {
-    (-25i64) as u64 // ENOTTY
+/// The console's termios — 36-byte kernel ABI (4 u32 c_*flag, c_line,
+/// c_cc[19]). Cooked-mode defaults like a fresh Linux tty: ICRNL|IXON,
+/// OPOST|ONLCR, B38400|CS8|CREAD|HUPCL, ISIG|ICANON|ECHO|ECHOE|ECHOK|
+/// ECHOCTL|ECHOKE|IEXTEN, then VINTR/VERASE/VMIN&co in c_cc order.
+static mut TERMIOS: [u8; 36] = [
+    0x00, 0x05, 0x00, 0x00, // c_iflag = ICRNL|IXON
+    0x03, 0x00, 0x00, 0x00, // c_oflag = OPOST|ONLCR
+    0xbf, 0x04, 0x00, 0x00, // c_cflag = B38400|CS8|CREAD|HUPCL
+    0x3b, 0x8a, 0x00, 0x00, // c_lflag = ISIG|ICANON|ECHO|...
+    0,                      // c_line  = N_TTY
+    3, 0x1c, 0x7f, 0x15, 4, 0, 1, 0, 0x11, 0x13, 0x1a, 0,
+    0x12, 0x0f, 0x17, 0x16, 0, 0, 0,  // c_cc[19]
+];
+
+/// ioctl(fd, req, arg): the console pair is our one tty — Stdin and
+/// Console OFDs answer the termios/winsize/pgrp family; FIONREAD
+/// reports bytes available per kind on any fd. glibc's isatty() is
+/// just "does TCGETS succeed", so the tty gate on Stdin|Console is
+/// the whole answer. Unknown requests are ENOTTY like a device that
+/// doesn't speak them.
+pub fn sys_ioctl(fd: u64, req: u64, arg: u64) -> u64 {
+    const ENOTTY_: u64 = (-25i64) as u64;
+    const TCGETS: u64 = 0x5401;
+    const TCSETS: u64 = 0x5402;
+    const TCSETSW: u64 = 0x5403;
+    const TCSETSF: u64 = 0x5404;
+    const TIOCGWINSZ: u64 = 0x5413;
+    const TIOCSWINSZ: u64 = 0x5414;
+    const TIOCGPGRP: u64 = 0x540f;
+    const TIOCSPGRP: u64 = 0x5410;
+    const FIONREAD: u64 = 0x541b;
+    const FIONBIO: u64 = 0x5421;
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    let tty = matches!(o.kind, FdKind::Stdin | FdKind::Console);
+    match req {
+        TCGETS => {
+            if !tty {
+                return ENOTTY_;
+            }
+            if !range_ok_w(arg, 36) {
+                return EFAULT;
+            }
+            // SAFETY: arg is a validated 36-byte user window; TERMIOS
+            // is a fixed 36-byte source.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    core::ptr::addr_of!(TERMIOS) as *const u8,
+                    arg as *mut u8,
+                    36,
+                )
+            };
+            0
+        }
+        TCSETS | TCSETSW | TCSETSF => {
+            if !tty {
+                return ENOTTY_;
+            }
+            if !range_ok(arg, 36) {
+                return EFAULT;
+            }
+            // SAFETY: arg validated readable for 36 bytes; the flags
+            // live in one shared cell — terminal state is per-tty,
+            // not per-fd, like Linux.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    arg as *const u8,
+                    core::ptr::addr_of_mut!(TERMIOS) as *mut u8,
+                    36,
+                )
+            };
+            0
+        }
+        TIOCGWINSZ => {
+            if !tty {
+                return ENOTTY_;
+            }
+            if !range_ok_w(arg, 8) {
+                return EFAULT;
+            }
+            let (c, r) = crate::fbcon::tty_dims();
+            let (c, r) = if c == 0 { (80u16, 25u16) } else { (c, r) };
+            // SAFETY: arg is a validated 8-byte user window — the
+            // winsize struct is {ws_row, ws_col, ws_xpixel, ws_ypixel}.
+            unsafe {
+                (arg as *mut u16).write_unaligned(r);
+                ((arg + 2) as *mut u16).write_unaligned(c);
+                ((arg + 4) as *mut u16).write_unaligned(0);
+                ((arg + 6) as *mut u16).write_unaligned(0);
+            }
+            0
+        }
+        TIOCSWINSZ => {
+            if !tty {
+                return ENOTTY_;
+            }
+            if !range_ok(arg, 8) {
+                return EFAULT;
+            }
+            0 // the GOP grid can't change size — accepted, ignored
+        }
+        TIOCGPGRP => {
+            if !tty {
+                return ENOTTY_;
+            }
+            if !range_ok_w(arg, 4) {
+                return EFAULT;
+            }
+            // One process group model: the fg pgrp is our own.
+            // SAFETY: arg validated writable for 4 bytes.
+            unsafe { (arg as *mut u32).write_unaligned(t.pid as u32) };
+            0
+        }
+        TIOCSPGRP => {
+            if !tty {
+                return ENOTTY_;
+            }
+            if !range_ok(arg, 4) {
+                return EFAULT;
+            }
+            0 // the single pgrp is always foreground
+        }
+        FIONREAD => {
+            if !range_ok_w(arg, 4) {
+                return EFAULT;
+            }
+            let avail = match &o.kind {
+                // No input queue exists yet — an honest 0 on both
+                // halves of the tty pair (it's a tty ioctl, not
+                // direction-checked on Linux either).
+                FdKind::Stdin | FdKind::Console => 0u64,
+                FdKind::File(d) => d.len().saturating_sub(o.pos) as u64,
+                FdKind::Ram(i) => vfile(*i)
+                    .map_or(0, |v| v.len.saturating_sub(o.pos))
+                    as u64,
+                FdKind::Pipe { id, write } => {
+                    if *write {
+                        return EINVAL; // write end has nothing to read
+                    }
+                    let pipes = unsafe { &*core::ptr::addr_of!(PIPES) };
+                    pipes
+                        .get(*id)
+                        .and_then(|s| s.as_ref())
+                        .map_or(0, |p| (p.tail - p.head) as u64)
+                }
+                FdKind::Tcp(i) => {
+                    let socks = unsafe { &*core::ptr::addr_of!(TCPSOCKS) };
+                    socks
+                        .get(*i)
+                        .and_then(|s| s.as_ref())
+                        .map_or(0, |k| k.rxl as u64)
+                }
+                // FIONREAD on a datagram socket is the next pending
+                // datagram's size (Linux semantics), 0 when empty.
+                FdKind::Udp(i) => {
+                    let socks = unsafe { &*core::ptr::addr_of!(UDPSOCKS) };
+                    socks
+                        .get(*i)
+                        .and_then(|s| s.as_ref())
+                        .map_or(0, |k| {
+                            k.q.as_ref().map_or(0, |d| d.len as u64)
+                        })
+                }
+                FdKind::Dir => return EINVAL,
+            };
+            // SAFETY: arg validated writable for 4 bytes.
+            unsafe {
+                (arg as *mut u32)
+                    .write_unaligned(avail.min(u32::MAX as u64) as u32)
+            };
+            0
+        }
+        // No nonblocking mode exists to toggle — EINVAL, not a
+        // silently-dropped flag a caller would trust.
+        FIONBIO => EINVAL,
+        _ => ENOTTY_,
+    }
 }
 
 /// gettid: no threads — the thread id is the process id.

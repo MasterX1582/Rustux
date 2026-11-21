@@ -344,7 +344,7 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_EXECVE => sys_execve(ctx, a1, a2, a3),
         NR_READV => user::fd_readv(ctx, a1, a2, a3),
         NR_WRITEV => sys_writev(ctx, a1, a2, a3),
-        NR_IOCTL => user::sys_ioctl(),
+        NR_IOCTL => user::sys_ioctl(a1, a2, a3),
         NR_NANOSLEEP => user::sys_nanosleep(ctx, a1, a2),
         NR_UNAME => user::sys_uname(a1),
         NR_GETTIMEOFDAY => user::sys_gettimeofday(a1, a2),
