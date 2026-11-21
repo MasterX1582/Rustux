@@ -249,6 +249,11 @@ const NR_CLOCK_GETRES: u64 = 229;
 const NR_TGKILL: u64 = 234;
 const NR_READLINKAT: u64 = 267;
 const NR_FACCESSAT: u64 = 269;
+const NR_PREAD64: u64 = 17;
+const NR_FCNTL: u64 = 72;
+const NR_OPENAT: u64 = 257;
+const NR_DUP3: u64 = 292;
+const NR_ACCEPT4: u64 = 288;
 
 // errno values (negative returns per the kernel ABI).
 const ENOENT: u64 = (-2i64) as u64;
@@ -275,7 +280,6 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
     // Args 4-6 ride r10/r8/r9 per the syscall ABI (arg4 is r10,
     // never rcx — that's the CPU-clobbered return address).
     let (a4, a5, a6) = (ctx.r10, ctx.r8, ctx.r9);
-
     ctx.rax = match nr {
         // fd_read validates the write-target range itself because only
         // it knows how many bytes the source will actually produce;
@@ -298,13 +302,18 @@ extern "C" fn handle_syscall(c: *mut user::UCtx) {
         NR_POLL => user::fd_poll(ctx, a1, a2, a3 as i64),
         NR_SOCKET => user::fd_socket(a1, a2, a3),
         NR_CONNECT => user::fd_connect(ctx, a1, a2, a3),
-        NR_ACCEPT => user::fd_accept(ctx, a1, a2, a3),
+        NR_ACCEPT => user::fd_accept(ctx, a1, a2, a3, 0),
+        NR_ACCEPT4 => user::fd_accept(ctx, a1, a2, a3, a4),
         NR_BIND => user::fd_bind(a1, a2, a3),
         NR_LISTEN => user::fd_listen(a1, a2),
         NR_SHUTDOWN => user::fd_shutdown(a1, a2),
         NR_SENDTO => user::fd_sendto(a1, a2, a3, a4, a5, a6),
         NR_RECVFROM => user::fd_recvfrom(ctx, a1, a2, a3, a4, a5, a6),
         NR_OPEN => sys_open(a1, a2, a3),
+        NR_OPENAT => sys_openat(a1, a2, a3, a4),
+        NR_PREAD64 => user::fd_pread(a1, a2, a3, a4 as i64),
+        NR_FCNTL => user::sys_fcntl(a1, a2, a3),
+        NR_DUP3 => user::fd_dup3(a1, a2, a3),
         NR_CLOSE => user::fd_close(a1),
         // off arrives as u64; the fd layer interprets it as i64 —
         // negative seeks are how SEEK_CUR/END move backwards.
@@ -410,11 +419,27 @@ fn sys_newfstatat(path: u64, statbuf: u64) -> u64 {
     user::newfstatat(name, statbuf)
 }
 
-/// open(path, flags, mode): O_RDONLY only, path is a NUL-terminated
-/// user string.
-fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
-    if flags != 0 {
-        return EINVAL;
+fn sys_open(path: u64, flags: u64, mode: u64) -> u64 {
+    sys_openat(u64::MAX, path, flags, mode)
+}
+
+/// openat(dirfd, path, flags, mode): AT_FDCWD(-100) or an absolute
+/// path resolves in the flat archive; any other dirfd must name a
+/// Dir OFD — since there is exactly one directory, a valid dirfd
+/// resolves the same way, and a non-dir dirfd is ENOTDIR like Linux.
+fn sys_openat(dirfd: u64, path: u64, flags: u64, _mode: u64) -> u64 {
+    const EBADF_: u64 = (-9i64) as u64;
+    // dirfd arrives as a 32-bit int like Linux's `int dfd` param —
+    // glibc emits `mov edi, AT_FDCWD` so -100 lands zero-extended
+    // (0xffffff9c), never sign-extended. dirfd=MAX means open(2).
+    let dfd = dirfd as u32 as i32;
+    if dfd != -100 && dirfd != u64::MAX {
+        let Some(is_dir) = user::fd_is_dir(dfd as u64) else {
+            return EBADF_;
+        };
+        if !is_dir {
+            return (-20i64) as u64; // ENOTDIR
+        }
     }
     let mut name = [0u8; 257];
     let n = match copy_user_path(path, &mut name) {
@@ -424,7 +449,7 @@ fn sys_open(path: u64, flags: u64, _mode: u64) -> u64 {
     // Tolerate the conventional leading '/' — the archive namespace
     // is flat and root-relative.
     let name = if name[0] == b'/' { &name[1..n] } else { &name[..n] };
-    user::fd_open(name)
+    user::fd_open(name, flags)
 }
 
 /// execve(path, argv, envp): resolve the name in the initrd, verify it

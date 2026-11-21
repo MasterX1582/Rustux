@@ -150,6 +150,8 @@ enum WaitOn {
 /// grow by a user-chosen size (the CVE-2025-39756 class: dup2 must
 /// never size an allocation from its target fd number).
 const MAX_FDS: usize = 16;
+// fd_cloexec is a u16 bitmask — a MAX_FDS bump past 16 must widen it.
+const _: () = assert!(MAX_FDS <= 16);
 
 /// The object an fd slot names — Linux's inode-level identity.
 enum FdKind {
@@ -563,6 +565,10 @@ pub struct Task {
     brk_cur: u64,
     /// fd slots -> GLOBAL OFD indices; 0/1/2 pre-seeded std streams.
     fds: [Option<u8>; MAX_FDS],
+    /// Per-fd O_CLOEXEC bits — fd-level state, so dup clears it and
+    /// fcntl F_SETFD owns it; exec closes every set fd. MAX_FDS=16
+    /// fits a u16.
+    fd_cloexec: u16,
     /// Saved user context for switches — fabricated at spawn, then
     /// snapshotted by the timer IRQ on every preemption.
     ctx: UCtx,
@@ -889,6 +895,7 @@ fn load(img: &[u8]) -> Option<Task> {
             const NONE: Option<u8> = None;
             [NONE; MAX_FDS]
         },
+        fd_cloexec: 0,
         ctx: UCtx::ZERO,
         state: TaskState::Runnable,
         pid: 0,
@@ -2295,12 +2302,14 @@ pub fn fd_write(ctx: &mut UCtx, fd: u64, buf: u64, len: u64) -> u64 {
 }
 
 /// pipe2(fds, flags): a kernel ring with a read end and a write end,
-/// each an OFD so the pair can be dup'd and fork-shared. flags must
-/// be 0 (no O_NONBLOCK/O_CLOEXEC yet — flagged NV). ENFILE at the
+/// each an OFD so the pair can be dup'd and fork-shared. O_CLOEXEC
+/// marks both ends for exec-close; O_NONBLOCK remains unsupported
+/// (no nonblocking pipe io — EINVAL, flagged NV). ENFILE at the
 /// pool bound, EMFILE at the fd/OFD bounds.
 pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
     const ENFILE_: u64 = (-23i64) as u64;
-    if flags != 0 {
+    const O_NONBLOCK: u64 = 0o4000;
+    if flags & !(O_CLOEXEC | O_NONBLOCK) != 0 || flags & O_NONBLOCK != 0 {
         return EINVAL;
     }
     if !range_ok_w(fdptr, 8) {
@@ -2359,6 +2368,9 @@ pub fn fd_pipe(fdptr: u64, flags: u64) -> u64 {
     });
     t.fds[rf] = Some(ro as u8);
     t.fds[wf] = Some(wo as u8);
+    let ce = flags & O_CLOEXEC != 0;
+    cloexec_set(t, rf, ce);
+    cloexec_set(t, wf, ce);
     // SAFETY: fdptr validated writable for 8 bytes above.
     unsafe {
         (fdptr as *mut u32).write_unaligned(rf as u32);
@@ -2412,11 +2424,40 @@ pub fn newfstatat(path: &[u8], statbuf: u64) -> u64 {
     0
 }
 
-/// open(path, O_RDONLY): "" and "." name the archive root (a Dir
-/// OFD); anything else resolves through cpio::find. ENOENT when
-/// absent, EMFILE when either table is full — deterministic errnos,
-/// no allocation growth.
-pub fn fd_open(path: &[u8]) -> u64 {
+/// Open-flag values we honor or refuse — O_ACCMODE(3) is the access
+/// mask, O_CLOEXEC the fd flag, O_DIRECTORY a kind check. Anything
+/// writable is EROFS on an archive fs; anything else unknown EINVAL.
+const O_CLOEXEC: u64 = 0o2000000;
+const O_DIRECTORY: u64 = 0o200000;
+const O_NOFOLLOW: u64 = 0o400000;
+const O_PATH: u64 = 0o10000000;
+const O_ACCMODE: u64 = 3;
+
+#[inline]
+fn cloexec_set(t: &mut Task, fi: usize, on: bool) {
+    if on {
+        t.fd_cloexec |= 1 << fi;
+    } else {
+        t.fd_cloexec &= !(1 << fi);
+    }
+}
+
+/// open(path, flags): "" and "." name the archive root (a Dir OFD);
+/// anything else resolves through cpio::find. Accepted flags:
+/// O_RDONLY plus O_CLOEXEC/O_DIRECTORY/O_NOFOLLOW/O_PATH — all
+/// honest on a flat read-only archive (no symlinks to follow,
+/// O_PATH just skips nothing). Write access → EROFS, unknown flag
+/// bits → EINVAL, ENOENT when absent, EMFILE at the table bounds.
+pub fn fd_open(path: &[u8], flags: u64) -> u64 {
+    const EROFS: u64 = (-30i64) as u64;
+    const ENOTDIR: u64 = (-20i64) as u64;
+    const KNOWN: u64 = O_ACCMODE | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW | O_PATH;
+    if flags & !KNOWN != 0 {
+        return EINVAL;
+    }
+    if flags & O_ACCMODE != 0 {
+        return EROFS;
+    }
     let Some(t) = cur_mut() else { return EBADF };
     let kind = if path.is_empty() || path == b"." {
         FdKind::Dir
@@ -2429,6 +2470,9 @@ pub fn fd_open(path: &[u8]) -> u64 {
         };
         FdKind::File(data)
     };
+    if flags & O_DIRECTORY != 0 && !matches!(kind, FdKind::Dir) {
+        return ENOTDIR;
+    }
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     let Some(oi) = ofds.iter().position(Option::is_none) else {
         return EMFILE;
@@ -2442,6 +2486,7 @@ pub fn fd_open(path: &[u8]) -> u64 {
         refs: 1,
     });
     t.fds[fi] = Some(oi as u8);
+    cloexec_set(t, fi, flags & O_CLOEXEC != 0);
     fi as u64
 }
 
@@ -2480,21 +2525,117 @@ pub fn fd_lseek(fd: u64, off: i64, whence: u64) -> u64 {
     np as u64
 }
 
+/// fd_is_dir(fd): Some(kind==Dir) when the fd is valid, None when
+/// it isn't — openat's dirfd gate needs exactly this much.
+pub fn fd_is_dir(fd: u64) -> Option<bool> {
+    let t = cur_mut()?;
+    let o = ofd(t, fd)?;
+    Some(matches!(o.kind, FdKind::Dir))
+}
+
+/// pread(fd, buf, len, pos): read `len` bytes at file offset `pos`
+/// WITHOUT moving the shared OFD position — the whole point of the
+/// call. Files only: everything else ESPIPEs like Linux; a negative
+/// pos is EINVAL. The buffer gets the same range gate fd_read uses.
+pub fn fd_pread(fd: u64, buf: u64, len: u64, pos: i64) -> u64 {
+    const ESPIPE_: u64 = (-29i64) as u64;
+    if pos < 0 {
+        return EINVAL;
+    }
+    let Some(t) = cur_mut() else { return EBADF };
+    let Some(o) = ofd(t, fd) else { return EBADF };
+    let FdKind::File(data) = o.kind else { return ESPIPE_ };
+    if len > 0 && !range_ok_w(buf, len) {
+        return EFAULT;
+    }
+    let p = (pos as usize).min(data.len());
+    let n = (len as usize).min(data.len() - p);
+    // SAFETY: buf validated writable for len >= n bytes.
+    unsafe { (buf as *mut u8).copy_from(data.as_ptr().add(p), n) };
+    n as u64
+}
+
+/// fcntl(fd, cmd, arg): the fd-metadata surface. F_GETFD/F_SETFD own
+/// the per-fd O_CLOEXEC bit (the only fd flag Linux has); F_GETFL
+/// reports O_RDONLY — the honest status of an archive fd; F_SETFL
+/// accepts 0 as a no-op (no O_APPEND/O_NONBLOCK toggles exist) and
+/// EINVALs anything else rather than silently succeeding; F_DUPFD
+/// rides fd_dup_at's min-slot scan, F_DUPFD_CLOEXEC the same plus the
+/// bit. Unknown cmds EINVAL — never a fake success.
+pub fn sys_fcntl(fd: u64, cmd: u64, arg: u64) -> u64 {
+    const F_DUPFD: u64 = 0;
+    const F_GETFD: u64 = 1;
+    const F_SETFD: u64 = 2;
+    const F_GETFL: u64 = 3;
+    const F_SETFL: u64 = 4;
+    const F_DUPFD_CLOEXEC: u64 = 1030;
+    let Some(t) = cur_mut() else { return EBADF };
+    match cmd {
+        F_GETFD => {
+            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+                return EBADF;
+            }
+            ((t.fd_cloexec >> fd) & 1) as u64
+        }
+        F_SETFD => {
+            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+                return EBADF;
+            }
+            cloexec_set(t, fd as usize, arg & 1 != 0);
+            0
+        }
+        F_GETFL => {
+            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+                return EBADF;
+            }
+            0 // O_RDONLY — the only access mode an archive fd has
+        }
+        F_SETFL => {
+            if fd as usize >= MAX_FDS || t.fds[fd as usize].is_none() {
+                return EBADF;
+            }
+            if arg == 0 { 0 } else { EINVAL }
+        }
+        F_DUPFD => fd_dup_at(fd, arg),
+        F_DUPFD_CLOEXEC => {
+            let r = fd_dup_at(fd, arg);
+            if (r as i64) >= 0 {
+                cloexec_set(t, r as usize, true);
+            }
+            r
+        }
+        _ => EINVAL,
+    }
+}
+
 /// dup(fd): lowest free slot names the same OFD — shared offset,
-/// exactly like Linux. EMFILE at the table bound.
+/// exactly like Linux, and the new fd is never O_CLOEXEC (fd flags
+/// don't survive dup). EMFILE at the table bound.
 pub fn fd_dup(fd: u64) -> u64 {
+    fd_dup_at(fd, 0)
+}
+
+/// Shared dup core: lowest free slot >= `min` names fd's OFD; the
+/// new slot's cloexec bit is always clear. F_DUPFD's min-arg rides
+/// the same path.
+pub fn fd_dup_at(fd: u64, min: u64) -> u64 {
+    if min as usize >= MAX_FDS {
+        return EINVAL;
+    }
     let Some(t) = cur_mut() else { return EBADF };
     let Some(&oi) = t.fds.get(fd as usize).and_then(|s| s.as_ref()) else {
         return EBADF;
     };
-    let Some(fi) = t.fds.iter().position(Option::is_none) else {
+    let Some(fi) = t.fds[min as usize..].iter().position(Option::is_none) else {
         return EMFILE;
     };
+    let fi = fi + min as usize;
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     if let Some(o) = ofds.get_mut(oi as usize).and_then(|s| s.as_mut()) {
         o.refs += 1;
     }
     t.fds[fi] = Some(oi);
+    cloexec_set(t, fi, false);
     fi as u64
 }
 
@@ -2521,7 +2662,29 @@ pub fn fd_dup2(old: u64, new: u64) -> u64 {
         o.refs += 1;
     }
     t.fds[new as usize] = Some(oi);
+    cloexec_set(t, new as usize, false);
     new
+}
+
+/// dup3(old, new, flags): dup2 with the O_CLOEXEC option — and a
+/// real difference from dup2: old==new is EINVAL, not a no-op.
+pub fn fd_dup3(old: u64, new: u64, flags: u64) -> u64 {
+    if old == new {
+        return EINVAL;
+    }
+    if flags & !O_CLOEXEC != 0 {
+        return EINVAL;
+    }
+    let r = fd_dup2(old, new);
+    if (r as i64) < 0 {
+        return r;
+    }
+    if flags & O_CLOEXEC != 0 {
+        if let Some(t) = cur_mut() {
+            cloexec_set(t, new as usize, true);
+        }
+    }
+    r
 }
 
 /// close(fd): drops one reference; the OFD dies with its last slot.
@@ -3135,10 +3298,23 @@ fn udp_recv_or_block(
 /// socket(AF_INET, type): a kernel endpoint behind an OFD, so it
 /// dups/fork-shares like every other fd. SOCK_DGRAM -> UDPSOCKS,
 /// SOCK_STREAM -> TCPSOCKS in the Init state.
+/// socket() type carries SOCK_NONBLOCK(0o4000)|SOCK_CLOEXEC(0o2000000)
+/// flags — same values as the O_ bits. CLOEXEC we honor; NONBLOCK we
+/// refuse honestly (no nonblocking socket io exists).
+const SOCK_NONBLOCK: u64 = 0o4000;
+const SOCK_CLOEXEC: u64 = 0o2000000;
+
 pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
     const EAFNOSUPPORT: u64 = (-97i64) as u64;
     const ENFILE_: u64 = (-23i64) as u64;
-    if domain != 2 || !(ty == 1 || ty == 2) {
+    if ty & !(0x7 | SOCK_NONBLOCK | SOCK_CLOEXEC) != 0 {
+        return EINVAL;
+    }
+    if ty & SOCK_NONBLOCK != 0 {
+        return EINVAL;
+    }
+    let base = ty & 0x7;
+    if domain != 2 || !(base == 1 || base == 2) {
         return EAFNOSUPPORT;
     }
     let Some(t) = cur_mut() else { return EBADF };
@@ -3183,6 +3359,7 @@ pub fn fd_socket(domain: u64, ty: u64, _proto: u64) -> u64 {
     };
     ofds[oi] = Some(OpenFile { kind, pos: 0, refs: 1 });
     t.fds[fi] = Some(oi as u8);
+    cloexec_set(t, fi, ty & SOCK_CLOEXEC != 0);
     fi as u64
 }
 
@@ -3528,7 +3705,7 @@ fn wake_waiter(on: WaitOn, ret: u64) {
 
 /// Mint a Tcp OFD+fd inside task `t` for connection `ci`.
 /// Returns the fd, or EMFILE/ENFILE without consuming `ci`.
-fn tcp_mint_fd(t: &mut Task, ci: usize) -> Result<u64, u64> {
+fn tcp_mint_fd(t: &mut Task, ci: usize, ce: bool) -> Result<u64, u64> {
     const ENFILE_: u64 = (-23i64) as u64;
     let ofds = unsafe { &mut *core::ptr::addr_of_mut!(OFDS) };
     let Some(oi) = ofds.iter().position(Option::is_none) else {
@@ -3543,6 +3720,7 @@ fn tcp_mint_fd(t: &mut Task, ci: usize) -> Result<u64, u64> {
         refs: 1,
     });
     t.fds[fi] = Some(oi as u8);
+    cloexec_set(t, fi, ce);
     Ok(fi as u64)
 }
 
@@ -3563,7 +3741,7 @@ fn wake_accept(li: usize) {
                 k.backlog[j - 1] = k.backlog[j];
             }
             k.blen -= 1;
-            match tcp_mint_fd(t, ci) {
+            match tcp_mint_fd(t, ci, t.wait_len & SOCK_CLOEXEC != 0) {
                 Ok(fd) => t.ctx.rax = fd,
                 Err(e) => {
                     k.backlog[k.blen] = ci;
@@ -3970,11 +4148,17 @@ pub fn fd_listen(fd: u64, backlog: u64) -> u64 {
     0
 }
 
-/// accept(fd, sockaddr_out, alen): the oldest established child
-/// becomes a fresh fd; empty backlog blocks until one completes.
-pub fn fd_accept(ctx: &mut UCtx, fd: u64, sa: u64, _alen: u64) -> u64 {
+/// accept(fd, sockaddr_out, alen[, flags]): the oldest established
+/// child becomes a fresh fd; empty backlog blocks until one
+/// completes. accept4's flags ride wait_len through the blocked
+/// path — SOCK_CLOEXEC marks the minted fd, SOCK_NONBLOCK refuses
+/// honestly (no nonblocking sockets).
+pub fn fd_accept(ctx: &mut UCtx, fd: u64, sa: u64, _alen: u64, flags: u64) -> u64 {
     const EOPNOTSUPP: u64 = (-95i64) as u64;
     const EINTR_: u64 = (-4i64) as u64;
+    if flags & !(SOCK_CLOEXEC | SOCK_NONBLOCK) != 0 || flags & SOCK_NONBLOCK != 0 {
+        return EINVAL;
+    }
     let Some(t) = cur_mut() else { return EBADF };
     if sa != 0 && !range_ok_w(sa, 16) {
         return EFAULT;
@@ -4002,7 +4186,7 @@ pub fn fd_accept(ctx: &mut UCtx, fd: u64, sa: u64, _alen: u64) -> u64 {
             (c.peer_ip, c.peer_port)
         };
         let Some(t) = cur_mut() else { return EBADF };
-        let fd = match tcp_mint_fd(t, ci) {
+        let fd = match tcp_mint_fd(t, ci, flags & SOCK_CLOEXEC != 0) {
             Ok(f) => f,
             Err(e) => {
                 let k = tcp_socks()[li].as_mut().unwrap();
@@ -4030,6 +4214,7 @@ pub fn fd_accept(ctx: &mut UCtx, fd: u64, sa: u64, _alen: u64) -> u64 {
     }
     t.wait_on = WaitOn::TcpAccept(li);
     t.wait_ptr2 = sa;
+    t.wait_len = flags; // accept4's SOCK_CLOEXEC rides the wake
     t.ctx = *ctx;
     t.state = TaskState::Blocked;
     block_switch()
@@ -4343,6 +4528,18 @@ pub fn fd_getdents(fd: u64, buf: u64, count: u64) -> u64 {
 pub fn exec(img: &[u8], ctx: &mut UCtx, args: &ExecArgs, name: &[u8]) -> bool {
     let Some(t) = cur_mut() else { return false };
     let Some(e) = elf::parse(img) else { return false };
+    // O_CLOEXEC dies here: drop each marked fd before the image
+    // swap — Linux semantics, and a real leak otherwise (a pipe or
+    // socket would survive into a binary that never opened it).
+    let mut ce = t.fd_cloexec;
+    while ce != 0 {
+        let fi = ce.trailing_zeros() as usize;
+        ce &= !(1 << fi);
+        if let Some(oi) = t.fds[fi].take() {
+            ofd_release(oi as usize);
+        }
+    }
+    t.fd_cloexec = 0;
     t.free_user_mappings();
     t.nranges = 0;
     t.stack_top = 0;
@@ -4809,6 +5006,7 @@ pub fn fork(ctx: &mut UCtx) -> u64 {
         brk_base: p.brk_base,
         brk_cur: p.brk_cur,
         fds: p.fds,
+        fd_cloexec: p.fd_cloexec,
         ctx: {
             let mut x = *ctx;
             x.rax = 0; // child sees fork()==0
