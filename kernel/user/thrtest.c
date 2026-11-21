@@ -57,10 +57,12 @@ int main(void) {
     pid_t t = clone(thread_fn, st1 + sizeof(st1), flags, 0,
                     0, 0, (void *)&join_word);
     check(t > 0, "clone(VM|SIGHAND|THREAD) returns tid");
-    check(join_word == (int)t, "SETTID wrote the thread tid");
 
-    // Join the pthread way: futex-wait on the ctid word.
-    int tid = join_word;
+    // Join the pthread way: futex-wait on the ctid word. NB the tid
+    // comes from the clone return — join_word may already be zeroed:
+    // a fast-exiting thread's CLEARTID races our read, exactly like
+    // Linux (that's the race the futex-wait protocol exists to win).
+    int tid = (int)t;
     while (join_word == tid && tid != 0)
         syscall(SYS_futex, (void *)&join_word, FUTEX_WAIT, tid, 0, 0, 0);
     check(join_word == 0, "ctid cleared + futex-woke the join");

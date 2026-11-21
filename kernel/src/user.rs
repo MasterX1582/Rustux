@@ -6372,6 +6372,7 @@ fn fork_address_space(c: &mut Task, ppml4: u64) -> bool {
 pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
+    reap_dead_threads(); // reclaim dead-thread slots first
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     let Some(slot) = tasks.iter().position(Option::is_none) else {
@@ -6472,6 +6473,7 @@ pub fn fork(ctx: &mut UCtx, files: bool) -> u64 {
 fn clone_vm(ctx: &mut UCtx, stack: u64, tls: u64, settls: bool, files: bool, sighand: bool, thread: bool) -> u64 {
     const EAGAIN: u64 = (-11i64) as u64;
     const ENOMEM: u64 = (-12i64) as u64;
+    reap_dead_threads(); // reclaim dead-thread slots first
     let cur = unsafe { *core::ptr::addr_of!(CUR_I) };
     let tasks = unsafe { &mut *core::ptr::addr_of_mut!(TASKS) };
     let Some(slot) = tasks.iter().position(Option::is_none) else {
