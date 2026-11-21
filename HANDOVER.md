@@ -1219,3 +1219,17 @@ pid value can reap across principals.
 dashtest: 15 checks, 0 failures — 39 tasks, frames 10335->10335
 zero leak, boot PASS. Audit run-59: 0 confirmed (dash binary is a
 test fixture; provenance = Debian-signed .deb). CVE ledger: 89.
+
+## run-86b — VM flake triage: task/pipe table exhaustion
+
+Two scheduling-dependent flakes found on the native VM and fixed:
+`fork() -> EAGAIN` when all 48 task slots were live (39 suite tasks
++ concurrent children — the first dashtest sh_run hit it and the
+harness's stale-buffer fallthrough hid it on later calls), and
+`ls /` racing wiotest's `listed.tmp` unlink (legitimate name
+TOCTOU -> busybox ls exits 1). Fixes: MAX_TASKS 64, MAX_PIPES 32
+(ENFILE reachable at 8 with pipelining tasks + dash substitution
+pipes), bbtest/sh_run harnesses report and zero-out on pipe/fork
+failure so a kernel-resource error can never read as a pass, and
+the ls check targets `/lib64` (fixed contents). 6/6 clean VM runs,
+WSL clean, zero leak. Audit run-60: 0 confirmed.
