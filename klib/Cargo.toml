@@ -1,8 +1,0 @@
-[package]
-name = "klib"
-version = "0.0.0"
-edition = "2021"
-publish = false
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }

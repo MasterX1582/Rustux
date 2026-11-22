@@ -1,1 +1,0 @@
--Dwrap_kfifo_seq=wrap_kfifo_seq__original -Dwrap_kfifo_dma_seq=wrap_kfifo_dma_seq__original -Dwrap_kfifo_alloc=wrap_kfifo_alloc__original -Dwrap_kfifo_typed=wrap_kfifo_typed__original
